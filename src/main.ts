@@ -39,7 +39,6 @@ export interface ActiveReviewState {
 	file: TFile;
 	editor: Editor;
 	marks: CriticMark[];
-	displayMode: DisplayMode;
 	activeMarkId: string | null;
 	commentDraft: CommentDraft | null;
 }
@@ -51,15 +50,12 @@ export interface CommentDraft {
 	selectedText: string;
 }
 
-const MODE_ORDER: DisplayMode[] = ["review", "clean", "raw"];
-
 export default class CriticMarkupPlugin
 	extends Plugin
 	implements CriticMarkupEditorController
 {
 	settings!: CriticMarkupSettings;
 	private renderVersion = 0;
-	private viewActionEls = new WeakMap<MarkdownView, HTMLElement>();
 	private commentDraft: CommentDraft | null = null;
 	private lastMarkdownPath: string | null = null;
 
@@ -80,10 +76,13 @@ export default class CriticMarkupPlugin
 
 		this.registerCommands();
 		this.registerWorkspaceEvents();
+		this.queueEditorExtensionRefresh(0);
+		this.queueEditorExtensionRefresh(250);
 
 		this.app.workspace.onLayoutReady(() => {
 			void this.ensureReviewSidebarTab();
-			this.installModeActionForActiveView();
+			this.queueEditorExtensionRefresh(0);
+			this.queueEditorExtensionRefresh(250);
 			this.refreshReviewSidebars();
 		});
 	}
@@ -93,11 +92,7 @@ export default class CriticMarkupPlugin
 	}
 
 	getDisplayMode(path?: string | null): DisplayMode {
-		if (path) {
-			const noteMode = this.settings.noteDisplayModes[path];
-			if (isDisplayMode(noteMode)) return noteMode;
-		}
-		return this.settings.defaultDisplayMode;
+		return "review";
 	}
 
 	getRenderVersion(): number {
@@ -113,20 +108,6 @@ export default class CriticMarkupPlugin
 		this.bumpRenderVersion();
 	}
 
-	async toggleCurrentNoteDisplayMode(): Promise<void> {
-		const view = this.getCurrentMarkdownView();
-		const file = view?.file;
-		if (!file) {
-			new Notice("Open a Markdown note to switch CriticMarkup mode.");
-			return;
-		}
-		const current = this.getDisplayMode(file.path);
-		const next = nextDisplayMode(current);
-		this.settings.noteDisplayModes[file.path] = next;
-		await this.saveSettingsAndRefresh();
-		new Notice(`CriticMarkup mode: ${labelDisplayMode(next)}`);
-	}
-
 	getActiveReviewState(): ActiveReviewState | null {
 		const view = this.getCurrentMarkdownView();
 		const file = view?.file;
@@ -139,7 +120,6 @@ export default class CriticMarkupPlugin
 			file,
 			editor,
 			marks,
-			displayMode: this.getDisplayMode(file.path),
 			activeMarkId: activeMark?.id ?? null,
 			commentDraft:
 				this.commentDraft?.filePath === file.path ? this.commentDraft : null,
@@ -270,6 +250,19 @@ export default class CriticMarkupPlugin
 		this.bumpRenderVersion();
 	}
 
+	insertReplyToMark(mark: CriticMark, reply: string): void {
+		const view = this.getCurrentMarkdownView();
+		const editor = view?.editor;
+		if (!editor) return;
+		editor.replaceRange(
+			`{>>${reply}<<}`,
+			editor.offsetToPos(mark.to),
+			undefined,
+			"criticmarkup",
+		);
+		this.bumpRenderVersion();
+	}
+
 	async openReviewSidebar(): Promise<void> {
 		if (!this.settings.enableReviewSidebar) {
 			new Notice("Enable the CriticMarkup review sidebar in settings.");
@@ -300,16 +293,13 @@ export default class CriticMarkupPlugin
 	private async loadSettings(): Promise<void> {
 		const loaded = await this.loadData();
 		this.settings = {
-			...DEFAULT_SETTINGS,
-			...(loaded ?? {}),
-			noteDisplayModes: {
-				...DEFAULT_SETTINGS.noteDisplayModes,
-				...(loaded?.noteDisplayModes ?? {}),
-			},
+			showAuthorChips:
+				loaded?.showAuthorChips ?? DEFAULT_SETTINGS.showAuthorChips,
+			showInlineActions:
+				loaded?.showInlineActions ?? DEFAULT_SETTINGS.showInlineActions,
+			enableReviewSidebar:
+				loaded?.enableReviewSidebar ?? DEFAULT_SETTINGS.enableReviewSidebar,
 		};
-		if (!isDisplayMode(this.settings.defaultDisplayMode)) {
-			this.settings.defaultDisplayMode = "review";
-		}
 	}
 
 	private registerCommands(): void {
@@ -318,13 +308,6 @@ export default class CriticMarkupPlugin
 			name: "Open review sidebar",
 			callback: () => {
 				void this.openReviewSidebar();
-			},
-		});
-		this.addCommand({
-			id: "cycle-current-note-display-mode",
-			name: "Switch current note display mode",
-			callback: () => {
-				void this.toggleCurrentNoteDisplayMode();
 			},
 		});
 		this.addEditorCommand("add-addition", "Mark selection as addition", (editor) =>
@@ -394,14 +377,14 @@ export default class CriticMarkupPlugin
 		this.registerEvent(
 			this.app.workspace.on("active-leaf-change", () => {
 				this.captureActiveMarkdownPath();
-				this.installModeActionForActiveView();
+				this.queueEditorExtensionRefresh(0);
 				this.refreshReviewSidebars();
 			}),
 		);
 		this.registerEvent(
 			this.app.workspace.on("file-open", () => {
 				this.captureActiveMarkdownPath();
-				this.installModeActionForActiveView();
+				this.queueEditorExtensionRefresh(0);
 				this.refreshReviewSidebars();
 			}),
 		);
@@ -432,20 +415,6 @@ export default class CriticMarkupPlugin
 		const leaf = this.app.workspace.getRightLeaf(false);
 		if (!leaf) return;
 		await leaf.setViewState({ type: VIEW_TYPE_CRITIC_REVIEW, active: false });
-	}
-
-	private installModeActionForActiveView(): void {
-		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-		if (!view || this.viewActionEls.has(view)) return;
-
-		const el = view.addAction("repeat-2", "Switch CriticMarkup mode", () => {
-			void this.toggleCurrentNoteDisplayMode();
-		});
-		el.addClass("criticmarkup-view-action");
-		this.viewActionEls.set(view, el);
-		this.register(() => {
-			el.remove();
-		});
 	}
 
 	private captureActiveMarkdownPath(): void {
@@ -496,6 +465,14 @@ export default class CriticMarkupPlugin
 		this.app.workspace.updateOptions();
 	}
 
+	private queueEditorExtensionRefresh(delayMs: number): void {
+		const timer = window.setTimeout(() => {
+			this.app.workspace.updateOptions();
+			this.refreshOpenEditors();
+		}, delayMs);
+		this.register(() => window.clearTimeout(timer));
+	}
+
 	private refreshOpenEditors(): void {
 		this.app.workspace.iterateAllLeaves((leaf) => {
 			if (!(leaf.view instanceof MarkdownView)) return;
@@ -508,24 +485,4 @@ export default class CriticMarkupPlugin
 			}
 		});
 	}
-}
-
-function nextDisplayMode(mode: DisplayMode): DisplayMode {
-	const index = MODE_ORDER.indexOf(mode);
-	return MODE_ORDER[(index + 1) % MODE_ORDER.length] ?? "review";
-}
-
-function labelDisplayMode(mode: DisplayMode): string {
-	switch (mode) {
-		case "review":
-			return "Review";
-		case "clean":
-			return "Clean";
-		case "raw":
-			return "Raw";
-	}
-}
-
-function isDisplayMode(value: unknown): value is DisplayMode {
-	return value === "review" || value === "clean" || value === "raw";
 }

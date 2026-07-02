@@ -8,7 +8,7 @@ Draft for discussion. This project is an Obsidian community plugin that adds Cri
 
 1. Add first-class CriticMarkup support to Obsidian's CodeMirror 6 editor.
 2. Keep the Markdown file as the source of truth. Suggestions, deletions, comments, and highlights are stored as plain CriticMarkup text.
-3. Hide raw CriticMarkup delimiters in Obsidian's normal reading experience.
+3. Hide raw CriticMarkup delimiters in Obsidian Live Preview and Reading mode. Raw CriticMarkup is visible only in Obsidian Source mode.
 4. Provide review commands for creating, accepting, rejecting, and navigating CriticMarkup marks.
 5. Integrate with Relay through a small, stable TypeScript API so this plugin can show who created comments and suggestions without depending on Relay internals.
 6. Degrade cleanly when Relay is missing, disabled, logged out, or the file is outside a shared folder.
@@ -50,38 +50,23 @@ The parser must recognize the five standard mark types:
 MVP caveats:
 
 1. Support same-line marks for the MVP.
-2. Treat multiline marks as unsupported in the MVP. If a mark contains a newline before its closing delimiter, leave the raw syntax visible and do not offer accept/reject actions for that mark.
+2. Treat multiline marks as unsupported in the MVP. If a mark contains a newline before its closing delimiter, avoid destructive transforms and do not offer accept/reject actions for that mark. Live Preview and Reading mode should still avoid showing raw delimiters when the parser can identify the malformed mark.
 3. Avoid supporting nested CriticMarkup marks initially. Detect and surface invalid or ambiguous syntax rather than guessing.
 4. Preserve Markdown compatibility expectations: CriticMarkup that wraps Markdown formatting should wrap complete Markdown constructs.
 
 ## Product Behavior
 
-### Source Mode and Live Preview
+### Source Mode, Live Preview, and Reading Mode
 
-The CM6 editor should show a clean review experience by default:
+Obsidian's own editor state is the only user-facing source visibility model:
 
-1. Delimiters are visually hidden or deemphasized when the cursor is outside the mark.
-2. Mark contents are styled by type:
-   - additions: inserted text styling
-   - deletions: deleted text styling
-   - substitutions: old text and new text shown as a replacement pair
-   - comments: compact inline comment indicator or popover
-   - highlights: highlight styling, optionally with adjacent comment indicator
-3. Raw syntax becomes visible and editable when:
-   - the cursor or selection intersects the mark
-   - the user toggles "show raw CriticMarkup"
-   - the parser detects invalid syntax
-4. All edits are normal CM6 transactions so Obsidian undo and Relay synchronization continue to work.
+1. Source mode shows the actual Markdown source, including CriticMarkup delimiters, for manual inspection and editing.
+2. Live Preview replaces each complete CriticMarkup mark with rendered review UI. It must not reveal raw delimiters on cursor movement, selection, or double-click.
+3. Reading mode hides raw CriticMarkup delimiters and renders the same review semantics as Live Preview.
+4. There is no separate plugin mode switch. Suggestions are visible by default as review UI until the user accepts, rejects, resolves, or finalizes them.
+5. All edits are normal CM6 transactions so Obsidian undo and Relay synchronization continue to work.
 
-### Display Modes
-
-The plugin has two rendered display modes. These modes affect editor decorations and reading mode rendering only; switching modes never rewrites the Markdown file.
-
-1. Review mode: show suggestions and comments without showing raw delimiters. This is the default.
-2. Clean mode: show a preview of the document as if all suggestions were accepted.
-3. Raw mode: show CriticMarkup source text and delimiters for inspection and manual editing.
-
-Review mode rendering policy:
+Review rendering policy:
 
 1. Render additions as inserted text.
 2. Render deletions as deleted text.
@@ -89,27 +74,11 @@ Review mode rendering policy:
 4. Render comments as unobtrusive comment indicators or popovers.
 5. Render highlights as highlighted text.
 
-Clean mode rendering policy:
-
-1. Render additions as normal text.
-2. Omit deletions.
-3. Render substitutions as only the new text.
-4. Hide comments.
-5. Render highlights as normal text.
-
-Raw mode rendering policy:
-
-1. Do not rewrite reading-mode text.
-2. Keep raw CriticMarkup visible in the editor.
-3. Continue to show review cards in the sidebar so the user can still navigate and resolve marks.
-
 The plugin should provide:
 
-1. A command palette action to cycle the current note between review mode, clean mode, and raw mode.
-2. A view action button for the same current-note switch.
-3. A global setting for the default display mode, initially `review`.
-4. A note-specific override stored in plugin data keyed by vault path. The override is local UI state and is not written into the Markdown file.
-5. A right-sidebar tab that is registered and selectable when Markdown is open, but not forced to the front on startup.
+1. A right-sidebar tab that is registered and selectable when Markdown is open, but not forced to the front on startup.
+2. Commands and context menu items for creating comments and suggestions.
+3. Accept, reject, resolve, and finalize actions that rewrite the Markdown source intentionally.
 
 ### Reading Mode
 
@@ -130,11 +99,9 @@ The plugin should register commands for:
 7. Reject current mark.
 8. Accept all marks in file.
 9. Reject all marks in file.
-10. Toggle raw CriticMarkup visibility.
-11. Switch current note between review mode, clean mode, and raw mode.
-12. Open review sidebar.
-13. Finalize for publish, equivalent to accepting all marks.
-14. Add comment to the current selection, opening a sidebar draft card for text entry.
+10. Open review sidebar.
+11. Finalize for publish, equivalent to accepting all marks.
+12. Add comment to the current selection, opening a sidebar draft card for text entry.
 
 Accept/reject transformations:
 
@@ -152,21 +119,18 @@ The plugin should provide a right-sidebar review surface inspired by Google Docs
 
 Sidebar content:
 
-1. Header with the active note name, display mode switch, and counts for suggestions and comments.
-2. A compact filter row for mark type, author, and unresolved/actionable items.
-3. A draft card for new comments when the user is adding a comment to the current selection.
-4. A document-ordered list of review cards. Each card represents one CriticMarkup mark, or one highlight plus immediately following comment when they form a standard highlighted-comment pair.
-5. Card body showing the proposed text change or comment text without raw delimiters.
-6. Card metadata showing mark type, document location, and Relay-derived author when available.
-7. Inline card actions:
-   - locate mark in note
+1. Header with the active note name and counts for suggestions and comments.
+2. A draft card for new comments when the user is adding a comment to the current selection.
+3. A document-ordered list of review cards. Each card represents one CriticMarkup mark, or one highlight plus immediately following comment when they form a standard highlighted-comment pair.
+4. Card body showing the proposed text change or comment text without raw delimiters.
+5. Card metadata showing mark type, document location, and Relay-derived author when available.
+6. Inline card actions:
    - accept suggestion
    - reject suggestion
    - reply by inserting an adjacent CriticMarkup comment
-   - remove comment/highlight
-   - reveal raw source
-8. Empty state for notes with no CriticMarkup marks.
-9. Unavailable state when no Markdown note is active.
+   - resolve comment/highlight
+7. Empty state for notes with no CriticMarkup marks.
+8. Unavailable state when no Markdown note is active.
 
 Sidebar/editor synchronization:
 
@@ -285,6 +249,23 @@ Relay is optional. The CriticMarkup plugin should discover Relay at runtime thro
 
 Current Relay code uses plugin id `system3-relay` and already exposes internal objects such as `_liveViews`, `sharedFolders`, and `metadataBridge`. This spec proposes adding a public API object to Relay instead of consuming those private fields.
 
+### Relay as Identity Provider
+
+Relay should be the identity provider for review UI, but CriticMarkup remains the document markup owner. The boundary is:
+
+1. Relay answers identity questions: who am I, who is this user ID, who authored this source range, who is online.
+2. CriticMarkup answers review questions: what marks exist, how are they rendered, what source edits accept/reject/resolve should perform.
+3. CriticMarkup must not read Relay internals such as `_liveViews`, Yjs maps, auth stores, or `RelayManager.users` directly.
+4. Relay must not need to know CriticMarkup syntax to provide identity. It only needs to answer path/range/user queries.
+
+Relay already has the pieces this API needs:
+
+1. Plugin id `system3-relay`.
+2. `LoginManager.user` / `RelayManager.user` for the signed-in user.
+3. `RelayManager.users` for durable user lookup.
+4. Provider awareness state with `user.id`, `user.name`, `user.color`, and `user.colorLight`.
+5. Yjs item attribution logic in `UserAttributionPlugin`, including offline fallback colors.
+
 ### Proposed Relay Public API
 
 Relay should expose a stable object on its plugin instance:
@@ -292,7 +273,7 @@ Relay should expose a stable object on its plugin instance:
 ```ts
 export interface RelayPublicApiV1 {
   version: 1;
-  users: RelayUsersApi;
+  identity: RelayIdentityApi;
   documents: RelayDocumentsApi;
   attribution: RelayAttributionApi;
   awareness: RelayAwarenessApi;
@@ -301,15 +282,15 @@ export interface RelayPublicApiV1 {
 export interface RelayUserSummary {
   id: string;
   name: string;
-  email?: string;
   picture?: string;
   color: string;
   colorLight: string;
 }
 
-export interface RelayUsersApi {
-  getUser(id: string): RelayUserSummary | null;
-  listUsers(): RelayUserSummary[];
+export interface RelayIdentityApi {
+  getCurrentUser(path?: string): RelayUserSummary | null;
+  resolveUser(userId: string): RelayUserSummary | null;
+  listUsersForPath(path: string): RelayUserSummary[];
   subscribe(callback: () => void): () => void;
 }
 
@@ -321,7 +302,10 @@ export interface RelayDocumentContext {
   path: string;
   guid: string;
   sharedFolderPath: string;
+  relayId: string | null;
+  sharedFolderGuid: string;
   connected: boolean;
+  localOnly: boolean;
 }
 
 export interface RelayAttributionApi {
@@ -336,6 +320,7 @@ export interface RelayAttributionRange {
   from: number;
   to: number;
   userId: string | null;
+  confidence: "exact" | "majority" | "unknown";
 }
 
 export interface RelayAwarenessApi {
@@ -344,7 +329,65 @@ export interface RelayAwarenessApi {
 }
 ```
 
-This API can initially be implemented using the same Yjs item attribution logic already present in Relay's `UserAttributionPlugin`, but the logic should live behind Relay's public API.
+Relay should announce API availability with a workspace event after load and after reload:
+
+```ts
+app.workspace.trigger("system3-relay:api-ready", relayApi);
+```
+
+CriticMarkup should also poll the plugin registry on load because plugin load order is not guaranteed:
+
+```ts
+const relay = app.plugins.plugins["system3-relay"] as
+  | { api?: RelayPublicApiV1 }
+  | undefined;
+```
+
+The API must not expose auth tokens. Email should not be included in `RelayUserSummary` for CriticMarkup unless there is a deliberate privacy setting, because comments may be visible in screenshots and exports.
+
+### CriticMarkup Consumer API
+
+This plugin should wrap Relay in an adapter so the rest of the code does not know whether Relay is present:
+
+```ts
+export interface ReviewIdentityProvider {
+  getCurrentAuthor(path: string): ReviewAuthor | null;
+  resolveAuthor(userId: string): ReviewAuthor | null;
+  getAuthorForMark(path: string, mark: CriticMark): ReviewAuthor | null;
+  getOnlineAuthors(path: string): ReviewAuthor[];
+  subscribe(path: string, callback: () => void): () => void;
+}
+
+export interface ReviewAuthor {
+  provider: "relay";
+  id: string;
+  name: string;
+  picture?: string;
+  color: string;
+  colorLight: string;
+}
+```
+
+Resolution order for a sidebar card:
+
+1. If the mark has compatible imported metadata with a Relay user ID, call `resolveAuthor`.
+2. Otherwise call `getAuthorForMark`, which asks Relay attribution for mark-specific source ranges.
+3. If Relay is missing, the file is outside Relay, or attribution is unknown, render a neutral local reviewer identity.
+
+On comment or suggestion creation, CriticMarkup should ask `getCurrentAuthor(path)` so the draft card can show the current Relay identity immediately. The source edit remains a normal editor transaction so Relay synchronization continues to work.
+
+### Persisting Author Identity
+
+Core CriticMarkup does not define author fields. The default MVP should not invent a new source format for authors. For shared Relay documents, author identity is derived from Relay attribution and user lookup.
+
+The plugin may read compatibility metadata from imported Track Changes-style comments, for example `{{author="Daniel" date="2026-07-01">>comment<<}}`, but this is compatibility input, not the primary write format.
+
+If durable author stamps are needed outside Relay-shared files, add an explicit later setting. That setting should write a documented compatibility metadata format with:
+
+1. Relay user ID when available.
+2. Display-name snapshot for offline reading.
+3. Creation timestamp.
+4. No auth token or email.
 
 ### Suggestion Attribution Algorithm
 
@@ -379,11 +422,9 @@ When Relay data is unavailable:
 
 Initial settings:
 
-1. Default display mode: `review`, `clean`, or `raw`, initially `review`.
-2. Editor raw syntax behavior: `hideOutsideSelection`, `alwaysShow`, `alwaysHide`.
-3. Show author chips when Relay is available.
-4. Show inline action controls.
-5. Enable review sidebar.
+1. Show author chips when Relay is available.
+2. Show inline comment controls.
+3. Enable review sidebar.
 
 ## Testing Strategy
 
@@ -406,7 +447,7 @@ Integration tests:
 
 Manual Obsidian checks:
 
-1. Source mode, live preview, and reading mode.
+1. Source mode, Live Preview, and Reading mode.
 2. Undo/redo after accept/reject.
 3. Files inside and outside Relay shared folders.
 4. Review sidebar selection stays synchronized with the editor.
@@ -415,8 +456,7 @@ Manual Obsidian checks:
 ## Open Questions
 
 1. Should accept/reject all operate on the whole file immediately, or require confirmation when more than one mark is present?
-2. How much raw syntax should be exposed in live preview while the cursor is inside a mark?
-3. Should Relay expose this API as `plugin.api`, `plugin.relayApi`, or another namespaced property?
+2. Should Relay expose this API as `plugin.api`, `plugin.relayApi`, or another namespaced property?
 
 ## Phase Plan
 

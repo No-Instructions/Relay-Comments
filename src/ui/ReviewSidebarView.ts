@@ -1,6 +1,7 @@
 import {
 	ItemView,
 	MarkdownView,
+	Menu,
 	setIcon,
 	type IconName,
 	type WorkspaceLeaf,
@@ -34,6 +35,8 @@ type ReviewItem =
 	  };
 
 export class ReviewSidebarView extends ItemView {
+	private replyDraftItemId: string | null = null;
+
 	constructor(
 		leaf: WorkspaceLeaf,
 		private plugin: CriticMarkupPlugin,
@@ -77,14 +80,6 @@ export class ReviewSidebarView extends ItemView {
 
 		const header = root.createDiv({ cls: "critic-sidebar-header" });
 		header.createEl("h3", { text: state.file.basename });
-		const modeButton = header.createEl("button", {
-			cls: "critic-sidebar-mode",
-			text: formatMode(state.displayMode),
-		});
-		modeButton.title = "Switch display mode for this note";
-		modeButton.addEventListener("click", () => {
-			void this.plugin.toggleCurrentNoteDisplayMode();
-		});
 
 		const validMarks = state.marks
 			.filter((mark) => mark.valid)
@@ -146,6 +141,18 @@ export class ReviewSidebarView extends ItemView {
 	): void {
 		const card = parent.createDiv({
 			cls: selected ? "critic-card critic-card-selected" : "critic-card",
+			attr: { tabindex: "0", role: "button" },
+		});
+		card.addEventListener("click", (event) => {
+			if ((event.target as HTMLElement).closest("button, textarea, input, a")) {
+				return;
+			}
+			this.locateItem(item);
+		});
+		card.addEventListener("keydown", (event) => {
+			if (event.key !== "Enter" && event.key !== " ") return;
+			event.preventDefault();
+			this.locateItem(item);
 		});
 
 		const header = card.createDiv({ cls: "critic-card-header" });
@@ -159,43 +166,25 @@ export class ReviewSidebarView extends ItemView {
 			text: `${getItemLabel(item)} · Line ${item.line + 1}`,
 		});
 
-		const actions = header.createDiv({ cls: "critic-card-icon-actions" });
-		this.addIconButton(actions, "Locate in note", "locate-fixed", () =>
-			this.locateItem(item),
-		);
-
 		if (item.kind === "anchored-comment") {
-			this.addIconButton(actions, "Reply", "reply", () => {
-				void this.plugin.replyToMark(item.comment);
-			});
-			this.addIconButton(actions, "Resolve comment", "check", () =>
-				this.resolveItem(item),
-			);
+			this.addOverflowMenu(header, item);
 		} else if (isSuggestion(item.mark)) {
-			this.addIconButton(actions, "Accept suggestion", "check", () =>
-				this.applyMark(item.mark, "accept"),
-			);
-			this.addIconButton(actions, "Reject suggestion", "x", () =>
-				this.applyMark(item.mark, "reject"),
-			);
+			this.addSuggestionActions(header, item.mark);
 		} else {
-			if (item.mark.type === "comment") {
-				this.addIconButton(actions, "Reply", "reply", () => {
-					void this.plugin.replyToMark(item.mark);
-				});
-			}
-			this.addIconButton(actions, "Resolve", "check", () =>
-				this.applyMark(item.mark, "accept"),
-			);
+			this.addOverflowMenu(header, item);
 		}
 
 		if (item.kind === "anchored-comment") {
 			card.createDiv({ cls: "critic-card-quote", text: item.anchor.content });
 			card.createDiv({ cls: "critic-card-body", text: item.comment.content });
+			this.renderReplyComposer(card, item, item.comment);
 			return;
 		}
 
 		this.renderMarkBody(card, item.mark);
+		if (item.mark.type === "comment") {
+			this.renderReplyComposer(card, item, item.mark);
+		}
 	}
 
 	private renderMarkBody(card: HTMLElement, mark: CriticMark): void {
@@ -216,18 +205,55 @@ export class ReviewSidebarView extends ItemView {
 		}
 	}
 
-	private addIconButton(
+	private addSuggestionActions(parent: HTMLElement, mark: CriticMark): void {
+		const actions = parent.createDiv({ cls: "critic-suggestion-actions" });
+		this.addActionChip(actions, "Accept", () => this.applyMark(mark, "accept"));
+		this.addActionChip(actions, "Reject", () => this.applyMark(mark, "reject"));
+	}
+
+	private addOverflowMenu(parent: HTMLElement, item: ReviewItem): void {
+		const button = parent.createEl("button", {
+			cls: "critic-icon-button",
+			attr: { "aria-label": "More actions", title: "More actions" },
+		});
+		setIcon(button, "more-horizontal");
+		button.addEventListener("click", (event) => {
+			event.stopPropagation();
+			const menu = new Menu();
+			if (isCommentItem(item)) {
+				menu.addItem((menuItem) => {
+					menuItem
+						.setTitle("Reply")
+						.setIcon("reply")
+						.onClick(() => {
+							this.replyDraftItemId = item.id;
+							this.render();
+						});
+				});
+			}
+			menu.addItem((menuItem) => {
+				menuItem
+					.setTitle("Resolve")
+					.setIcon("check")
+					.onClick(() => this.resolveReviewItem(item));
+			});
+			menu.showAtMouseEvent(event);
+		});
+	}
+
+	private addActionChip(
 		parent: HTMLElement,
 		label: string,
-		icon: string,
 		callback: () => void,
 	): void {
 		const button = parent.createEl("button", {
-			cls: "critic-icon-button",
-			attr: { "aria-label": label, title: label },
+			cls: "critic-action-chip",
+			text: label,
 		});
-		setIcon(button, icon);
-		button.addEventListener("click", callback);
+		button.addEventListener("click", (event) => {
+			event.stopPropagation();
+			callback();
+		});
 	}
 
 	private addTextButton(
@@ -236,11 +262,51 @@ export class ReviewSidebarView extends ItemView {
 		callback: () => void,
 	): void {
 		const button = parent.createEl("button", { text: label });
-		button.addEventListener("click", callback);
+		button.addEventListener("click", (event) => {
+			event.stopPropagation();
+			callback();
+		});
 	}
 
 	private locateItem(item: ReviewItem): void {
 		this.plugin.locateReviewRange(item.from, item.to);
+	}
+
+	private renderReplyComposer(
+		card: HTMLElement,
+		item: ReviewItem,
+		mark: CriticMark,
+	): void {
+		if (this.replyDraftItemId !== item.id) {
+			const button = card.createEl("button", {
+				cls: "critic-reply-prompt",
+				text: "Reply...",
+			});
+			button.addEventListener("click", (event) => {
+				event.stopPropagation();
+				this.replyDraftItemId = item.id;
+				this.render();
+			});
+			return;
+		}
+
+		const composer = card.createDiv({ cls: "critic-reply-composer" });
+		const textarea = composer.createEl("textarea", {
+			cls: "critic-reply-textarea",
+			attr: { placeholder: "Reply..." },
+		});
+		const actions = composer.createDiv({ cls: "critic-draft-actions" });
+		this.addTextButton(actions, "Cancel", () => {
+			this.replyDraftItemId = null;
+			this.render();
+		});
+		this.addTextButton(actions, "Reply", () => {
+			const value = textarea.value.trim();
+			if (value.length === 0) return;
+			void this.plugin.insertReplyToMark(mark, value);
+			this.replyDraftItemId = null;
+		});
+		setTimeout(() => textarea.focus(), 0);
 	}
 
 	private resolveItem(
@@ -254,10 +320,25 @@ export class ReviewSidebarView extends ItemView {
 		this.render();
 	}
 
+	private resolveReviewItem(item: ReviewItem): void {
+		if (item.kind === "anchored-comment") {
+			this.resolveItem(item);
+		} else {
+			this.applyMark(item.mark, "accept");
+		}
+	}
+
 	private applyMark(mark: CriticMark, action: CriticAction): void {
 		this.plugin.applyMarkActionFromSidebar(mark, action);
 		this.render();
 	}
+}
+
+function isCommentItem(item: ReviewItem): boolean {
+	return (
+		item.kind === "anchored-comment" ||
+		(item.kind === "mark" && item.mark.type === "comment")
+	);
 }
 
 function buildReviewItems(marks: CriticMark[]): ReviewItem[] {
@@ -362,17 +443,4 @@ function initials(name: string): string {
 
 export function getActiveMarkdownView(plugin: CriticMarkupPlugin): MarkdownView | null {
 	return plugin.app.workspace.getActiveViewOfType(MarkdownView);
-}
-
-function formatMode(mode: string): string {
-	switch (mode) {
-		case "review":
-			return "Review";
-		case "clean":
-			return "Clean";
-		case "raw":
-			return "Raw";
-		default:
-			return "Review";
-	}
 }

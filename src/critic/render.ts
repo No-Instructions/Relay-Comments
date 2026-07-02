@@ -5,11 +5,8 @@ export function renderDisplaySegments(
 	text: string,
 	mode: DisplayMode,
 ): RenderSegment[] {
-	if (mode === "raw") {
-		return [{ kind: "text", text }];
-	}
-
 	const marks = parseCriticMarkup(text);
+	const anchoredCommentIds = findAnchoredCommentIds(marks);
 	const segments: RenderSegment[] = [];
 	let cursor = 0;
 
@@ -18,10 +15,12 @@ export function renderDisplaySegments(
 		if (mark.from > cursor) {
 			segments.push({ kind: "text", text: text.slice(cursor, mark.from) });
 		}
-		if (mark.valid) {
+		if (mark.valid && anchoredCommentIds.has(mark.id)) {
+			segments.push(...renderMarkSegments(mark, "clean"));
+		} else if (mark.valid) {
 			segments.push(...renderMarkSegments(mark, mode));
 		} else {
-			segments.push({ kind: "text", text: mark.raw });
+			segments.push({ kind: "text", text: getInvalidMarkFallback(mark) });
 		}
 		cursor = mark.to;
 	}
@@ -59,14 +58,38 @@ export function renderMarkSegments(
 		case "substitution":
 			return [
 				{ kind: "deletion", text: mark.oldText ?? "" },
-				{ kind: "text", text: " " },
+				{ kind: "text", text: " -> " },
 				{ kind: "addition", text: mark.newText ?? "" },
 			];
 		case "comment":
-			return [{ kind: "comment", text: "Comment", title: mark.content }];
+			return [{ kind: "comment", text: "", title: mark.content }];
 		case "highlight":
 			return [{ kind: "highlight", text: mark.content }];
 	}
+}
+
+function findAnchoredCommentIds(marks: CriticMark[]): Set<string> {
+	const ids = new Set<string>();
+	for (let index = 0; index < marks.length; index += 1) {
+		const mark = marks[index];
+		if (!mark.valid || mark.type !== "highlight") continue;
+		const comment = marks.find(
+			(candidate, candidateIndex) =>
+				candidateIndex > index &&
+				candidate.valid &&
+				candidate.type === "comment" &&
+				candidate.from === mark.to,
+		);
+		if (comment) ids.add(comment.id);
+	}
+	return ids;
+}
+
+function getInvalidMarkFallback(mark: CriticMark): string {
+	if (mark.type === "substitution") {
+		return mark.newText ?? mark.oldText ?? mark.content;
+	}
+	return mark.content;
 }
 
 export function getMarkTitle(mark: CriticMark): string {

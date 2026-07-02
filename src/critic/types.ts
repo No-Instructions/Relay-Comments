@@ -5,7 +5,7 @@ export type CriticMarkType =
 	| "comment"
 	| "highlight";
 
-export type DisplayMode = "review" | "clean" | "raw";
+export type DisplayMode = "review" | "clean";
 
 export interface CriticMark {
 	id: string;
