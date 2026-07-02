@@ -10,6 +10,7 @@ import {
 } from "obsidian";
 import { EditorView as CodeMirrorEditorView } from "@codemirror/view";
 import { parseCriticMarkup } from "./critic/parse";
+import { CRITIC_SECTION_SEPARATOR } from "./critic/threading";
 import type { CriticAction } from "./critic/transform";
 import type { CriticMark, DisplayMode } from "./critic/types";
 import {
@@ -250,15 +251,29 @@ export default class CriticMarkupPlugin
 		filePath?: string | null,
 	): ReviewerIdentity {
 		const metadataAuthor = mark.metadata?.author?.trim();
-		if (metadataAuthor) {
-			return { name: metadataAuthor, source: "metadata" };
-		}
-
+		const resolvedFilePath =
+			filePath ?? this.app.workspace.getActiveFile()?.path ?? null;
 		const relayIdentity = this.getRelayIdentityForRange(
-			filePath ?? this.app.workspace.getActiveFile()?.path ?? null,
+			resolvedFilePath,
 			mark.contentFrom,
 			mark.contentTo,
 		);
+		if (
+			relayIdentity &&
+			(!metadataAuthor || isSameReviewerName(relayIdentity.name, metadataAuthor))
+		) {
+			return relayIdentity;
+		}
+		if (metadataAuthor) {
+			const currentRelayIdentity = this.getCurrentRelayIdentity();
+			if (
+				currentRelayIdentity &&
+				isSameReviewerName(currentRelayIdentity.name, metadataAuthor)
+			) {
+				return currentRelayIdentity;
+			}
+			return { name: metadataAuthor, source: "metadata" };
+		}
 		return relayIdentity ?? fallbackIdentity();
 	}
 
@@ -333,7 +348,7 @@ export default class CriticMarkupPlugin
 			new Notice("Select text to comment on.");
 			return;
 		}
-		const commentMarkup = this.formatCommentMarkup(comment);
+		const commentMarkup = this.formatAttachedCommentMarkup(comment);
 		const insertion = `{==${draft.selectedText}==}${commentMarkup}`;
 		editor.replaceRange(
 			insertion,
@@ -611,7 +626,7 @@ export default class CriticMarkupPlugin
 		});
 		if (reply === null || reply.length === 0) return;
 		editor.replaceRange(
-			this.formatCommentMarkup(reply),
+			this.formatAttachedCommentMarkup(reply),
 			editor.offsetToPos(mark.to),
 			undefined,
 			"criticmarkup",
@@ -626,7 +641,7 @@ export default class CriticMarkupPlugin
 		const cm = this.getCodeMirrorEditor(editor);
 		const scrollTop = cm?.scrollDOM?.scrollTop;
 		editor.replaceRange(
-			this.formatCommentMarkup(reply),
+			this.formatAttachedCommentMarkup(reply),
 			editor.offsetToPos(mark.to),
 			undefined,
 			"criticmarkup",
@@ -665,6 +680,10 @@ export default class CriticMarkupPlugin
 			`date="${new Date().toISOString()}"`,
 		].join(" ");
 		return `{{${metadata}>>${comment}<<}}`;
+	}
+
+	private formatAttachedCommentMarkup(comment: string): string {
+		return `${CRITIC_SECTION_SEPARATOR}${this.formatCommentMarkup(comment)}`;
 	}
 
 	async openReviewSidebar(): Promise<void> {
@@ -922,13 +941,17 @@ function userToIdentity(
 	};
 }
 
+function isSameReviewerName(left: string, right: string): boolean {
+	return left.trim().toLocaleLowerCase() === right.trim().toLocaleLowerCase();
+}
+
 function formatMetadataValue(value: string): string {
 	return value.replace(/"/g, "'");
 }
 
 function fallbackIdentity(): ReviewerIdentity {
 	return {
-		name: "Reviewer",
+		name: "Unknown author",
 		source: "fallback",
 	};
 }

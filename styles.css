@@ -181,6 +181,12 @@
 	object-fit: cover;
 }
 
+.critic-avatar-unknown {
+	background: var(--background-modifier-border);
+	color: var(--text-muted);
+	border: 1px solid var(--background-modifier-border-hover);
+}
+
 .critic-comment-meta {
 	min-width: 0;
 }

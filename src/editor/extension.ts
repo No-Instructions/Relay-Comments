@@ -9,6 +9,7 @@ import {
 	WidgetType,
 } from "@codemirror/view";
 import { parseCriticMarkup } from "../critic/parse";
+import { collectAttachedComments } from "../critic/threading";
 import type { CriticMark, DisplayMode } from "../critic/types";
 
 export interface CriticMarkupEditorController {
@@ -185,7 +186,7 @@ export function createCriticMarkupExtension(
 				const ranges: Array<Range<Decoration>> = [];
 				const atomRanges: Array<Range<Decoration>> = [];
 				const marks = parseCriticMarkup(text);
-				const anchoredComments = findAnchoredComments(marks);
+				const anchoredComments = findAnchoredComments(marks, text);
 
 				for (const mark of marks) {
 					if (!mark.valid) {
@@ -205,8 +206,11 @@ export function createCriticMarkupExtension(
 
 					const anchoredComment = anchoredComments.byAnchorId.get(mark.id);
 					if (anchoredComment && anchoredComment.length > 0) {
+						const separators =
+							anchoredComments.separatorRangesByAnchorId.get(mark.id) ?? [];
 						if (mode === "clean") {
 							this.decorateClean(mark, true, ranges);
+							hideRanges(separators, ranges, atomRanges);
 							for (const comment of anchoredComment) {
 								addReplace(ranges, comment.from, comment.to);
 								addAtom(atomRanges, comment.from, comment.to);
@@ -219,6 +223,7 @@ export function createCriticMarkupExtension(
 								anchoredComments.commentIds,
 								threadAttributes(mark, anchoredComment),
 							);
+							hideRanges(separators, ranges, atomRanges);
 							for (const comment of anchoredComment) {
 								addReplace(ranges, comment.from, comment.to);
 								addAtom(atomRanges, comment.from, comment.to);
@@ -417,41 +422,44 @@ function readLivePreview(view: EditorView): boolean {
 	);
 }
 
-function findAnchoredComments(marks: CriticMark[]): {
+function findAnchoredComments(
+	marks: CriticMark[],
+	text: string,
+): {
 	commentIds: Set<string>;
 	byAnchorId: Map<string, CriticMark[]>;
+	separatorRangesByAnchorId: Map<string, Array<[number, number]>>;
 } {
 	const commentIds = new Set<string>();
 	const byAnchorId = new Map<string, CriticMark[]>();
+	const separatorRangesByAnchorId = new Map<string, Array<[number, number]>>();
 	for (let index = 0; index < marks.length; index += 1) {
 		const mark = marks[index];
 		if (!mark.valid || commentIds.has(mark.id)) continue;
 
-		const comments: CriticMark[] = [];
-		let nextFrom = mark.to;
-		for (
-			let candidateIndex = index + 1;
-			candidateIndex < marks.length;
-			candidateIndex += 1
-		) {
-			const candidate = marks[candidateIndex];
-			if (
-				!candidate.valid ||
-				candidate.type !== "comment" ||
-				candidate.from !== nextFrom
-			) {
-				break;
+		const attached = collectAttachedComments(marks, text, index, commentIds);
+		if (attached.comments.length > 0) {
+			for (const comment of attached.comments) {
+				commentIds.add(comment.id);
 			}
-			comments.push(candidate);
-			commentIds.add(candidate.id);
-			nextFrom = candidate.to;
-		}
-
-		if (mark.type !== "comment" && comments.length > 0) {
-			byAnchorId.set(mark.id, comments);
+			byAnchorId.set(mark.id, attached.comments);
+			if (attached.separatorRanges.length > 0) {
+				separatorRangesByAnchorId.set(mark.id, attached.separatorRanges);
+			}
 		}
 	}
-	return { commentIds, byAnchorId };
+	return { commentIds, byAnchorId, separatorRangesByAnchorId };
+}
+
+function hideRanges(
+	sourceRanges: Array<[number, number]>,
+	ranges: Array<Range<Decoration>>,
+	atomRanges: Array<Range<Decoration>>,
+): void {
+	for (const [from, to] of sourceRanges) {
+		addReplace(ranges, from, to);
+		addAtom(atomRanges, from, to);
+	}
 }
 
 function hideDelimiters(

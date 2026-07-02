@@ -1,4 +1,5 @@
 import { parseCriticMarkup } from "./parse";
+import { collectAttachedComments } from "./threading";
 import type { CriticMark, DisplayMode, RenderSegment } from "./types";
 
 export function renderDisplaySegments(
@@ -6,16 +7,19 @@ export function renderDisplaySegments(
 	mode: DisplayMode,
 ): RenderSegment[] {
 	const marks = parseCriticMarkup(text);
-	const anchoredCommentIds = findAnchoredCommentIds(marks);
+	const anchored = findAnchoredCommentMarkup(marks, text);
 	const segments: RenderSegment[] = [];
 	let cursor = 0;
 
 	for (const mark of marks) {
 		if (mark.from < cursor) continue;
 		if (mark.from > cursor) {
-			segments.push({ kind: "text", text: text.slice(cursor, mark.from) });
+			const separatorEnd = anchored.separatorEndByStart.get(cursor);
+			if (separatorEnd !== mark.from) {
+				segments.push({ kind: "text", text: text.slice(cursor, mark.from) });
+			}
 		}
-		if (mark.valid && anchoredCommentIds.has(mark.id)) {
+		if (mark.valid && anchored.commentIds.has(mark.id)) {
 			// Anchored comment bodies belong in the review sidebar, not inline text.
 		} else if (mark.valid) {
 			segments.push(...renderMarkSegments(mark, mode));
@@ -68,31 +72,28 @@ export function renderMarkSegments(
 	}
 }
 
-function findAnchoredCommentIds(marks: CriticMark[]): Set<string> {
-	const ids = new Set<string>();
+function findAnchoredCommentMarkup(
+	marks: CriticMark[],
+	text: string,
+): {
+	commentIds: Set<string>;
+	separatorEndByStart: Map<number, number>;
+} {
+	const commentIds = new Set<string>();
+	const separatorEndByStart = new Map<number, number>();
 	for (let index = 0; index < marks.length; index += 1) {
 		const mark = marks[index];
-		if (!mark.valid || ids.has(mark.id)) continue;
+		if (!mark.valid || commentIds.has(mark.id)) continue;
 
-		let nextFrom = mark.to;
-		for (
-			let candidateIndex = index + 1;
-			candidateIndex < marks.length;
-			candidateIndex += 1
-		) {
-			const candidate = marks[candidateIndex];
-			if (
-				!candidate.valid ||
-				candidate.type !== "comment" ||
-				candidate.from !== nextFrom
-			) {
-				break;
-			}
-			ids.add(candidate.id);
-			nextFrom = candidate.to;
+		const attached = collectAttachedComments(marks, text, index, commentIds);
+		for (const comment of attached.comments) {
+			commentIds.add(comment.id);
+		}
+		for (const [from, to] of attached.separatorRanges) {
+			separatorEndByStart.set(from, to);
 		}
 	}
-	return ids;
+	return { commentIds, separatorEndByStart };
 }
 
 function getInvalidMarkFallback(mark: CriticMark): string {

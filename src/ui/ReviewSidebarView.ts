@@ -7,6 +7,7 @@ import {
 	type WorkspaceLeaf,
 } from "obsidian";
 import { getMarkSummary, getMarkTitle } from "../critic/render";
+import { collectAttachedComments } from "../critic/threading";
 import { replacementForMark, type CriticAction } from "../critic/transform";
 import type { CriticMark, CriticMarkType } from "../critic/types";
 import type CriticMarkupPlugin from "../main";
@@ -92,7 +93,7 @@ export class ReviewSidebarView extends ItemView {
 		const validMarks = state.marks
 			.filter((mark) => mark.valid)
 			.sort((a, b) => a.from - b.from || a.to - b.to);
-		const item = buildReviewItems(validMarks).find(
+		const item = buildReviewItems(validMarks, state.editor.getValue()).find(
 			(candidate) =>
 				candidate.kind === "anchored-comment" &&
 				candidate.anchor.from === from &&
@@ -125,7 +126,7 @@ export class ReviewSidebarView extends ItemView {
 		const validMarks = state.marks
 			.filter((mark) => mark.valid)
 			.sort((a, b) => a.from - b.from || a.to - b.to);
-		const items = buildReviewItems(validMarks);
+		const items = buildReviewItems(validMarks, state.editor.getValue());
 		root.createDiv({
 			cls: "critic-sidebar-counts",
 			text: formatCounts(items),
@@ -192,14 +193,23 @@ export class ReviewSidebarView extends ItemView {
 			cls: "critic-draft-textarea",
 			attr: { placeholder: "Write a comment..." },
 		});
+		this.installTextareaEventGuards(textarea);
+		textarea.addEventListener("keydown", (event) => {
+			event.stopPropagation();
+			if (!(event.metaKey || event.ctrlKey) || event.key !== "Enter") return;
+			event.preventDefault();
+			this.commitDraftComment(textarea);
+		});
 		const actions = card.createDiv({ cls: "critic-draft-actions" });
 		this.addTextButton(actions, "Cancel", () => this.plugin.cancelCommentDraft());
-		this.addTextButton(actions, "Comment", () => {
-			const value = textarea.value.trim();
-			if (value.length === 0) return;
-			this.plugin.commitCommentDraft(value);
-		});
+		this.addTextButton(actions, "Comment", () => this.commitDraftComment(textarea));
 		setTimeout(() => textarea.focus(), 0);
+	}
+
+	private commitDraftComment(textarea: HTMLTextAreaElement): void {
+		const value = textarea.value.trim();
+		if (value.length === 0) return;
+		this.plugin.commitCommentDraft(value);
 	}
 
 	private renderItem(
@@ -349,11 +359,12 @@ export class ReviewSidebarView extends ItemView {
 			return;
 		}
 
+		const unknown = identity.source === "fallback";
 		const avatar = parent.createDiv({
-			cls: "critic-avatar",
-			text: initials(identity.name),
+			cls: unknown ? "critic-avatar critic-avatar-unknown" : "critic-avatar",
+			text: unknown ? "?" : initials(identity.name),
 		});
-		if (identity.color) {
+		if (!unknown && identity.color) {
 			avatar.style.backgroundColor = identity.color;
 		}
 	}
@@ -482,6 +493,13 @@ export class ReviewSidebarView extends ItemView {
 		});
 	}
 
+	private installTextareaEventGuards(textarea: HTMLTextAreaElement): void {
+		textarea.addEventListener("click", (event) => event.stopPropagation());
+		textarea.addEventListener("keydown", (event) => event.stopPropagation());
+		textarea.addEventListener("keypress", (event) => event.stopPropagation());
+		textarea.addEventListener("keyup", (event) => event.stopPropagation());
+	}
+
 	private locateItem(item: ReviewItem): void {
 		if (this.editingCommentId && !itemContainsComment(item, this.editingCommentId)) {
 			this.editingCommentId = null;
@@ -524,11 +542,12 @@ export class ReviewSidebarView extends ItemView {
 			attr: { placeholder: "Edit comment..." },
 		});
 		textarea.value = this.editDrafts.get(comment.id) ?? comment.content;
-		textarea.addEventListener("click", (event) => event.stopPropagation());
+		this.installTextareaEventGuards(textarea);
 		textarea.addEventListener("input", () => {
 			this.editDrafts.set(comment.id, textarea.value);
 		});
 		textarea.addEventListener("keydown", (event) => {
+			event.stopPropagation();
 			if (event.key === "Escape") {
 				event.preventDefault();
 				this.cancelEditingComment(comment.id);
@@ -596,11 +615,12 @@ export class ReviewSidebarView extends ItemView {
 			attr: { placeholder: "Reply to this thread..." },
 		});
 		textarea.value = this.replyDrafts.get(item.id) ?? "";
-		textarea.addEventListener("click", (event) => event.stopPropagation());
+		this.installTextareaEventGuards(textarea);
 		textarea.addEventListener("input", () => {
 			this.replyDrafts.set(item.id, textarea.value);
 		});
 		textarea.addEventListener("keydown", (event) => {
+			event.stopPropagation();
 			if (!(event.metaKey || event.ctrlKey) || event.key !== "Enter") return;
 			event.preventDefault();
 			this.commitThreadReply(item, mark, textarea);
@@ -696,7 +716,7 @@ function getItemTargetRange(item: ReviewItem): { from: number; to: number } {
 	return { from: item.mark.from, to: item.mark.to };
 }
 
-function buildReviewItems(marks: CriticMark[]): ReviewItem[] {
+function buildReviewItems(marks: CriticMark[], text: string): ReviewItem[] {
 	const items: ReviewItem[] = [];
 	const consumed = new Set<string>();
 
@@ -708,7 +728,7 @@ function buildReviewItems(marks: CriticMark[]): ReviewItem[] {
 			continue;
 		}
 
-		const comments = collectThreadComments(marks, index, consumed);
+		const comments = collectThreadComments(marks, text, index, consumed);
 		if (comments.length > 0) {
 			const comment = comments[0];
 			const lastComment = comments[comments.length - 1];
@@ -747,31 +767,11 @@ function buildReviewItems(marks: CriticMark[]): ReviewItem[] {
 
 function collectThreadComments(
 	marks: CriticMark[],
+	text: string,
 	anchorIndex: number,
 	consumed: Set<string>,
 ): CriticMark[] {
-	const anchor = marks[anchorIndex];
-	if (anchor.type === "comment") return [];
-	const comments: CriticMark[] = [];
-	let nextFrom = anchor.to;
-	for (
-		let candidateIndex = anchorIndex + 1;
-		candidateIndex < marks.length;
-		candidateIndex += 1
-	) {
-		const candidate = marks[candidateIndex];
-		if (
-			consumed.has(candidate.id) ||
-			candidate.type !== "comment" ||
-			candidate.from !== nextFrom
-		) {
-			break;
-		}
-		comments.push(candidate);
-		nextFrom = candidate.to;
-	}
-
-	return comments;
+	return collectAttachedComments(marks, text, anchorIndex, consumed).comments;
 }
 
 function isSelected(item: ReviewItem, activeMarkId: string | null): boolean {
