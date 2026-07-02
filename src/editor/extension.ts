@@ -15,6 +15,7 @@ export interface CriticMarkupEditorController {
 	getDisplayMode(path?: string | null): DisplayMode;
 	getRenderVersion(): number;
 	shouldShowInlineActions(): boolean;
+	activateCommentThread(path: string | null, from: number, to: number): void;
 	startCommentDraft(
 		path: string | null,
 		from: number,
@@ -23,10 +24,10 @@ export interface CriticMarkupEditorController {
 	): void;
 }
 
-class TextWidget extends WidgetType {
+class IconWidget extends WidgetType {
 	constructor(
-		private text: string,
 		private className: string,
+		private icon: string,
 		private title?: string,
 	) {
 		super();
@@ -35,133 +36,16 @@ class TextWidget extends WidgetType {
 	toDOM(view: EditorView): HTMLElement {
 		const span = view.dom.ownerDocument.createElement("span");
 		span.className = this.className;
-		span.textContent = this.text;
 		if (this.title) span.title = this.title;
+		setIcon(span, this.icon);
 		return span;
 	}
 
-	eq(other: TextWidget): boolean {
+	eq(other: IconWidget): boolean {
 		return (
-			this.text === other.text &&
 			this.className === other.className &&
+			this.icon === other.icon &&
 			this.title === other.title
-		);
-	}
-}
-
-class CommentMarkerWidget extends WidgetType {
-	constructor(private title: string) {
-		super();
-	}
-
-	toDOM(view: EditorView): HTMLElement {
-		const span = view.dom.ownerDocument.createElement("span");
-		span.className = "cm-critic-comment-widget";
-		span.title = this.title;
-		setIcon(span, "message-square");
-		return span;
-	}
-
-	eq(other: CommentMarkerWidget): boolean {
-		return this.title === other.title;
-	}
-}
-
-class MarkPreviewWidget extends WidgetType {
-	constructor(
-		private mark: CriticMark,
-		private mode: DisplayMode,
-		private anchoredComment: boolean,
-	) {
-		super();
-	}
-
-	toDOM(view: EditorView): HTMLElement {
-		const span = view.dom.ownerDocument.createElement("span");
-		span.className = `cm-critic-preview cm-critic-preview-${this.mark.type}`;
-		switch (this.mark.type) {
-			case "addition":
-				span.textContent = this.mark.content;
-				if (this.mode === "review") span.classList.add("cm-critic-addition");
-				break;
-			case "deletion":
-				if (this.mode === "review") {
-					span.classList.add("cm-critic-deletion");
-					span.textContent = this.mark.content;
-				}
-				break;
-			case "substitution":
-				if (this.mode === "clean") {
-					span.textContent = this.mark.newText ?? "";
-				} else {
-					const oldText = span.createEl("span", {
-						cls: "cm-critic-deletion",
-						text: this.mark.oldText ?? "",
-					});
-					oldText.addClass("cm-critic-substitution-part");
-					span.createEl("span", {
-						cls: "cm-critic-substitution-arrow",
-						text: " -> ",
-					});
-					const newText = span.createEl("span", {
-						cls: "cm-critic-addition",
-						text: this.mark.newText ?? "",
-					});
-					newText.addClass("cm-critic-substitution-part");
-				}
-				break;
-			case "comment":
-				if (this.mode === "review" && !this.anchoredComment) {
-					span.className = "cm-critic-comment-widget";
-					span.title = this.mark.content;
-					setIcon(span, "message-square");
-				}
-				break;
-			case "highlight":
-				span.textContent = this.mark.content;
-				if (this.mode === "review") span.classList.add("cm-critic-highlight");
-				break;
-		}
-		return span;
-	}
-
-	eq(other: MarkPreviewWidget): boolean {
-		return (
-			this.mark.id === other.mark.id &&
-			this.mark.raw === other.mark.raw &&
-			this.mode === other.mode &&
-			this.anchoredComment === other.anchoredComment
-		);
-	}
-}
-
-class AnchoredCommentPreviewWidget extends WidgetType {
-	constructor(
-		private anchor: CriticMark,
-		private comment: CriticMark,
-		private mode: DisplayMode,
-	) {
-		super();
-	}
-
-	toDOM(view: EditorView): HTMLElement {
-		const span = view.dom.ownerDocument.createElement("span");
-		span.className = "cm-critic-anchored-comment";
-		const anchorText = span.createEl("span", { text: this.anchor.content });
-		if (this.mode === "review") {
-			anchorText.addClass("cm-critic-highlight");
-			anchorText.title = this.comment.content;
-		}
-		return span;
-	}
-
-	eq(other: AnchoredCommentPreviewWidget): boolean {
-		return (
-			this.anchor.id === other.anchor.id &&
-			this.anchor.raw === other.anchor.raw &&
-			this.comment.id === other.comment.id &&
-			this.comment.raw === other.comment.raw &&
-			this.mode === other.mode
 		);
 	}
 }
@@ -180,10 +64,22 @@ export function createCriticMarkupExtension(
 			private path: string | null = null;
 			private mode: DisplayMode = "review";
 			private livePreview = false;
+			private handleClick = (event: MouseEvent): void => {
+				const target = event.target as HTMLElement | null;
+				const anchor = target?.closest<HTMLElement>(
+					".cm-critic-thread-anchor, .cm-critic-anchored-comment",
+				);
+				if (!anchor) return;
+				const from = Number(anchor.dataset.criticFrom);
+				const to = Number(anchor.dataset.criticTo);
+				if (!Number.isFinite(from) || !Number.isFinite(to)) return;
+				controller.activateCommentThread(readPath(this.view), from, to);
+			};
 
 			constructor(private view: EditorView) {
 				this.commentButton = this.createCommentButton();
 				this.view.dom.appendChild(this.commentButton);
+				this.view.dom.addEventListener("click", this.handleClick);
 				this.rebuild();
 				this.observeSourceView();
 				this.view.requestMeasure({
@@ -220,6 +116,7 @@ export function createCriticMarkupExtension(
 			destroy(): void {
 				this.sourceViewObserver?.disconnect();
 				this.sourceViewObserver = null;
+				this.view.dom.removeEventListener("click", this.handleClick);
 				this.commentButton.remove();
 			}
 
@@ -292,60 +189,50 @@ export function createCriticMarkupExtension(
 
 				for (const mark of marks) {
 					if (!mark.valid) {
-						if (livePreview) {
-							addReplace(
-								ranges,
-								mark.from,
-								mark.to,
-								new TextWidget(
-									"Invalid CriticMarkup",
-									"cm-critic-invalid-widget",
-									mark.error,
-								),
-							);
-							addAtom(atomRanges, mark.from, mark.to);
-							continue;
-						}
-						addMark(ranges, mark.from, mark.to, "cm-critic-invalid", mark.error);
-						continue;
-					}
-
-					if (livePreview) {
-						const anchoredComment =
-							mark.type === "highlight"
-								? anchoredComments.byAnchorId.get(mark.id)
-								: undefined;
-						if (anchoredComment) {
-							addReplace(
-								ranges,
-								mark.from,
-								anchoredComment.to,
-								new AnchoredCommentPreviewWidget(mark, anchoredComment, mode),
-							);
-							addAtom(atomRanges, mark.from, anchoredComment.to);
-							continue;
-						}
-						if (anchoredComments.commentIds.has(mark.id)) {
-							continue;
-						}
 						addReplace(
 							ranges,
 							mark.from,
 							mark.to,
-							new MarkPreviewWidget(
-								mark,
-								mode,
-								anchoredComments.commentIds.has(mark.id),
+							new IconWidget(
+								"cm-critic-invalid-widget",
+								"alert-triangle",
+								mark.error,
 							),
 						);
 						addAtom(atomRanges, mark.from, mark.to);
 						continue;
 					}
 
+					const anchoredComment = anchoredComments.byAnchorId.get(mark.id);
+					if (anchoredComment && anchoredComment.length > 0) {
+						if (mode === "clean") {
+							this.decorateClean(mark, true, ranges);
+							for (const comment of anchoredComment) {
+								addReplace(ranges, comment.from, comment.to);
+								addAtom(atomRanges, comment.from, comment.to);
+							}
+						} else {
+							this.decorateReview(
+								mark,
+								true,
+								ranges,
+								anchoredComments.commentIds,
+								threadAttributes(mark, anchoredComment),
+							);
+							for (const comment of anchoredComment) {
+								addReplace(ranges, comment.from, comment.to);
+								addAtom(atomRanges, comment.from, comment.to);
+							}
+						}
+						continue;
+					}
+					if (anchoredComments.commentIds.has(mark.id)) {
+						continue;
+					}
 					if (mode === "clean") {
-						this.decorateClean(mark, false, ranges);
+						this.decorateClean(mark, true, ranges);
 					} else {
-						this.decorateReview(mark, false, ranges, anchoredComments.commentIds);
+						this.decorateReview(mark, true, ranges, anchoredComments.commentIds);
 					}
 				}
 
@@ -361,18 +248,14 @@ export function createCriticMarkupExtension(
 				hideRaw: boolean,
 				ranges: Array<Range<Decoration>>,
 				anchoredCommentIds: Set<string> = new Set(),
+				threadAttrs?: Record<string, string>,
 			): void {
 				if (mark.type === "comment" && hideRaw) {
 					if (anchoredCommentIds.has(mark.id)) {
 						addReplace(ranges, mark.from, mark.to);
 						return;
 					}
-					addReplace(
-						ranges,
-						mark.from,
-						mark.to,
-						new CommentMarkerWidget(mark.content),
-					);
+					hideDelimiters(mark, ranges);
 					return;
 				}
 
@@ -380,10 +263,24 @@ export function createCriticMarkupExtension(
 
 				switch (mark.type) {
 					case "addition":
-						addMark(ranges, mark.contentFrom, mark.contentTo, "cm-critic-addition");
+						addMark(
+							ranges,
+							mark.contentFrom,
+							mark.contentTo,
+							attributeClass("cm-critic-addition", threadAttrs),
+							undefined,
+							threadAttrs,
+						);
 						break;
 					case "deletion":
-						addMark(ranges, mark.contentFrom, mark.contentTo, "cm-critic-deletion");
+						addMark(
+							ranges,
+							mark.contentFrom,
+							mark.contentTo,
+							attributeClass("cm-critic-deletion", threadAttrs),
+							undefined,
+							threadAttrs,
+						);
 						break;
 					case "substitution":
 						if (hideRaw && mark.ranges.separator) {
@@ -391,7 +288,6 @@ export function createCriticMarkupExtension(
 								ranges,
 								mark.ranges.separator[0],
 								mark.ranges.separator[1],
-								new TextWidget(" -> ", "cm-critic-substitution-arrow"),
 							);
 						}
 						if (mark.ranges.oldText) {
@@ -399,7 +295,9 @@ export function createCriticMarkupExtension(
 								ranges,
 								mark.ranges.oldText[0],
 								mark.ranges.oldText[1],
-								"cm-critic-deletion",
+								attributeClass("cm-critic-deletion", threadAttrs),
+								undefined,
+								threadAttrs,
 							);
 						}
 						if (mark.ranges.newText) {
@@ -407,7 +305,9 @@ export function createCriticMarkupExtension(
 								ranges,
 								mark.ranges.newText[0],
 								mark.ranges.newText[1],
-								"cm-critic-addition",
+								attributeClass("cm-critic-addition", threadAttrs),
+								undefined,
+								threadAttrs,
 							);
 						}
 						break;
@@ -415,7 +315,14 @@ export function createCriticMarkupExtension(
 						addMark(ranges, mark.from, mark.to, "cm-critic-comment-raw");
 						break;
 					case "highlight":
-						addMark(ranges, mark.contentFrom, mark.contentTo, "cm-critic-highlight");
+						addMark(
+							ranges,
+							mark.contentFrom,
+							mark.contentTo,
+							attributeClass("cm-critic-highlight", threadAttrs),
+							undefined,
+							threadAttrs,
+						);
 						break;
 				}
 			}
@@ -436,8 +343,10 @@ export function createCriticMarkupExtension(
 						hideDelimiters(mark, ranges);
 						break;
 					case "deletion":
-					case "comment":
 						addReplace(ranges, mark.from, mark.to);
+						break;
+					case "comment":
+						hideDelimiters(mark, ranges);
 						break;
 					case "substitution":
 						if (mark.ranges.opening && mark.ranges.newText) {
@@ -510,23 +419,36 @@ function readLivePreview(view: EditorView): boolean {
 
 function findAnchoredComments(marks: CriticMark[]): {
 	commentIds: Set<string>;
-	byAnchorId: Map<string, CriticMark>;
+	byAnchorId: Map<string, CriticMark[]>;
 } {
 	const commentIds = new Set<string>();
-	const byAnchorId = new Map<string, CriticMark>();
+	const byAnchorId = new Map<string, CriticMark[]>();
 	for (let index = 0; index < marks.length; index += 1) {
 		const mark = marks[index];
-		if (!mark.valid || mark.type !== "highlight") continue;
-		const comment = marks.find(
-			(candidate, candidateIndex) =>
-				candidateIndex > index &&
-				candidate.valid &&
-				candidate.type === "comment" &&
-				candidate.from === mark.to,
-		);
-		if (comment) {
-			commentIds.add(comment.id);
-			byAnchorId.set(mark.id, comment);
+		if (!mark.valid || commentIds.has(mark.id)) continue;
+
+		const comments: CriticMark[] = [];
+		let nextFrom = mark.to;
+		for (
+			let candidateIndex = index + 1;
+			candidateIndex < marks.length;
+			candidateIndex += 1
+		) {
+			const candidate = marks[candidateIndex];
+			if (
+				!candidate.valid ||
+				candidate.type !== "comment" ||
+				candidate.from !== nextFrom
+			) {
+				break;
+			}
+			comments.push(candidate);
+			commentIds.add(candidate.id);
+			nextFrom = candidate.to;
+		}
+
+		if (mark.type !== "comment" && comments.length > 0) {
+			byAnchorId.set(mark.id, comments);
 		}
 	}
 	return { commentIds, byAnchorId };
@@ -544,18 +466,51 @@ function hideDelimiters(
 	}
 }
 
+function threadAttributes(
+	mark: CriticMark,
+	comments: CriticMark[],
+): Record<string, string> {
+	return {
+		"data-critic-from": String(mark.from),
+		"data-critic-to": String(mark.to),
+		title: comments.map((comment) => comment.content).join("\n"),
+	};
+}
+
+function attributeClass(
+	className: string,
+	attributes?: Record<string, string>,
+): string {
+	return attributes ? `${className} cm-critic-thread-anchor` : className;
+}
+
 function addMark(
 	ranges: Array<Range<Decoration>>,
 	from: number,
 	to: number,
 	className: string,
 	title?: string,
+	attributes?: Record<string, string>,
 ): void {
 	if (to <= from) return;
+	const markAttributes = attributes ? { ...attributes } : undefined;
+	if (title) {
+		if (markAttributes) {
+			markAttributes.title = title;
+		} else {
+			ranges.push(
+				Decoration.mark({
+					class: className,
+					attributes: { title },
+				}).range(from, to),
+			);
+			return;
+		}
+	}
 	ranges.push(
 		Decoration.mark({
 			class: className,
-			attributes: title ? { title } : undefined,
+			attributes: markAttributes,
 		}).range(from, to),
 	);
 }
@@ -598,30 +553,8 @@ const criticMarkupTheme = EditorView.baseTheme({
 		backgroundColor: "rgba(227, 179, 65, 0.32)",
 		borderRadius: "2px",
 	},
-	".cm-critic-comment-widget": {
-		display: "inline-flex",
-		alignItems: "center",
-		justifyContent: "center",
-		width: "18px",
-		height: "18px",
-		padding: "0",
-		margin: "0 2px",
-		borderRadius: "50%",
-		backgroundColor: "var(--background-modifier-hover)",
-		color: "var(--text-muted)",
-		border: "1px solid var(--background-modifier-border)",
-		verticalAlign: "text-bottom",
-	},
-	".cm-critic-comment-widget svg": {
-		width: "12px",
-		height: "12px",
-	},
 	".cm-critic-comment-raw": {
 		color: "var(--text-accent)",
-	},
-	".cm-critic-substitution-arrow": {
-		color: "var(--text-muted)",
-		padding: "0 3px",
 	},
 	".cm-critic-invalid": {
 		textDecoration: "underline wavy var(--text-error)",

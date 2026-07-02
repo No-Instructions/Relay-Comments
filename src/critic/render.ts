@@ -16,7 +16,7 @@ export function renderDisplaySegments(
 			segments.push({ kind: "text", text: text.slice(cursor, mark.from) });
 		}
 		if (mark.valid && anchoredCommentIds.has(mark.id)) {
-			segments.push(...renderMarkSegments(mark, "clean"));
+			// Anchored comment bodies belong in the review sidebar, not inline text.
 		} else if (mark.valid) {
 			segments.push(...renderMarkSegments(mark, mode));
 		} else {
@@ -41,8 +41,9 @@ export function renderMarkSegments(
 			case "addition":
 				return [{ kind: "text", text: mark.content }];
 			case "deletion":
-			case "comment":
 				return [];
+			case "comment":
+				return [{ kind: "text", text: mark.content }];
 			case "substitution":
 				return [{ kind: "text", text: mark.newText ?? "" }];
 			case "highlight":
@@ -58,11 +59,10 @@ export function renderMarkSegments(
 		case "substitution":
 			return [
 				{ kind: "deletion", text: mark.oldText ?? "" },
-				{ kind: "text", text: " -> " },
 				{ kind: "addition", text: mark.newText ?? "" },
 			];
 		case "comment":
-			return [{ kind: "comment", text: "", title: mark.content }];
+			return [{ kind: "text", text: mark.content }];
 		case "highlight":
 			return [{ kind: "highlight", text: mark.content }];
 	}
@@ -72,15 +72,25 @@ function findAnchoredCommentIds(marks: CriticMark[]): Set<string> {
 	const ids = new Set<string>();
 	for (let index = 0; index < marks.length; index += 1) {
 		const mark = marks[index];
-		if (!mark.valid || mark.type !== "highlight") continue;
-		const comment = marks.find(
-			(candidate, candidateIndex) =>
-				candidateIndex > index &&
-				candidate.valid &&
-				candidate.type === "comment" &&
-				candidate.from === mark.to,
-		);
-		if (comment) ids.add(comment.id);
+		if (!mark.valid || ids.has(mark.id)) continue;
+
+		let nextFrom = mark.to;
+		for (
+			let candidateIndex = index + 1;
+			candidateIndex < marks.length;
+			candidateIndex += 1
+		) {
+			const candidate = marks[candidateIndex];
+			if (
+				!candidate.valid ||
+				candidate.type !== "comment" ||
+				candidate.from !== nextFrom
+			) {
+				break;
+			}
+			ids.add(candidate.id);
+			nextFrom = candidate.to;
+		}
 	}
 	return ids;
 }
@@ -115,6 +125,6 @@ export function getMarkSummary(mark: CriticMark): string {
 		case "highlight":
 			return mark.content;
 		case "substitution":
-			return `${mark.oldText ?? ""} -> ${mark.newText ?? ""}`;
+			return `${mark.oldText ?? ""}${mark.newText ?? ""}`;
 	}
 }
