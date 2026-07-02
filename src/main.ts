@@ -168,6 +168,7 @@ export default class CriticMarkupPlugin
 	private renderVersion = 0;
 	private commentDraft: CommentDraft | null = null;
 	private lastMarkdownPath: string | null = null;
+	private reviewSidebarOpenPromise: Promise<void> | null = null;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -191,7 +192,6 @@ export default class CriticMarkupPlugin
 		this.queueEditorExtensionRefresh(250);
 
 		this.app.workspace.onLayoutReady(() => {
-			void this.ensureReviewSidebarTab();
 			this.queueEditorExtensionRefresh(0);
 			this.queueEditorExtensionRefresh(250);
 			this.refreshReviewSidebars();
@@ -199,6 +199,7 @@ export default class CriticMarkupPlugin
 	}
 
 	onunload(): void {
+		this.reviewSidebarOpenPromise = null;
 		this.app.workspace.detachLeavesOfType(VIEW_TYPE_CRITIC_REVIEW);
 		this.app.workspace.updateOptions();
 	}
@@ -672,6 +673,17 @@ export default class CriticMarkupPlugin
 			return;
 		}
 
+		if (this.reviewSidebarOpenPromise) {
+			return this.reviewSidebarOpenPromise;
+		}
+
+		this.reviewSidebarOpenPromise = this.openReviewSidebarOnce().finally(() => {
+			this.reviewSidebarOpenPromise = null;
+		});
+		return this.reviewSidebarOpenPromise;
+	}
+
+	private async openReviewSidebarOnce(): Promise<void> {
 		const existing = this.app.workspace.getLeavesOfType(
 			VIEW_TYPE_CRITIC_REVIEW,
 		)[0];
@@ -808,16 +820,6 @@ export default class CriticMarkupPlugin
 					this.startCommentDraftFromEditor(editor, info);
 				});
 		});
-	}
-
-	private async ensureReviewSidebarTab(): Promise<void> {
-		if (!this.settings.enableReviewSidebar) return;
-		if (this.app.workspace.getLeavesOfType(VIEW_TYPE_CRITIC_REVIEW).length > 0) {
-			return;
-		}
-		const leaf = this.app.workspace.getRightLeaf(false);
-		if (!leaf) return;
-		await leaf.setViewState({ type: VIEW_TYPE_CRITIC_REVIEW, active: false });
 	}
 
 	private captureActiveMarkdownPath(): void {
