@@ -262,6 +262,10 @@ export class ReviewSidebarView extends ItemView {
 		selected: boolean,
 		filePath: string,
 	): void {
+		card.createDiv({
+			cls: "critic-thread-summary",
+			text: formatThreadSummary(item),
+		});
 		if (selected) {
 			const toolbar = card.createDiv({ cls: "critic-thread-toolbar" });
 			this.addCardActions(toolbar, item);
@@ -828,6 +832,24 @@ function formatCounts(items: ReviewItem[]): string {
 function getItemLabel(item: ReviewItem): string {
 	if (item.kind === "anchored-comment") return getMarkTitle(item.anchor);
 	return getMarkTitle(item.mark);
+}
+
+function formatThreadSummary(
+	item: Extract<ReviewItem, { kind: "anchored-comment" }>,
+): string {
+	const text = normalizeSummary(getMarkSummary(item.anchor));
+	const summary = text.length > 0 ? text : getMarkTitle(item.anchor);
+	return endWithEllipsis(summary);
+}
+
+function normalizeSummary(text: string): string {
+	return text.replace(/\s+/g, " ").trim();
+}
+
+function endWithEllipsis(text: string): string {
+	const trimmed = text.trim();
+	const clipped = trimmed.length > 96 ? trimmed.slice(0, 96).trimEnd() : trimmed;
+	return clipped.endsWith("...") ? clipped : `${clipped}...`;
 }
 
 function initials(name: string): string {

@@ -78,7 +78,23 @@ interface RelayUserLike {
 	name?: string;
 	email?: string;
 	picture?: string;
-	color?: { color?: string; light?: string };
+	color?: string | { color?: string; light?: string };
+	colorLight?: string;
+}
+
+interface RelayPublicApiLike {
+	version?: number;
+	identity?: {
+		getCurrentUser(path?: string): RelayUserLike | null;
+		resolveUser?(userId: string, path?: string): RelayUserLike | null;
+	};
+	attribution?: {
+		getDominantAuthorForRange(
+			path: string,
+			from: number,
+			to: number,
+		): RelayUserLike | null;
+	};
 }
 
 interface RelayUserCollectionLike {
@@ -133,6 +149,7 @@ interface RelaySharedFoldersLike {
 }
 
 interface RelayPluginLike {
+	api?: RelayPublicApiLike;
 	loginManager?: {
 		user?: RelayUserLike;
 	};
@@ -416,6 +433,11 @@ export default class CriticMarkupPlugin
 
 	private getCurrentRelayIdentity(): ReviewerIdentity | null {
 		const relay = this.getRelayPlugin();
+		const filePath = this.app.workspace.getActiveFile()?.path;
+		const apiIdentity = relay?.api?.identity?.getCurrentUser(filePath);
+		const publicIdentity = userToIdentity(apiIdentity ?? undefined, "relay");
+		if (publicIdentity) return publicIdentity;
+
 		const user =
 			relay?.loginManager?.user ??
 			relay?.relayManager?.user ??
@@ -430,6 +452,14 @@ export default class CriticMarkupPlugin
 	): ReviewerIdentity | null {
 		if (!filePath) return null;
 		const relay = this.getRelayPlugin();
+		const apiIdentity = relay?.api?.attribution?.getDominantAuthorForRange(
+			filePath,
+			fromOffset,
+			toOffset,
+		);
+		const publicIdentity = userToIdentity(apiIdentity ?? undefined, "relay");
+		if (publicIdentity) return publicIdentity;
+
 		const folder = relay?.sharedFolders?.lookup(filePath);
 		const ydoc = folder?.proxy?.getDoc(filePath)?.localDoc;
 		if (!relay || !folder || !ydoc) return null;
@@ -876,11 +906,16 @@ function userToIdentity(
 ): ReviewerIdentity | null {
 	const name = user?.name?.trim();
 	if (!user || !name) return null;
+	const color =
+		typeof user.color === "string" ? user.color : user.color?.color;
+	const colorLight =
+		user.colorLight ??
+		(typeof user.color === "string" ? undefined : user.color?.light);
 	return {
 		name,
 		picture: user.picture,
-		color: user.color?.color,
-		colorLight: user.color?.light,
+		color,
+		colorLight,
 		source,
 	};
 }

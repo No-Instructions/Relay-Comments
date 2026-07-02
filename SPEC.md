@@ -7,7 +7,7 @@ Draft for discussion. This project is an Obsidian community plugin that adds Cri
 ## Goals
 
 1. Add first-class CriticMarkup support to Obsidian's CodeMirror 6 editor.
-2. Keep the Markdown file as the source of truth. Suggestions, deletions, comments, and highlights are stored as plain CriticMarkup text.
+2. Keep the Markdown file as the standalone source of truth when Relay is absent. Suggestions, deletions, comments, and highlights are stored as plain CriticMarkup text in non-Relay mode.
 3. Hide raw CriticMarkup delimiters in Obsidian Live Preview and Reading mode. Raw CriticMarkup is visible only in Obsidian Source mode.
 4. Provide review commands for creating, accepting, rejecting, and navigating CriticMarkup marks.
 5. Integrate with Relay through a small, stable TypeScript API so this plugin can show who created comments and suggestions without depending on Relay internals.
@@ -16,7 +16,7 @@ Draft for discussion. This project is an Obsidian community plugin that adds Cri
 ## Non-Goals
 
 1. Do not replace Relay's merge or conflict-resolution model.
-2. Do not store comments in a separate database as the primary source of truth.
+2. Do not store comments in a separate non-Relay database as the primary source of truth.
 3. Do not require Relay for local CriticMarkup editing.
 4. Do not implement a full Markdown parser in this plugin unless Obsidian's rendering hooks prove insufficient.
 5. Do not invent a CriticMarkup dialect for the MVP. Author identity is Relay-derived; any later optional metadata format must remain backwards-compatible plain text.
@@ -248,7 +248,7 @@ For unsupported marks, the renderer should avoid destructive DOM mutations and l
 
 Relay is optional. The CriticMarkup plugin should discover Relay at runtime through Obsidian's plugin registry, not by importing Relay source.
 
-Current Relay code uses plugin id `system3-relay` and already exposes internal objects such as `_liveViews`, `sharedFolders`, and `metadataBridge`. This spec proposes adding a public API object to Relay instead of consuming those private fields.
+Relay uses plugin id `system3-relay`. Consumers should use `plugin.api` instead of internal objects such as `_liveViews`, `sharedFolders`, `metadataBridge`, or raw Yjs documents.
 
 ### Relay as Identity Provider
 
@@ -269,7 +269,7 @@ Relay already has the pieces this API needs:
 
 ### Proposed Relay Public API
 
-Relay should expose a stable object on its plugin instance:
+Relay exposes a stable object on its plugin instance:
 
 ```ts
 export interface RelayPublicApiV1 {
@@ -284,15 +284,15 @@ export interface RelayUserSummary {
   id: string;
   name: string;
   picture?: string;
-  color: string;
-  colorLight: string;
+  color?: string;
+  colorLight?: string;
+  isCurrentUser: boolean;
 }
 
 export interface RelayIdentityApi {
   getCurrentUser(path?: string): RelayUserSummary | null;
-  resolveUser(userId: string): RelayUserSummary | null;
+  resolveUser(userId: string, path?: string): RelayUserSummary | null;
   listUsersForPath(path: string): RelayUserSummary[];
-  subscribe(callback: () => void): () => void;
 }
 
 export interface RelayDocumentsApi {
@@ -301,32 +301,29 @@ export interface RelayDocumentsApi {
 
 export interface RelayDocumentContext {
   path: string;
-  guid: string;
+  virtualPath: string;
   sharedFolderPath: string;
-  relayId: string | null;
   sharedFolderGuid: string;
-  connected: boolean;
-  localOnly: boolean;
+  relayId: string | null;
+  remoteSharedFolderId: string | null;
+  documentGuid: string | null;
+  isLoaded: boolean;
+  isWritable: boolean;
 }
 
 export interface RelayAttributionApi {
-  getTextAttribution(
-    path: string,
-    ranges: Array<{ from: number; to: number }>,
-  ): RelayAttributionRange[];
-  subscribe(path: string, callback: () => void): () => void;
+  getAuthorsForRange(path: string, from: number, to: number): RelayAttributionRange[];
+  getDominantAuthorForRange(path: string, from: number, to: number): RelayUserSummary | null;
 }
 
 export interface RelayAttributionRange {
   from: number;
   to: number;
-  userId: string | null;
-  confidence: "exact" | "majority" | "unknown";
+  user: RelayUserSummary;
 }
 
 export interface RelayAwarenessApi {
   getOnlineUsers(path: string): RelayUserSummary[];
-  subscribe(path: string, callback: () => void): () => void;
 }
 ```
 
@@ -376,6 +373,50 @@ Resolution order for a sidebar card:
 3. If Relay is missing, the file is outside Relay, or attribution is unknown, render a neutral local reviewer identity.
 
 On comment or suggestion creation, CriticMarkup should ask `getCurrentAuthor(path)` so the draft card can show the current Relay identity immediately. The source edit remains a normal editor transaction so Relay synchronization continues to work.
+
+### Optional Relay CRDT Review Store
+
+Relay-backed review storage is an optional capability for shared files. It is disabled when Relay is missing, logged out, or the current file is outside a shared folder. Standalone mode continues to use plain CriticMarkup in Markdown.
+
+The preferred model is a sidecar CRDT structure inside the same Relay document, not hidden CriticMarkup text inside the editor buffer:
+
+```ts
+interface RelayReviewThread {
+  id: string;
+  kind: "comment" | "highlight" | "addition" | "deletion" | "substitution";
+  anchor: {
+    start: unknown; // Y.RelativePosition JSON
+    end: unknown;   // Y.RelativePosition JSON
+  };
+  status: "open" | "resolved";
+  createdBy: string;
+  createdAt: string;
+  messages: RelayReviewMessage[];
+  suggestion?: {
+    before?: string;
+    after?: string;
+  };
+}
+
+interface RelayReviewMessage {
+  id: string;
+  authorId: string;
+  body: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+```
+
+Relay should own all mutation methods for this store. CriticMarkup should not receive or mutate the raw `Y.Doc`. A future API should expose operations such as `createThread`, `reply`, `editMessage`, `resolveThread`, and `observeThreads`.
+
+Do not use Y.Text formatting attributes as the primary comment model. They are useful for inline marks, but comments need message chains, status, authors, timestamps, and suggestion metadata. A sidecar `Y.Map`/`Y.Array` anchored with `Y.RelativePosition` keeps document text clean while still moving anchors with collaborative text edits.
+
+Open policy questions for the CRDT store:
+
+1. What happens when the entire anchor text is deleted: collapse to an orphaned thread, auto-resolve, or keep a tombstone?
+2. How should Relay export/import sidecar review data for users who need portable plain Markdown?
+3. Should accepting a suggestion apply a normal editor text transaction and then resolve the sidecar thread, or should Relay expose one atomic command?
+4. How should review operations participate in Relay undo and conflict diagnostics?
 
 ### Persisting Author Identity
 
@@ -457,7 +498,6 @@ Manual Obsidian checks:
 ## Open Questions
 
 1. Should accept/reject all operate on the whole file immediately, or require confirmation when more than one mark is present?
-2. Should Relay expose this API as `plugin.api`, `plugin.relayApi`, or another namespaced property?
 
 ## Phase Plan
 
@@ -473,8 +513,8 @@ Manual Obsidian checks:
 
 1. Add `RelayPublicApiV1` to Relay.
 2. Move attribution range logic behind the API.
-3. Add mocked Relay API integration in this plugin.
-4. Add author chips and review sidebar filters.
+3. Integrate this plugin with `plugin.api`.
+4. Add mocked Relay API tests.
 
 ### Phase 3 - Robust Review UX
 
@@ -482,3 +522,10 @@ Manual Obsidian checks:
 2. Improve reading-mode rendering for marks crossing Markdown-rendered element boundaries.
 3. Add navigation and batch actions.
 4. Add edge-case tests for large files and concurrent edits.
+
+### Phase 4 - Optional Relay CRDT Review Store
+
+1. Add a Relay-owned sidecar review store anchored with Yjs relative positions.
+2. Expose mutation and observation methods through `plugin.api`.
+3. Add import/export between sidecar review data and plain CriticMarkup text.
+4. Keep standalone/non-Relay notes on the Markdown-backed implementation.

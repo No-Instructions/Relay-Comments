@@ -222,10 +222,12 @@
 }
 
 .critic-thread-toolbar {
+	position: absolute;
+	top: 8px;
+	right: 8px;
 	display: flex;
 	justify-content: flex-end;
-	min-height: 24px;
-	margin: -6px -6px 6px 0;
+	margin: 0;
 }
 
 .critic-thread-toolbar .critic-card-actions {
@@ -285,6 +287,23 @@
 	line-height: 1.35;
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
+}
+
+.critic-thread-summary {
+	margin: -1px 0 10px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.25;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	opacity: 0.78;
+}
+
+.critic-card-selected .critic-thread-summary {
+	padding-right: 58px;
+	color: var(--text-muted);
+	opacity: 0.9;
 }
 
 .critic-thread-messages {
