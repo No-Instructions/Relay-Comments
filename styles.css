@@ -1,0 +1,267 @@
+.criticmarkup-view-action {
+	color: var(--text-muted);
+}
+
+.cm-critic-addition,
+.critic-preview-addition {
+	background-color: rgba(46, 160, 67, 0.16);
+	border-bottom: 1px solid rgba(46, 160, 67, 0.75);
+	text-decoration: none;
+}
+
+.cm-critic-deletion,
+.critic-preview-deletion {
+	background-color: rgba(218, 54, 51, 0.14);
+	color: var(--text-muted);
+	text-decoration: line-through;
+	text-decoration-thickness: 1.5px;
+}
+
+.cm-critic-highlight,
+.critic-preview-highlight {
+	background-color: rgba(227, 179, 65, 0.32);
+	border-radius: 2px;
+}
+
+.critic-preview-comment {
+	display: inline-block;
+	padding: 0 6px;
+	margin: 0 2px;
+	border-radius: 6px;
+	background: var(--background-modifier-hover);
+	color: var(--text-muted);
+	border: 1px solid var(--background-modifier-border);
+	font-size: 0.85em;
+}
+
+.cm-critic-comment-button {
+	position: absolute;
+	z-index: 20;
+	display: none;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	border-radius: 50%;
+	border: 1px solid var(--interactive-accent);
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.24);
+	cursor: pointer;
+}
+
+.cm-critic-comment-button.is-visible {
+	display: inline-flex;
+}
+
+.cm-critic-comment-button svg {
+	width: 15px;
+	height: 15px;
+}
+
+.critic-sidebar {
+	padding: 12px;
+	color: var(--text-normal);
+}
+
+.critic-sidebar-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	margin-bottom: 4px;
+}
+
+.critic-sidebar-header h3 {
+	margin: 0;
+	font-size: var(--font-ui-medium);
+	line-height: 1.3;
+	overflow-wrap: anywhere;
+}
+
+.critic-sidebar-mode,
+.critic-sidebar button {
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-secondary);
+	color: var(--text-normal);
+	font-size: var(--font-ui-smaller);
+	padding: 3px 8px;
+}
+
+.critic-sidebar-counts {
+	margin-bottom: 12px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.critic-sidebar-list {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.critic-card {
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	background: var(--background-primary);
+	padding: 10px 10px 11px;
+}
+
+.critic-card-selected {
+	border-color: var(--interactive-accent);
+	box-shadow: 0 0 0 1px var(--interactive-accent);
+}
+
+.critic-card-header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 8px;
+	margin-bottom: 8px;
+}
+
+.critic-card-identity {
+	display: flex;
+	align-items: flex-start;
+	min-width: 0;
+	gap: 8px;
+}
+
+.critic-avatar {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: 0 0 auto;
+	width: 24px;
+	height: 24px;
+	border-radius: 50%;
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	font-size: 10px;
+	font-weight: 700;
+	line-height: 1;
+}
+
+.critic-card-meta {
+	min-width: 0;
+}
+
+.critic-card-author {
+	font-size: var(--font-ui-small);
+	font-weight: 600;
+	line-height: 1.2;
+	overflow-wrap: anywhere;
+}
+
+.critic-card-location {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.3;
+}
+
+.critic-card-icon-actions {
+	display: flex;
+	flex: 0 0 auto;
+	gap: 2px;
+}
+
+.critic-icon-button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 26px;
+	height: 26px;
+	padding: 0;
+	border-color: transparent;
+	border-radius: 50%;
+	background: transparent;
+	color: var(--text-muted);
+}
+
+.critic-icon-button:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.critic-icon-button svg {
+	width: 15px;
+	height: 15px;
+}
+
+.critic-card-new {
+	color: var(--color-green);
+}
+
+.critic-card-old {
+	color: var(--color-red);
+}
+
+.critic-card-body {
+	font-size: var(--font-ui-small);
+	line-height: 1.4;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	margin: 0;
+}
+
+.critic-card-quote {
+	margin: 0 0 8px 32px;
+	padding-left: 8px;
+	border-left: 3px solid var(--background-modifier-border);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.35;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.critic-card-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+.critic-card-actions button {
+	padding: 2px 7px;
+}
+
+.critic-draft-card {
+	border-color: var(--interactive-accent);
+	background: var(--background-secondary);
+	margin-bottom: 10px;
+}
+
+.critic-draft-textarea {
+	width: 100%;
+	min-height: 96px;
+	resize: vertical;
+	margin-bottom: 8px;
+}
+
+.critic-draft-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 6px;
+}
+
+.critic-sidebar-empty {
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	line-height: 1.4;
+	padding: 10px 0;
+}
+
+.critic-prompt-modal textarea {
+	width: 100%;
+	min-height: 96px;
+	resize: vertical;
+}
+
+.critic-prompt-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 12px;
+}

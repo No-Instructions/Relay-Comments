@@ -1,0 +1,28 @@
+{
+	"name": "obsidian-criticmarkup",
+	"version": "0.1.0",
+	"description": "CriticMarkup support for Obsidian, with optional Relay-aware review UI.",
+	"main": "main.js",
+	"scripts": {
+		"dev": "node esbuild.config.mjs watch",
+		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+		"check": "tsc -noEmit -skipLibCheck"
+	},
+	"keywords": [
+		"obsidian",
+		"criticmarkup",
+		"codemirror"
+	],
+	"author": "System 3",
+	"license": "MIT",
+	"devDependencies": {
+		"@codemirror/state": "^6.4.1",
+		"@codemirror/view": "^6.26.3",
+		"@types/node": "^16.11.6",
+		"builtin-modules": "^3.3.0",
+		"esbuild": "^0.27.0",
+		"obsidian": "^1.7.2",
+		"tslib": "^2.6.2",
+		"typescript": "^5.4.5"
+	}
+}
