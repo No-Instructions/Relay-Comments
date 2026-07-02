@@ -38,6 +38,7 @@ export class ReviewSidebarView extends ItemView {
 	private selectedItemId: string | null = null;
 	private replyDraftItemId: string | null = null;
 	private pendingAlignmentRange: { from: number; to: number } | null = null;
+	private cardAlignmentMargins = new Map<string, number>();
 
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -156,6 +157,10 @@ export class ReviewSidebarView extends ItemView {
 				"data-critic-item-id": item.id,
 			},
 		});
+		const alignmentMargin = this.cardAlignmentMargins.get(item.id) ?? 0;
+		if (alignmentMargin > 0) {
+			card.style.marginTop = `${alignmentMargin}px`;
+		}
 		card.addEventListener("click", (event) => {
 			if ((event.target as HTMLElement).closest("button, textarea, input, a")) {
 				return;
@@ -291,6 +296,7 @@ export class ReviewSidebarView extends ItemView {
 			focusEditor: false,
 			select: false,
 		});
+		this.updateStoredAlignment(item.id, range);
 		this.render();
 	}
 
@@ -299,18 +305,37 @@ export class ReviewSidebarView extends ItemView {
 		if (!selectedItemId) return;
 		window.requestAnimationFrame(() => {
 			if (this.selectedItemId !== selectedItemId) return;
-			const card = Array.from(
-				this.contentEl.querySelectorAll<HTMLElement>(".critic-card"),
-			).find((candidate) => candidate.dataset.criticItemId === selectedItemId);
-			const anchorRect = this.plugin.getReviewRangeClientRect(range.from, range.to);
-			if (!card || !anchorRect) return;
-
-			card.style.marginTop = "0";
-			const cardRect = card.getBoundingClientRect();
-			const targetTop = Math.max(anchorRect.top, this.contentEl.getBoundingClientRect().top);
-			const marginTop = Math.max(0, Math.round(targetTop - cardRect.top));
-			card.style.marginTop = marginTop > 0 ? `${marginTop}px` : "";
+			this.updateStoredAlignment(selectedItemId, range);
+			const card = this.findCard(selectedItemId);
+			const marginTop = this.cardAlignmentMargins.get(selectedItemId) ?? 0;
+			if (card) {
+				card.style.marginTop = marginTop > 0 ? `${marginTop}px` : "";
+			}
 		});
+	}
+
+	private updateStoredAlignment(
+		itemId: string,
+		range: { from: number; to: number },
+	): void {
+		const card = this.findCard(itemId);
+		const anchorRect = this.plugin.getReviewRangeClientRect(range.from, range.to);
+		if (!card || !anchorRect) return;
+
+		const currentMargin = parseFloat(card.style.marginTop || "0") || 0;
+		const cardRect = card.getBoundingClientRect();
+		const baseTop = cardRect.top - currentMargin;
+		const targetTop = Math.max(anchorRect.top, this.contentEl.getBoundingClientRect().top);
+		const marginTop = Math.max(0, Math.round(targetTop - baseTop));
+		this.cardAlignmentMargins.set(itemId, marginTop);
+	}
+
+	private findCard(itemId: string): HTMLElement | null {
+		return (
+			Array.from(this.contentEl.querySelectorAll<HTMLElement>(".critic-card")).find(
+				(candidate) => candidate.dataset.criticItemId === itemId,
+			) ?? null
+		);
 	}
 
 	private renderReplyComposer(

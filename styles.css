@@ -127,8 +127,7 @@
 	cursor: pointer;
 	transition:
 		border-color 120ms ease,
-		background-color 120ms ease,
-		margin-top 140ms ease;
+		background-color 120ms ease;
 }
 
 .critic-card:hover {
