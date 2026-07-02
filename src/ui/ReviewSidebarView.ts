@@ -35,7 +35,9 @@ type ReviewItem =
 	  };
 
 export class ReviewSidebarView extends ItemView {
+	private selectedItemId: string | null = null;
 	private replyDraftItemId: string | null = null;
+	private pendingAlignmentRange: { from: number; to: number } | null = null;
 
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -106,6 +108,9 @@ export class ReviewSidebarView extends ItemView {
 		for (const item of items) {
 			this.renderItem(list, item, isSelected(item, state.activeMarkId));
 		}
+		if (this.pendingAlignmentRange) {
+			this.alignSelectedCard(this.pendingAlignmentRange);
+		}
 	}
 
 	private renderDraft(parent: HTMLElement, selectedText: string): void {
@@ -139,9 +144,17 @@ export class ReviewSidebarView extends ItemView {
 		item: ReviewItem,
 		selected: boolean,
 	): void {
+		const isThreadSelected =
+			selected || this.selectedItemId === item.id || this.replyDraftItemId === item.id;
 		const card = parent.createDiv({
-			cls: selected ? "critic-card critic-card-selected" : "critic-card",
-			attr: { tabindex: "0", role: "button" },
+			cls: isThreadSelected
+				? "critic-card critic-card-selected"
+				: "critic-card",
+			attr: {
+				tabindex: "0",
+				role: "button",
+				"data-critic-item-id": item.id,
+			},
 		});
 		card.addEventListener("click", (event) => {
 			if ((event.target as HTMLElement).closest("button, textarea, input, a")) {
@@ -177,13 +190,13 @@ export class ReviewSidebarView extends ItemView {
 		if (item.kind === "anchored-comment") {
 			card.createDiv({ cls: "critic-card-quote", text: item.anchor.content });
 			card.createDiv({ cls: "critic-card-body", text: item.comment.content });
-			this.renderReplyComposer(card, item, item.comment);
+			this.renderReplyComposer(card, item, item.comment, isThreadSelected);
 			return;
 		}
 
 		this.renderMarkBody(card, item.mark);
 		if (item.mark.type === "comment") {
-			this.renderReplyComposer(card, item, item.mark);
+			this.renderReplyComposer(card, item, item.mark, isThreadSelected);
 		}
 	}
 
@@ -262,6 +275,7 @@ export class ReviewSidebarView extends ItemView {
 		callback: () => void,
 	): void {
 		const button = parent.createEl("button", { text: label });
+		button.addClass("critic-text-button");
 		button.addEventListener("click", (event) => {
 			event.stopPropagation();
 			callback();
@@ -269,44 +283,71 @@ export class ReviewSidebarView extends ItemView {
 	}
 
 	private locateItem(item: ReviewItem): void {
-		this.plugin.locateReviewRange(item.from, item.to);
+		this.selectedItemId = item.id;
+		this.replyDraftItemId = isCommentItem(item) ? item.id : null;
+		const range = getItemTargetRange(item);
+		this.pendingAlignmentRange = range;
+		this.plugin.locateReviewRange(range.from, range.to, {
+			focusEditor: false,
+			select: false,
+		});
+		this.render();
+	}
+
+	private alignSelectedCard(range: { from: number; to: number }): void {
+		const selectedItemId = this.selectedItemId;
+		if (!selectedItemId) return;
+		window.requestAnimationFrame(() => {
+			if (this.selectedItemId !== selectedItemId) return;
+			const card = Array.from(
+				this.contentEl.querySelectorAll<HTMLElement>(".critic-card"),
+			).find((candidate) => candidate.dataset.criticItemId === selectedItemId);
+			const anchorRect = this.plugin.getReviewRangeClientRect(range.from, range.to);
+			if (!card || !anchorRect) return;
+
+			card.style.marginTop = "0";
+			const cardRect = card.getBoundingClientRect();
+			const targetTop = Math.max(anchorRect.top, this.contentEl.getBoundingClientRect().top);
+			const marginTop = Math.max(0, Math.round(targetTop - cardRect.top));
+			card.style.marginTop = marginTop > 0 ? `${marginTop}px` : "";
+		});
 	}
 
 	private renderReplyComposer(
 		card: HTMLElement,
 		item: ReviewItem,
 		mark: CriticMark,
+		selected: boolean,
 	): void {
-		if (this.replyDraftItemId !== item.id) {
-			const button = card.createEl("button", {
-				cls: "critic-reply-prompt",
-				text: "Reply...",
-			});
-			button.addEventListener("click", (event) => {
-				event.stopPropagation();
-				this.replyDraftItemId = item.id;
-				this.render();
-			});
+		if (!selected) {
 			return;
 		}
 
-		const composer = card.createDiv({ cls: "critic-reply-composer" });
+		const composer = card.createDiv({ cls: "critic-thread-composer" });
 		const textarea = composer.createEl("textarea", {
-			cls: "critic-reply-textarea",
-			attr: { placeholder: "Reply..." },
+			cls: "critic-thread-textarea",
+			attr: { placeholder: "Reply to this thread..." },
 		});
-		const actions = composer.createDiv({ cls: "critic-draft-actions" });
+		textarea.addEventListener("click", (event) => event.stopPropagation());
+		textarea.addEventListener("keydown", (event) => {
+			if (!(event.metaKey || event.ctrlKey) || event.key !== "Enter") return;
+			event.preventDefault();
+			this.commitThreadReply(mark, textarea);
+		});
+		const actions = composer.createDiv({ cls: "critic-composer-actions" });
 		this.addTextButton(actions, "Cancel", () => {
 			this.replyDraftItemId = null;
 			this.render();
 		});
-		this.addTextButton(actions, "Reply", () => {
-			const value = textarea.value.trim();
-			if (value.length === 0) return;
-			void this.plugin.insertReplyToMark(mark, value);
-			this.replyDraftItemId = null;
-		});
+		this.addTextButton(actions, "Reply", () => this.commitThreadReply(mark, textarea));
 		setTimeout(() => textarea.focus(), 0);
+	}
+
+	private commitThreadReply(mark: CriticMark, textarea: HTMLTextAreaElement): void {
+		const value = textarea.value.trim();
+		if (value.length === 0) return;
+		void this.plugin.insertReplyToMark(mark, value);
+		this.replyDraftItemId = null;
 	}
 
 	private resolveItem(
@@ -339,6 +380,13 @@ function isCommentItem(item: ReviewItem): boolean {
 		item.kind === "anchored-comment" ||
 		(item.kind === "mark" && item.mark.type === "comment")
 	);
+}
+
+function getItemTargetRange(item: ReviewItem): { from: number; to: number } {
+	if (item.kind === "anchored-comment") {
+		return { from: item.anchor.from, to: item.anchor.to };
+	}
+	return { from: item.mark.from, to: item.mark.to };
 }
 
 function buildReviewItems(marks: CriticMark[]): ReviewItem[] {

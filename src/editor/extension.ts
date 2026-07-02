@@ -1,5 +1,5 @@
 import { editorInfoField, editorLivePreviewField, setIcon } from "obsidian";
-import type { Extension, Range } from "@codemirror/state";
+import { Prec, type Extension, type Range } from "@codemirror/state";
 import {
 	Decoration,
 	EditorView,
@@ -135,6 +135,37 @@ class MarkPreviewWidget extends WidgetType {
 	}
 }
 
+class AnchoredCommentPreviewWidget extends WidgetType {
+	constructor(
+		private anchor: CriticMark,
+		private comment: CriticMark,
+		private mode: DisplayMode,
+	) {
+		super();
+	}
+
+	toDOM(view: EditorView): HTMLElement {
+		const span = view.dom.ownerDocument.createElement("span");
+		span.className = "cm-critic-anchored-comment";
+		const anchorText = span.createEl("span", { text: this.anchor.content });
+		if (this.mode === "review") {
+			anchorText.addClass("cm-critic-highlight");
+			anchorText.title = this.comment.content;
+		}
+		return span;
+	}
+
+	eq(other: AnchoredCommentPreviewWidget): boolean {
+		return (
+			this.anchor.id === other.anchor.id &&
+			this.anchor.raw === other.anchor.raw &&
+			this.comment.id === other.comment.id &&
+			this.comment.raw === other.comment.raw &&
+			this.mode === other.mode
+		);
+	}
+}
+
 export function createCriticMarkupExtension(
 	controller: CriticMarkupEditorController,
 ): Extension {
@@ -144,6 +175,8 @@ export function createCriticMarkupExtension(
 			atomicRanges: DecorationSet = Decoration.none;
 			private renderVersion = -1;
 			private commentButton: HTMLButtonElement;
+			private sourceViewEl: HTMLElement | null = null;
+			private sourceViewObserver: MutationObserver | null = null;
 			private path: string | null = null;
 			private mode: DisplayMode = "review";
 			private livePreview = false;
@@ -152,6 +185,14 @@ export function createCriticMarkupExtension(
 				this.commentButton = this.createCommentButton();
 				this.view.dom.appendChild(this.commentButton);
 				this.rebuild();
+				this.observeSourceView();
+				this.view.requestMeasure({
+					read: () => null,
+					write: () => {
+						this.observeSourceView();
+						this.rebuildIfLivePreviewChanged();
+					},
+				});
 			}
 
 			update(update: ViewUpdate): void {
@@ -168,14 +209,45 @@ export function createCriticMarkupExtension(
 					nextMode !== this.mode ||
 					nextLivePreview !== this.livePreview
 				) {
+					this.observeSourceView();
 					this.rebuild();
 				} else {
+					this.observeSourceView();
 					this.updateCommentButton();
 				}
 			}
 
 			destroy(): void {
+				this.sourceViewObserver?.disconnect();
+				this.sourceViewObserver = null;
 				this.commentButton.remove();
+			}
+
+			private observeSourceView(): void {
+				const sourceView = this.view.dom.closest(
+					".markdown-source-view",
+				) as HTMLElement | null;
+				if (sourceView === this.sourceViewEl) return;
+
+				this.sourceViewObserver?.disconnect();
+				this.sourceViewEl = sourceView;
+				if (!sourceView) return;
+
+				this.sourceViewObserver = new MutationObserver(() => {
+					this.rebuildIfLivePreviewChanged();
+				});
+				this.sourceViewObserver.observe(sourceView, {
+					attributes: true,
+					attributeFilter: ["class"],
+				});
+			}
+
+			private rebuildIfLivePreviewChanged(): void {
+				const livePreview = readLivePreview(this.view);
+				if (livePreview !== this.livePreview) {
+					this.rebuild();
+					this.view.dispatch({});
+				}
 			}
 
 			private createCommentButton(): HTMLButtonElement {
@@ -216,7 +288,7 @@ export function createCriticMarkupExtension(
 				const ranges: Array<Range<Decoration>> = [];
 				const atomRanges: Array<Range<Decoration>> = [];
 				const marks = parseCriticMarkup(text);
-				const anchoredCommentIds = findAnchoredCommentIds(marks);
+				const anchoredComments = findAnchoredComments(marks);
 
 				for (const mark of marks) {
 					if (!mark.valid) {
@@ -239,6 +311,23 @@ export function createCriticMarkupExtension(
 					}
 
 					if (livePreview) {
+						const anchoredComment =
+							mark.type === "highlight"
+								? anchoredComments.byAnchorId.get(mark.id)
+								: undefined;
+						if (anchoredComment) {
+							addReplace(
+								ranges,
+								mark.from,
+								anchoredComment.to,
+								new AnchoredCommentPreviewWidget(mark, anchoredComment, mode),
+							);
+							addAtom(atomRanges, mark.from, anchoredComment.to);
+							continue;
+						}
+						if (anchoredComments.commentIds.has(mark.id)) {
+							continue;
+						}
 						addReplace(
 							ranges,
 							mark.from,
@@ -246,7 +335,7 @@ export function createCriticMarkupExtension(
 							new MarkPreviewWidget(
 								mark,
 								mode,
-								anchoredCommentIds.has(mark.id),
+								anchoredComments.commentIds.has(mark.id),
 							),
 						);
 						addAtom(atomRanges, mark.from, mark.to);
@@ -256,7 +345,7 @@ export function createCriticMarkupExtension(
 					if (mode === "clean") {
 						this.decorateClean(mark, false, ranges);
 					} else {
-						this.decorateReview(mark, false, ranges, anchoredCommentIds);
+						this.decorateReview(mark, false, ranges, anchoredComments.commentIds);
 					}
 				}
 
@@ -404,7 +493,7 @@ export function createCriticMarkupExtension(
 		},
 	);
 
-	return [criticMarkupPlugin, criticMarkupTheme];
+	return [Prec.highest(criticMarkupPlugin), criticMarkupTheme];
 }
 
 function readPath(view: EditorView): string | null {
@@ -413,11 +502,18 @@ function readPath(view: EditorView): string | null {
 }
 
 function readLivePreview(view: EditorView): boolean {
-	return view.state.field(editorLivePreviewField, false) ?? false;
+	return (
+		(view.state.field(editorLivePreviewField, false) ?? false) ||
+		Boolean(view.dom.closest(".markdown-source-view.is-live-preview"))
+	);
 }
 
-function findAnchoredCommentIds(marks: CriticMark[]): Set<string> {
-	const ids = new Set<string>();
+function findAnchoredComments(marks: CriticMark[]): {
+	commentIds: Set<string>;
+	byAnchorId: Map<string, CriticMark>;
+} {
+	const commentIds = new Set<string>();
+	const byAnchorId = new Map<string, CriticMark>();
 	for (let index = 0; index < marks.length; index += 1) {
 		const mark = marks[index];
 		if (!mark.valid || mark.type !== "highlight") continue;
@@ -428,9 +524,12 @@ function findAnchoredCommentIds(marks: CriticMark[]): Set<string> {
 				candidate.type === "comment" &&
 				candidate.from === mark.to,
 		);
-		if (comment) ids.add(comment.id);
+		if (comment) {
+			commentIds.add(comment.id);
+			byAnchorId.set(mark.id, comment);
+		}
 	}
-	return ids;
+	return { commentIds, byAnchorId };
 }
 
 function hideDelimiters(

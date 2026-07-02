@@ -8,6 +8,7 @@ import {
 	type TFile,
 	type WorkspaceLeaf,
 } from "obsidian";
+import { EditorView as CodeMirrorEditorView } from "@codemirror/view";
 import { parseCriticMarkup } from "./critic/parse";
 import type { CriticAction } from "./critic/transform";
 import type { CriticMark, DisplayMode } from "./critic/types";
@@ -67,6 +68,7 @@ export default class CriticMarkupPlugin
 			(leaf: WorkspaceLeaf) => new ReviewSidebarView(leaf, this),
 		);
 		this.registerEditorExtension(createCriticMarkupExtension(this));
+		this.app.workspace.updateOptions();
 		this.registerMarkdownPostProcessor(createCriticMarkupPostProcessor(this));
 		this.addSettingTab(new CriticMarkupSettingTab(this.app, this));
 
@@ -89,6 +91,7 @@ export default class CriticMarkupPlugin
 
 	onunload(): void {
 		this.app.workspace.detachLeavesOfType(VIEW_TYPE_CRITIC_REVIEW);
+		this.app.workspace.updateOptions();
 	}
 
 	getDisplayMode(path?: string | null): DisplayMode {
@@ -193,17 +196,76 @@ export default class CriticMarkupPlugin
 		this.locateReviewRange(mark.from, mark.to);
 	}
 
-	locateReviewRange(fromOffset: number, toOffset: number): void {
+	locateReviewRange(
+		fromOffset: number,
+		toOffset: number,
+		options: { focusEditor?: boolean; select?: boolean } = {},
+	): void {
 		const view = this.getCurrentMarkdownView();
 		const editor = view?.editor;
 		if (!editor) return;
 
 		const from = editor.offsetToPos(fromOffset);
 		const to = editor.offsetToPos(toOffset);
-		editor.setSelection(from, to);
-		editor.scrollIntoView({ from, to }, true);
-		editor.focus();
+		if (options.select !== false) {
+			editor.setSelection(from, to);
+		}
+		this.centerEditorOffset(editor, fromOffset, { from, to });
+		if (options.focusEditor !== false) {
+			editor.focus();
+		}
 		this.refreshReviewSidebars();
+	}
+
+	getReviewRangeClientRect(
+		fromOffset: number,
+		toOffset: number,
+	): { top: number; bottom: number; left: number; right: number } | null {
+		const view = this.getCurrentMarkdownView();
+		const editor = view?.editor;
+		const cm = (editor as unknown as {
+			cm?: {
+				coordsAtPos(pos: number): {
+					top: number;
+					bottom: number;
+					left: number;
+					right: number;
+				} | null;
+			};
+		} | null)?.cm;
+		if (!cm) return null;
+
+		const start = cm.coordsAtPos(fromOffset);
+		const end = cm.coordsAtPos(Math.max(fromOffset, toOffset - 1));
+		if (!start && !end) return null;
+		if (!start) return end;
+		if (!end) return start;
+		return {
+			top: Math.min(start.top, end.top),
+			bottom: Math.max(start.bottom, end.bottom),
+			left: Math.min(start.left, end.left),
+			right: Math.max(start.right, end.right),
+		};
+	}
+
+	private centerEditorOffset(
+		editor: Editor,
+		offset: number,
+		range: { from: ReturnType<Editor["offsetToPos"]>; to: ReturnType<Editor["offsetToPos"]> },
+	): void {
+		const cm = (editor as unknown as {
+			cm?: { dispatch(spec?: { effects?: unknown }): void };
+		}).cm;
+		if (cm?.dispatch) {
+			cm.dispatch({
+				effects: CodeMirrorEditorView.scrollIntoView(offset, {
+					y: "center",
+					yMargin: 80,
+				}),
+			});
+			return;
+		}
+		editor.scrollIntoView(range, true);
 	}
 
 	applyMarkActionFromSidebar(mark: CriticMark, action: CriticAction): void {

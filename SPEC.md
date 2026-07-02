@@ -134,10 +134,11 @@ Sidebar content:
 
 Sidebar/editor synchronization:
 
-1. Selecting a card scrolls the editor to the mark and briefly highlights it.
+1. Selecting a card centers the referenced text in the editor and vertically aligns the selected sidebar card with that anchor when space allows. For highlight-plus-comment threads, the target is the highlighted text, not the raw trailing comment.
 2. Moving the cursor into a mark selects the matching sidebar card when the sidebar is open.
 3. Accepting or rejecting from the sidebar performs the same source transformation as the command palette action.
 4. The sidebar updates from CM6 document changes and reading-mode file changes without requiring a manual refresh.
+5. The selected comment thread shows an inline reply textarea directly in the card. Unselected threads do not show a separate reply button.
 
 Comment creation:
 
