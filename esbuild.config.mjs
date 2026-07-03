@@ -32,7 +32,7 @@ const context = await esbuild.context({
 
 if (watch) {
 	await context.watch();
-	console.log("Watching CriticMarkup plugin sources...");
+	console.log("Watching Relay Comments plugin sources...");
 } else {
 	await context.rebuild();
 	await context.dispose();

@@ -1,8 +1,8 @@
-# CriticMarkup for Relay and Obsidian - Phase 0 Spec
+# Relay Comments - Phase 0 Spec
 
 ## Status
 
-Draft for discussion. This project is an Obsidian community plugin that adds CriticMarkup authoring, rendering, and review UI to Markdown notes. It is designed to work as a standalone CriticMarkup plugin and to gain collaboration-aware features when the Relay plugin is installed.
+Draft for discussion. This project is an Obsidian community plugin named Relay Comments that adds CriticMarkup authoring, rendering, and review UI to Markdown notes. It is designed to work as a standalone comments and suggestions plugin and to gain collaboration-aware features when the Relay plugin is installed.
 
 ## Goals
 
@@ -143,7 +143,7 @@ Sidebar/editor synchronization:
 Comment creation:
 
 1. Selecting text should show an inline comment affordance near the selection.
-2. Right-clicking selected editor text should include "Add CriticMarkup comment".
+2. Right-clicking selected editor text should include "Add comment".
 3. Choosing Add comment opens the review sidebar, creates a draft card, and focuses its textarea.
 4. Saving the draft writes `{==selected text==}{>>comment<<}` into the Markdown via a normal editor transaction.
 5. Canceling the draft leaves the Markdown unchanged.
@@ -246,17 +246,17 @@ For unsupported marks, the renderer should avoid destructive DOM mutations and l
 
 ### Dependency Model
 
-Relay is optional. The CriticMarkup plugin should discover Relay at runtime through Obsidian's plugin registry, not by importing Relay source.
+Relay is optional. Relay Comments should discover Relay at runtime through Obsidian's plugin registry, not by importing Relay source.
 
 Relay uses plugin id `system3-relay`. Consumers should use `plugin.api` instead of internal objects such as `_liveViews`, `sharedFolders`, `metadataBridge`, or raw Yjs documents.
 
 ### Relay as Identity Provider
 
-Relay should be the identity provider for review UI, but CriticMarkup remains the document markup owner. The boundary is:
+Relay should be the identity provider for review UI, but Relay Comments remains the document markup owner. The boundary is:
 
 1. Relay answers identity questions: who am I, who is this user ID, who authored this source range, who is online.
-2. CriticMarkup answers review questions: what marks exist, how are they rendered, what source edits accept/reject/resolve should perform.
-3. CriticMarkup must not read Relay internals such as `_liveViews`, Yjs maps, auth stores, or `RelayManager.users` directly.
+2. Relay Comments answers review questions: what marks exist, how are they rendered, what source edits accept/reject/resolve should perform.
+3. Relay Comments must not read Relay internals such as `_liveViews`, Yjs maps, auth stores, or `RelayManager.users` directly.
 4. Relay must not need to know CriticMarkup syntax to provide identity. It only needs to answer path/range/user queries.
 
 Relay already has the pieces this API needs:
@@ -333,7 +333,7 @@ Relay should announce API availability with a workspace event after load and aft
 app.workspace.trigger("system3-relay:api-ready", relayApi);
 ```
 
-CriticMarkup should also poll the plugin registry on load because plugin load order is not guaranteed:
+Relay Comments should also poll the plugin registry on load because plugin load order is not guaranteed:
 
 ```ts
 const relay = app.plugins.plugins["system3-relay"] as
@@ -341,9 +341,9 @@ const relay = app.plugins.plugins["system3-relay"] as
   | undefined;
 ```
 
-The API must not expose auth tokens. Email should not be included in `RelayUserSummary` for CriticMarkup unless there is a deliberate privacy setting, because comments may be visible in screenshots and exports.
+The API must not expose auth tokens. Email should not be included in `RelayUserSummary` for Relay Comments unless there is a deliberate privacy setting, because comments may be visible in screenshots and exports.
 
-### CriticMarkup Consumer API
+### Relay Comments Consumer API
 
 This plugin should wrap Relay in an adapter so the rest of the code does not know whether Relay is present:
 
@@ -372,7 +372,7 @@ Resolution order for a sidebar card:
 2. Otherwise call `getAuthorForMark`, which asks Relay attribution for mark-specific source ranges.
 3. If Relay is missing, the file is outside Relay, or attribution is unknown, render a neutral local reviewer identity.
 
-On comment or suggestion creation, CriticMarkup should ask `getCurrentAuthor(path)` so the draft card can show the current Relay identity immediately. The source edit remains a normal editor transaction so Relay synchronization continues to work.
+On comment or suggestion creation, Relay Comments should ask `getCurrentAuthor(path)` so the draft card can show the current Relay identity immediately. The source edit remains a normal editor transaction so Relay synchronization continues to work.
 
 ### Optional Relay CRDT Review Store
 
@@ -407,7 +407,7 @@ interface RelayReviewMessage {
 }
 ```
 
-Relay should own all mutation methods for this store. CriticMarkup should not receive or mutate the raw `Y.Doc`. A future API should expose operations such as `createThread`, `reply`, `editMessage`, `resolveThread`, and `observeThreads`.
+Relay should own all mutation methods for this store. Relay Comments should not receive or mutate the raw `Y.Doc`. A future API should expose operations such as `createThread`, `reply`, `editMessage`, `resolveThread`, and `observeThreads`.
 
 Do not use Y.Text formatting attributes as the primary comment model. They are useful for inline marks, but comments need message chains, status, authors, timestamps, and suggestion metadata. A sidecar `Y.Map`/`Y.Array` anchored with `Y.RelativePosition` keeps document text clean while still moving anchors with collaborative text edits.
 

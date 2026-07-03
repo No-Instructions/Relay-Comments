@@ -9,10 +9,10 @@ import {
 import { collectAttachedComments } from "../critic/threading";
 import { replacementForMark, type CriticAction } from "../critic/transform";
 import type { CriticMark, CriticMarkType } from "../critic/types";
-import type CriticMarkupPlugin from "../main";
+import type RelayCommentsPlugin from "../main";
 import type { CommentDraft, ReviewerIdentity } from "../main";
 
-export const VIEW_TYPE_CRITIC_REVIEW = "criticmarkup-review-sidebar";
+export const VIEW_TYPE_CRITIC_REVIEW = "relay-comments-review-sidebar";
 
 type ReviewItem =
 	| {
@@ -39,9 +39,15 @@ type ReviewItem =
 interface CommentHeaderOptions {
 	identity: ReviewerIdentity;
 	mark?: CriticMark;
-	actionItem?: ReviewItem;
 	onEdit?: () => void;
 }
+
+const MARK_TYPE_LABELS: Partial<Record<CriticMarkType, string>> = {
+	addition: "Suggested addition",
+	deletion: "Suggested deletion",
+	substitution: "Suggested replacement",
+	highlight: "Highlight",
+};
 
 interface PendingFocus {
 	kind: "edit" | "draft";
@@ -63,7 +69,7 @@ export class ReviewSidebarView extends ItemView {
 
 	constructor(
 		leaf: WorkspaceLeaf,
-		private plugin: CriticMarkupPlugin,
+		private plugin: RelayCommentsPlugin,
 	) {
 		super(leaf);
 		// Mod+Enter must submit the focused composer even though Obsidian's
@@ -97,7 +103,7 @@ export class ReviewSidebarView extends ItemView {
 	}
 
 	getDisplayText(): string {
-		return "CriticMarkup Review";
+		return "Relay Comments";
 	}
 
 	getIcon(): IconName {
@@ -388,6 +394,7 @@ export class ReviewSidebarView extends ItemView {
 				tabindex: "0",
 				role: "button",
 				"data-critic-item-id": item.id,
+				"data-critic-type": item.type,
 			},
 		});
 		// Select on mousedown: selecting a card changes the layout (reply box
@@ -415,11 +422,13 @@ export class ReviewSidebarView extends ItemView {
 			return isThreadSelected;
 		}
 
-		this.renderCommentHeader(card, {
-			identity: this.plugin.getReviewerIdentityForMark(item.mark, filePath),
-			mark: item.mark,
-			actionItem: item,
-		});
+		const toolbar = card.createDiv({ cls: "critic-thread-toolbar" });
+		this.addCardActions(toolbar, item);
+		this.renderTypeEyebrow(card, item.mark.type);
+		const identity = this.plugin.getReviewerIdentityForMark(item.mark, filePath);
+		if (identity.source !== "fallback") {
+			this.renderCommentHeader(card, { identity, mark: item.mark });
+		}
 		this.renderMarkBody(card, item.mark);
 		this.renderReplyComposer(card, item, item.mark, isThreadSelected);
 		return isThreadSelected;
@@ -440,10 +449,14 @@ export class ReviewSidebarView extends ItemView {
 				text: normalizeWhitespace(item.anchor.content),
 			});
 		} else if (isSuggestion(item.anchor)) {
-			this.renderCommentHeader(card, {
-				identity: this.plugin.getReviewerIdentityForMark(item.anchor, filePath),
-				mark: item.anchor,
-			});
+			this.renderTypeEyebrow(card, item.anchor.type);
+			const identity = this.plugin.getReviewerIdentityForMark(
+				item.anchor,
+				filePath,
+			);
+			if (identity.source !== "fallback") {
+				this.renderCommentHeader(card, { identity, mark: item.anchor });
+			}
 			this.renderMarkBody(card, item.anchor);
 		}
 
@@ -503,11 +516,16 @@ export class ReviewSidebarView extends ItemView {
 		if (date) {
 			byline.createDiv({ cls: "critic-comment-date", text: date });
 		}
-		if (options.actionItem) {
-			this.addCardActions(header, options.actionItem);
-		} else if (options.onEdit) {
+		if (options.onEdit) {
 			this.addCommentActions(header, options.onEdit);
 		}
+	}
+
+	private renderTypeEyebrow(parent: HTMLElement, type: CriticMarkType): void {
+		const label = MARK_TYPE_LABELS[type];
+		if (!label) return;
+		const eyebrow = parent.createDiv({ cls: "critic-card-eyebrow" });
+		eyebrow.createSpan({ cls: "critic-eyebrow-label", text: label });
 	}
 
 	private renderAvatar(parent: HTMLElement, identity: ReviewerIdentity): void {
@@ -541,28 +559,30 @@ export class ReviewSidebarView extends ItemView {
 			return;
 		}
 
-		const body = card.createDiv({ cls: "critic-card-body" });
+		const body = card.createDiv({ cls: "critic-card-body critic-card-diff" });
+		const addChip = (cls: string, text: string): void => {
+			const content = normalizeWhitespace(text);
+			if (content.length === 0) return;
+			body.createSpan({ cls: `critic-chip ${cls}`, text: content });
+		};
 		switch (mark.type) {
 			case "addition":
-				body.createSpan({ cls: "critic-card-verb", text: "Add:" });
-				body.createSpan({ cls: "critic-card-new", text: ` “${mark.content}”` });
+				addChip("critic-chip-new", mark.content);
 				break;
 			case "deletion":
-				body.createSpan({ cls: "critic-card-verb", text: "Delete:" });
-				body.createSpan({ cls: "critic-card-old", text: ` “${mark.content}”` });
+				addChip("critic-chip-old", mark.content);
 				break;
-			case "substitution":
-				body.createSpan({ cls: "critic-card-verb", text: "Replace:" });
-				body.createSpan({
-					cls: "critic-card-old",
-					text: ` “${mark.oldText ?? ""}”`,
-				});
-				body.createSpan({ cls: "critic-card-verb", text: " with:" });
-				body.createSpan({
-					cls: "critic-card-new",
-					text: ` “${mark.newText ?? ""}”`,
-				});
+			case "substitution": {
+				addChip("critic-chip-old", mark.oldText ?? "");
+				if (
+					normalizeWhitespace(mark.oldText ?? "").length > 0 &&
+					normalizeWhitespace(mark.newText ?? "").length > 0
+				) {
+					body.createSpan({ cls: "critic-diff-arrow", text: "→" });
+				}
+				addChip("critic-chip-new", mark.newText ?? "");
 				break;
+			}
 			default:
 				body.setText(mark.content);
 		}

@@ -23,7 +23,7 @@ const DOM_REMNANT_PATTERN = /[{}]|~>|<<|>>|\+\+|--|==|~~/;
 const SOURCE_RENDER_SELECTOR =
 	"p, li, blockquote, h1, h2, h3, h4, h5, h6, td, th";
 
-export function createCriticMarkupPostProcessor(
+export function createReviewPostProcessor(
 	controller: PreviewDisplayController,
 ) {
 	return (el: HTMLElement, ctx: MarkdownPostProcessorContext): void => {

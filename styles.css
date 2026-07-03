@@ -115,10 +115,47 @@
 	border-radius: 10px;
 	background: var(--background-primary);
 	color: var(--text-normal);
-	padding: 12px;
+	padding: 12px 12px 12px 15px;
 	transition:
 		border-color 100ms ease,
 		box-shadow 100ms ease;
+}
+
+/* Type spine: each card carries the same ink as its mark in the document.
+   Substitutions read top-to-bottom as old (red) becoming new (green). */
+.critic-card::before {
+	content: "";
+	position: absolute;
+	left: 0;
+	top: 9px;
+	bottom: 9px;
+	width: 3px;
+	border-radius: 0 2px 2px 0;
+	background: var(--critic-rail, transparent);
+}
+
+.critic-card[data-critic-type="comment"],
+.critic-card[data-critic-type="highlight"],
+.critic-draft-card {
+	--critic-rail: color-mix(in srgb, var(--color-yellow) 70%, transparent);
+}
+
+.critic-card[data-critic-type="addition"] {
+	--critic-rail: color-mix(in srgb, var(--color-green) 65%, transparent);
+}
+
+.critic-card[data-critic-type="deletion"] {
+	--critic-rail: color-mix(in srgb, var(--color-red) 60%, transparent);
+}
+
+.critic-card[data-critic-type="substitution"] {
+	--critic-rail: linear-gradient(
+		180deg,
+		color-mix(in srgb, var(--color-red) 60%, transparent) 0%,
+		color-mix(in srgb, var(--color-red) 60%, transparent) 38%,
+		color-mix(in srgb, var(--color-green) 65%, transparent) 62%,
+		color-mix(in srgb, var(--color-green) 65%, transparent) 100%
+	);
 }
 
 .critic-card:hover {
@@ -231,8 +268,26 @@
 
 /* Keep content clear of the floating toolbar */
 .critic-thread-toolbar + .critic-card-quote,
+.critic-thread-toolbar + .critic-card-eyebrow,
 .critic-thread-toolbar + .critic-comment-header {
 	padding-right: 56px;
+}
+
+/* ---------- Type eyebrow ---------- */
+
+.critic-card-eyebrow {
+	display: flex;
+	align-items: center;
+	min-height: 18px;
+	margin-bottom: 6px;
+}
+
+.critic-eyebrow-label {
+	font-size: 10px;
+	font-weight: 600;
+	letter-spacing: 0.07em;
+	text-transform: uppercase;
+	color: var(--text-faint);
 }
 
 .critic-sidebar .critic-icon-button {
@@ -272,8 +327,8 @@
 	-webkit-box-orient: vertical;
 	overflow: hidden;
 	margin: 2px 0 10px;
-	padding: 1px 0 1px 10px;
-	border-left: 3px solid var(--color-yellow);
+	padding: 1px 0 1px 9px;
+	border-left: 2px solid color-mix(in srgb, var(--color-yellow) 55%, transparent);
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
 	line-height: 1.4;
@@ -289,16 +344,39 @@
 	margin: 0;
 }
 
-.critic-card-verb {
-	font-weight: 600;
+/* Proposed text renders as diff chips: struck old ink, then new ink */
+.critic-card-diff {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	row-gap: 4px;
+	column-gap: 6px;
+	white-space: normal;
 }
 
-.critic-card-new {
-	color: var(--color-green);
+.critic-chip {
+	border-radius: 4px;
+	padding: 1px 6px;
+	font-size: var(--font-ui-small);
+	line-height: 1.45;
+	overflow-wrap: anywhere;
 }
 
-.critic-card-old {
-	color: var(--color-red);
+.critic-chip-new {
+	background: color-mix(in srgb, var(--color-green) 13%, transparent);
+	color: color-mix(in srgb, var(--color-green) 60%, var(--text-normal));
+}
+
+.critic-chip-old {
+	background: color-mix(in srgb, var(--color-red) 11%, transparent);
+	color: color-mix(in srgb, var(--color-red) 55%, var(--text-normal));
+	text-decoration: line-through;
+	text-decoration-color: color-mix(in srgb, var(--color-red) 60%, transparent);
+}
+
+.critic-diff-arrow {
+	color: var(--text-faint);
+	font-size: var(--font-ui-small);
 }
 
 /* ---------- Thread messages ---------- */
@@ -492,7 +570,7 @@
 	display: flex;
 	flex-direction: column;
 	align-items: center;
-	gap: 10px;
+	gap: 12px;
 	padding: 48px 20px;
 	text-align: center;
 	color: var(--text-muted);
@@ -500,10 +578,20 @@
 	line-height: 1.5;
 }
 
+.critic-sidebar-empty-icon {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 44px;
+	height: 44px;
+	border-radius: 50%;
+	background: var(--background-modifier-hover);
+}
+
 .critic-sidebar-empty-icon svg {
-	width: 28px;
-	height: 28px;
-	opacity: 0.5;
+	width: 20px;
+	height: 20px;
+	opacity: 0.6;
 }
 
 /* ---------- Prompt modal ---------- */

@@ -20,7 +20,7 @@ export function wrapSelection(
 	} as const;
 	const [open, close] = wrappers[type];
 	const insertionStart = editor.posToOffset(editor.getCursor("from"));
-	editor.replaceSelection(`${open}${selection}${close}`, "criticmarkup");
+	editor.replaceSelection(`${open}${selection}${close}`, "relay-comments");
 	if (selection.length === 0) {
 		editor.setCursor(editor.offsetToPos(insertionStart + open.length));
 	}
@@ -33,7 +33,7 @@ export async function addSubstitution(app: App, editor: Editor): Promise<void> {
 		submitText: "Insert substitution",
 	});
 	if (replacement === null) return;
-	editor.replaceSelection(`{~~${selection}~>${replacement}~~}`, "criticmarkup");
+	editor.replaceSelection(`{~~${selection}~>${replacement}~~}`, "relay-comments");
 }
 
 export function applyCurrentMarkAction(
@@ -42,7 +42,7 @@ export function applyCurrentMarkAction(
 ): boolean {
 	const mark = getCurrentMark(editor);
 	if (!mark) {
-		new Notice("No CriticMarkup mark at the cursor.");
+		new Notice("No comment or suggestion at the cursor.");
 		return false;
 	}
 	replaceMark(editor, mark, action);
@@ -54,7 +54,7 @@ export function applyAllInEditor(editor: Editor, action: CriticAction): void {
 		(mark) => mark.valid,
 	);
 	if (marks.length === 0) {
-		new Notice("No CriticMarkup marks to update.");
+		new Notice("No comments or suggestions in this note.");
 		return;
 	}
 	// One transaction with per-mark changes keeps undo atomic and avoids the
@@ -67,7 +67,7 @@ export function applyAllInEditor(editor: Editor, action: CriticAction): void {
 				text: replacementForMark(mark, action),
 			})),
 		},
-		"criticmarkup",
+		"relay-comments",
 	);
 }
 
@@ -80,7 +80,7 @@ export function replaceMark(
 		replacementForMark(mark, action),
 		editor.offsetToPos(mark.from),
 		editor.offsetToPos(mark.to),
-		"criticmarkup",
+		"relay-comments",
 	);
 }
 

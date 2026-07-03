@@ -1,9 +1,9 @@
 {
-	"id": "criticmarkup-relay",
-	"name": "CriticMarkup",
+	"id": "relay-comments",
+	"name": "Relay Comments",
 	"version": "0.1.0",
 	"minAppVersion": "1.7.2",
-	"description": "Review Markdown with CriticMarkup comments and suggestions.",
+	"description": "Add Relay-aware comments and suggestions to Markdown notes.",
 	"author": "System 3",
 	"authorUrl": "https://system3.md",
 	"isDesktopOnly": false

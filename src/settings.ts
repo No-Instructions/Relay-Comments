@@ -1,27 +1,27 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
-import type CriticMarkupPlugin from "./main";
+import type RelayCommentsPlugin from "./main";
 
-export interface CriticMarkupSettings {
+export interface RelayCommentsSettings {
 	showAuthorChips: boolean;
 	showInlineActions: boolean;
 	enableReviewSidebar: boolean;
 }
 
-export const DEFAULT_SETTINGS: CriticMarkupSettings = {
+export const DEFAULT_SETTINGS: RelayCommentsSettings = {
 	showAuthorChips: true,
 	showInlineActions: true,
 	enableReviewSidebar: true,
 };
 
-export class CriticMarkupSettingTab extends PluginSettingTab {
-	constructor(app: App, private plugin: CriticMarkupPlugin) {
+export class RelayCommentsSettingTab extends PluginSettingTab {
+	constructor(app: App, private plugin: RelayCommentsPlugin) {
 		super(app, plugin);
 	}
 
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
-		containerEl.createEl("h2", { text: "CriticMarkup" });
+		containerEl.createEl("h2", { text: "Relay Comments" });
 
 		new Setting(containerEl)
 			.setName("Review sidebar")

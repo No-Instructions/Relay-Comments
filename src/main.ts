@@ -23,14 +23,14 @@ import {
 	getCurrentMark,
 } from "./editor/commands";
 import {
-	createCriticMarkupExtension,
-	type CriticMarkupEditorController,
+	createReviewEditorExtension,
+	type ReviewEditorController,
 } from "./editor/extension";
-import { createCriticMarkupPostProcessor } from "./preview/postprocessor";
+import { createReviewPostProcessor } from "./preview/postprocessor";
 import {
 	DEFAULT_SETTINGS,
-	CriticMarkupSettingTab,
-	type CriticMarkupSettings,
+	RelayCommentsSettingTab,
+	type RelayCommentsSettings,
 } from "./settings";
 import {
 	ReviewSidebarView,
@@ -146,11 +146,11 @@ interface RelayPluginLike {
 	sharedFolders?: RelaySharedFoldersLike;
 }
 
-export default class CriticMarkupPlugin
+export default class RelayCommentsPlugin
 	extends Plugin
-	implements CriticMarkupEditorController
+	implements ReviewEditorController
 {
-	settings!: CriticMarkupSettings;
+	settings!: RelayCommentsSettings;
 	private renderVersion = 0;
 	private commentDraft: CommentDraft | null = null;
 	private lastMarkdownPath: string | null = null;
@@ -166,13 +166,13 @@ export default class CriticMarkupPlugin
 			(leaf: WorkspaceLeaf) => new ReviewSidebarView(leaf, this),
 		);
 		this.editorExtensions.length = 0;
-		this.editorExtensions.push(createCriticMarkupExtension(this));
+		this.editorExtensions.push(createReviewEditorExtension(this));
 		this.registerEditorExtension(this.editorExtensions);
 		this.app.workspace.updateOptions();
-		this.registerMarkdownPostProcessor(createCriticMarkupPostProcessor(this));
-		this.addSettingTab(new CriticMarkupSettingTab(this.app, this));
+		this.registerMarkdownPostProcessor(createReviewPostProcessor(this));
+		this.addSettingTab(new RelayCommentsSettingTab(this.app, this));
 
-		this.addRibbonIcon("message-square-text", "Open CriticMarkup review", () => {
+		this.addRibbonIcon("message-square-text", "Open Relay Comments", () => {
 			void this.openReviewSidebar();
 		});
 
@@ -379,7 +379,7 @@ export default class CriticMarkupPlugin
 			insertion,
 			editor.offsetToPos(draft.from),
 			editor.offsetToPos(draft.to),
-			"criticmarkup",
+			"relay-comments",
 		);
 		this.commentDraft = null;
 		this.bumpRenderVersion();
@@ -632,7 +632,7 @@ export default class CriticMarkupPlugin
 			replacement,
 			editor.offsetToPos(fromOffset),
 			editor.offsetToPos(toOffset),
-			"criticmarkup",
+			"relay-comments",
 		);
 		this.bumpRenderVersion();
 	}
@@ -647,7 +647,7 @@ export default class CriticMarkupPlugin
 			this.formatAttachedCommentMarkup(reply),
 			editor.offsetToPos(mark.to),
 			undefined,
-			"criticmarkup",
+			"relay-comments",
 		);
 		this.bumpRenderVersion();
 		if (typeof scrollTop === "number" && cm?.scrollDOM) {
@@ -670,7 +670,7 @@ export default class CriticMarkupPlugin
 			sanitizeCommentText(text),
 			editor.offsetToPos(range[0]),
 			editor.offsetToPos(range[1]),
-			"criticmarkup",
+			"relay-comments",
 		);
 		this.bumpRenderVersion();
 		return true;
@@ -695,7 +695,7 @@ export default class CriticMarkupPlugin
 
 	async openReviewSidebar(): Promise<void> {
 		if (!this.settings.enableReviewSidebar) {
-			new Notice("Enable the CriticMarkup review sidebar in settings.");
+			new Notice("Enable the Relay Comments sidebar in settings.");
 			return;
 		}
 
@@ -766,19 +766,19 @@ export default class CriticMarkupPlugin
 		this.addEditorCommand("add-highlight", "Highlight selection", (editor) =>
 			wrapSelection(editor, "highlight"),
 		);
-		this.addEditorCommand("accept-current", "Accept current CriticMarkup mark", (editor) => {
+		this.addEditorCommand("accept-current", "Accept current comment or suggestion", (editor) => {
 			applyCurrentMarkAction(editor, "accept");
 			this.bumpRenderVersion();
 		});
-		this.addEditorCommand("reject-current", "Reject current CriticMarkup mark", (editor) => {
+		this.addEditorCommand("reject-current", "Reject current comment or suggestion", (editor) => {
 			applyCurrentMarkAction(editor, "reject");
 			this.bumpRenderVersion();
 		});
-		this.addEditorCommand("accept-all", "Accept all CriticMarkup marks", (editor) => {
+		this.addEditorCommand("accept-all", "Accept all comments and suggestions", (editor) => {
 			applyAllInEditor(editor, "accept");
 			this.bumpRenderVersion();
 		});
-		this.addEditorCommand("reject-all", "Reject all CriticMarkup marks", (editor) => {
+		this.addEditorCommand("reject-all", "Reject all comments and suggestions", (editor) => {
 			applyAllInEditor(editor, "reject");
 			this.bumpRenderVersion();
 		});
@@ -839,7 +839,7 @@ export default class CriticMarkupPlugin
 		menu.addSeparator();
 		menu.addItem((item) => {
 			item
-				.setTitle("Add CriticMarkup comment")
+				.setTitle("Add comment")
 				.setIcon("message-square-plus")
 				.setDisabled(!editor.somethingSelected())
 				.onClick(() => {

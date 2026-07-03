@@ -18,7 +18,7 @@ import { parseCriticMarkup } from "../critic/parse";
 import { collectAttachedComments } from "../critic/threading";
 import type { CriticMark, DisplayMode } from "../critic/types";
 
-export interface CriticMarkupEditorController {
+export interface ReviewEditorController {
 	getDisplayMode(path?: string | null): DisplayMode;
 	getRenderVersion(): number;
 	shouldShowInlineActions(): boolean;
@@ -47,8 +47,8 @@ interface CriticFieldValue {
 	path: string | null;
 }
 
-export function createCriticMarkupExtension(
-	controller: CriticMarkupEditorController,
+export function createReviewEditorExtension(
+	controller: ReviewEditorController,
 ): Extension {
 	// Live-preview state observed from the DOM by the view plugin; the state
 	// field itself must stay DOM-free.
@@ -114,7 +114,7 @@ export function createCriticMarkupExtension(
 		],
 	});
 
-	const criticMarkupPlugin = ViewPlugin.fromClass(
+	const reviewViewPlugin = ViewPlugin.fromClass(
 		class {
 			private commentButton: HTMLButtonElement;
 			private sourceViewEl: HTMLElement | null = null;
@@ -217,7 +217,7 @@ export function createCriticMarkupExtension(
 				const button = this.view.dom.ownerDocument.createElement("button");
 				button.className = "cm-critic-comment-button";
 				button.type = "button";
-				button.setAttribute("aria-label", "Add CriticMarkup comment");
+				button.setAttribute("aria-label", "Add comment");
 				button.title = "Add comment";
 				setIcon(button, "message-square-plus");
 				button.addEventListener("mousedown", (event) => {
@@ -302,7 +302,7 @@ export function createCriticMarkupExtension(
 		},
 	);
 
-	return [Prec.highest(criticField), criticMarkupPlugin, criticMarkupTheme];
+	return [Prec.highest(criticField), reviewViewPlugin, reviewEditorTheme];
 }
 
 function readPath(state: EditorState): string | null {
@@ -313,7 +313,7 @@ function readPath(state: EditorState): string | null {
 function buildDecorations(
 	state: EditorState,
 	livePreview: boolean,
-	controller: CriticMarkupEditorController,
+	controller: ReviewEditorController,
 ): { decorations: DecorationSet; atomics: DecorationSet; marks: CriticMark[] } {
 	if (!livePreview) {
 		return { decorations: Decoration.none, atomics: Decoration.none, marks: [] };
@@ -321,14 +321,14 @@ function buildDecorations(
 	try {
 		return buildDecorationsInner(state, controller);
 	} catch (error) {
-		console.error("[CriticMarkup] decoration build failed", error);
+		console.error("[Relay Comments] decoration build failed", error);
 		return { decorations: Decoration.none, atomics: Decoration.none, marks: [] };
 	}
 }
 
 function buildDecorationsInner(
 	state: EditorState,
-	controller: CriticMarkupEditorController,
+	controller: ReviewEditorController,
 ): { decorations: DecorationSet; atomics: DecorationSet; marks: CriticMark[] } {
 	const text = state.doc.toString();
 	const path = readPath(state);
@@ -656,7 +656,7 @@ function addAtom(ranges: Array<Range<Decoration>>, from: number, to: number): vo
 	ranges.push(Decoration.mark({}).range(from, to));
 }
 
-const criticMarkupTheme = EditorView.baseTheme({
+const reviewEditorTheme = EditorView.baseTheme({
 	"&": {
 		position: "relative",
 	},
