@@ -10,8 +10,8 @@
 		"allowSyntheticDefaultImports": true,
 		"forceConsistentCasingInFileNames": true,
 		"lib": ["DOM", "ES2018"],
-		"types": ["node"]
+		"types": ["node", "jest"]
 	},
-	"include": ["src/**/*.ts"],
+	"include": ["src/**/*.ts", "tests/unit/**/*.ts"],
 	"exclude": ["node_modules"]
 }

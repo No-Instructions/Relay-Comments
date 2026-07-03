@@ -5,3 +5,13 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 *.tsbuildinfo
+*.pyc
+__pycache__/
+
+# developer harness (igit-owned, including integration tests)
+.claude/
+.igit/
+.igitignore
+test-results/
+tests/integration/
+wiki/

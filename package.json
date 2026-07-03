@@ -1,15 +1,20 @@
 {
-	"name": "obsidian-criticmarkup",
+	"name": "obsidian-relay-comments",
 	"version": "0.1.0",
-	"description": "CriticMarkup support for Obsidian, with optional Relay-aware review UI.",
+	"description": "Relay-aware comments and suggestions for Obsidian Markdown notes.",
 	"main": "main.js",
 	"scripts": {
 		"dev": "node esbuild.config.mjs watch",
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
-		"check": "tsc -noEmit -skipLibCheck"
+		"check": "tsc -noEmit -skipLibCheck",
+		"test": "npm run test:unit",
+		"test:unit": "jest",
+		"test:integration": "python3 tests/integration/run.py"
 	},
 	"keywords": [
 		"obsidian",
+		"relay",
+		"comments",
 		"criticmarkup",
 		"codemirror"
 	],
@@ -18,10 +23,13 @@
 	"devDependencies": {
 		"@codemirror/state": "^6.4.1",
 		"@codemirror/view": "^6.26.3",
+		"@types/jest": "^29.5.14",
 		"@types/node": "^16.11.6",
 		"builtin-modules": "^3.3.0",
 		"esbuild": "^0.27.0",
+		"jest": "^29.7.0",
 		"obsidian": "^1.7.2",
+		"ts-jest": "^29.4.11",
 		"tslib": "^2.6.2",
 		"typescript": "^5.4.5"
 	}
