@@ -1,4 +1,9 @@
-import { editorInfoField, editorLivePreviewField, setIcon } from "obsidian";
+import {
+	editorInfoField,
+	editorLivePreviewField,
+	setIcon,
+	setTooltip,
+} from "obsidian";
 import {
 	Prec,
 	StateEffect,
@@ -217,8 +222,10 @@ export function createReviewEditorExtension(
 				const button = this.view.dom.ownerDocument.createElement("button");
 				button.className = "cm-critic-comment-button";
 				button.type = "button";
+				// setTooltip, never the title attribute: a title makes the
+				// browser's native tooltip appear alongside Obsidian's styled one.
 				button.setAttribute("aria-label", "Add comment");
-				button.title = "Add comment";
+				setTooltip(button, "Add comment");
 				setIcon(button, "message-square-plus");
 				button.addEventListener("mousedown", (event) => {
 					event.preventDefault();

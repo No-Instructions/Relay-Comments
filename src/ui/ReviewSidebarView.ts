@@ -3,6 +3,7 @@ import {
 	Menu,
 	Scope,
 	setIcon,
+	setTooltip,
 	type IconName,
 	type WorkspaceLeaf,
 } from "obsidian";
@@ -597,10 +598,13 @@ export class ReviewSidebarView extends ItemView {
 	}
 
 	private addResolveButton(parent: HTMLElement, item: ReviewItem): void {
+		// setTooltip, never the title attribute: a title makes the browser's
+		// native tooltip appear alongside Obsidian's styled one.
 		const button = parent.createEl("button", {
 			cls: "critic-icon-button critic-check-button",
-			attr: { "aria-label": "Resolve", title: "Resolve" },
+			attr: { "aria-label": "Resolve" },
 		});
+		setTooltip(button, "Resolve");
 		setIcon(button, "check");
 		button.addEventListener("click", (event) => {
 			event.stopPropagation();
@@ -611,8 +615,9 @@ export class ReviewSidebarView extends ItemView {
 	private addOverflowMenu(parent: HTMLElement, item: ReviewItem): void {
 		const button = parent.createEl("button", {
 			cls: "critic-icon-button",
-			attr: { "aria-label": "More actions", title: "More actions" },
+			attr: { "aria-label": "More actions" },
 		});
+		setTooltip(button, "More actions");
 		setIcon(button, "more-horizontal");
 		button.addEventListener("click", (event) => {
 			event.stopPropagation();
@@ -649,8 +654,9 @@ export class ReviewSidebarView extends ItemView {
 		});
 		const button = actions.createEl("button", {
 			cls: "critic-icon-button",
-			attr: { "aria-label": "More actions", title: "More actions" },
+			attr: { "aria-label": "More actions" },
 		});
+		setTooltip(button, "More actions");
 		setIcon(button, "more-horizontal");
 		button.addEventListener("click", (event) => {
 			event.stopPropagation();
