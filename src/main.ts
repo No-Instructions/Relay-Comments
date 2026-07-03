@@ -8,6 +8,7 @@ import {
 	type TFile,
 	type WorkspaceLeaf,
 } from "obsidian";
+import type { Extension } from "@codemirror/state";
 import { EditorView as CodeMirrorEditorView } from "@codemirror/view";
 import { parseCriticMarkup } from "./critic/parse";
 import { CRITIC_SECTION_SEPARATOR } from "./critic/threading";
@@ -35,7 +36,6 @@ import {
 	ReviewSidebarView,
 	VIEW_TYPE_CRITIC_REVIEW,
 } from "./ui/ReviewSidebarView";
-import { promptText } from "./ui/PromptModal";
 
 export interface ActiveReviewState {
 	file: TFile;
@@ -53,6 +53,7 @@ export interface CommentDraft {
 }
 
 export interface ReviewerIdentity {
+	id?: string;
 	name: string;
 	picture?: string;
 	color?: string;
@@ -81,21 +82,6 @@ interface RelayUserLike {
 	picture?: string;
 	color?: string | { color?: string; light?: string };
 	colorLight?: string;
-}
-
-interface RelayPublicApiLike {
-	version?: number;
-	identity?: {
-		getCurrentUser(path?: string): RelayUserLike | null;
-		resolveUser?(userId: string, path?: string): RelayUserLike | null;
-	};
-	attribution?: {
-		getDominantAuthorForRange(
-			path: string,
-			from: number,
-			to: number,
-		): RelayUserLike | null;
-	};
 }
 
 interface RelayUserCollectionLike {
@@ -150,7 +136,6 @@ interface RelaySharedFoldersLike {
 }
 
 interface RelayPluginLike {
-	api?: RelayPublicApiLike;
 	loginManager?: {
 		user?: RelayUserLike;
 	};
@@ -170,6 +155,8 @@ export default class CriticMarkupPlugin
 	private commentDraft: CommentDraft | null = null;
 	private lastMarkdownPath: string | null = null;
 	private reviewSidebarOpenPromise: Promise<void> | null = null;
+	private selectionRefreshTimer: number | null = null;
+	private readonly editorExtensions: Extension[] = [];
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -178,7 +165,9 @@ export default class CriticMarkupPlugin
 			VIEW_TYPE_CRITIC_REVIEW,
 			(leaf: WorkspaceLeaf) => new ReviewSidebarView(leaf, this),
 		);
-		this.registerEditorExtension(createCriticMarkupExtension(this));
+		this.editorExtensions.length = 0;
+		this.editorExtensions.push(createCriticMarkupExtension(this));
+		this.registerEditorExtension(this.editorExtensions);
 		this.app.workspace.updateOptions();
 		this.registerMarkdownPostProcessor(createCriticMarkupPostProcessor(this));
 		this.addSettingTab(new CriticMarkupSettingTab(this.app, this));
@@ -201,8 +190,24 @@ export default class CriticMarkupPlugin
 
 	onunload(): void {
 		this.reviewSidebarOpenPromise = null;
+		if (this.selectionRefreshTimer !== null) {
+			window.clearTimeout(this.selectionRefreshTimer);
+			this.selectionRefreshTimer = null;
+		}
+		this.editorExtensions.length = 0;
 		this.app.workspace.detachLeavesOfType(VIEW_TYPE_CRITIC_REVIEW);
 		this.app.workspace.updateOptions();
+		this.refreshOpenEditors();
+	}
+
+	notifyEditorSelectionChanged(): void {
+		if (this.selectionRefreshTimer !== null) {
+			window.clearTimeout(this.selectionRefreshTimer);
+		}
+		this.selectionRefreshTimer = window.setTimeout(() => {
+			this.selectionRefreshTimer = null;
+			this.refreshReviewSidebars();
+		}, 120);
 	}
 
 	getDisplayMode(path?: string | null): DisplayMode {
@@ -250,6 +255,13 @@ export default class CriticMarkupPlugin
 		mark: CriticMark,
 		filePath?: string | null,
 	): ReviewerIdentity {
+		// A persisted Relay user ID is the strongest signal: it survives
+		// display-name changes and needs no attribution guessing.
+		const metadataAuthorId = mark.metadata?.authorId?.trim();
+		if (metadataAuthorId) {
+			const resolved = this.resolveRelayUserById(metadataAuthorId);
+			if (resolved) return resolved;
+		}
 		const metadataAuthor = mark.metadata?.author?.trim();
 		const resolvedFilePath =
 			filePath ?? this.app.workspace.getActiveFile()?.path ?? null;
@@ -310,6 +322,19 @@ export default class CriticMarkupPlugin
 		const filePath = path ?? activeFile?.path;
 		if (!filePath) {
 			new Notice("Open a Markdown note before adding a comment.");
+			return;
+		}
+		// CriticMarkup can't express overlapping marks.
+		const editorText = this.getMarkdownViewByPath(filePath)?.editor.getValue();
+		if (
+			editorText &&
+			parseCriticMarkup(editorText).some(
+				(mark) => mark.from < to && mark.to > from,
+			)
+		) {
+			new Notice(
+				"That selection already contains a suggestion or comment.",
+			);
 			return;
 		}
 		this.lastMarkdownPath = filePath;
@@ -447,13 +472,17 @@ export default class CriticMarkupPlugin
 		return (editor as unknown as { cm?: CodeMirrorAdapter }).cm ?? null;
 	}
 
+	private resolveRelayUserById(userId: string): ReviewerIdentity | null {
+		const relay = this.getRelayPlugin();
+		if (!relay) return null;
+		const user =
+			relay.relayManager?.users?.get(userId) ??
+			relay.sharedFolders?.manager?.users?.get(userId);
+		return userToIdentity(user, "relay");
+	}
+
 	private getCurrentRelayIdentity(): ReviewerIdentity | null {
 		const relay = this.getRelayPlugin();
-		const filePath = this.app.workspace.getActiveFile()?.path;
-		const apiIdentity = relay?.api?.identity?.getCurrentUser(filePath);
-		const publicIdentity = userToIdentity(apiIdentity ?? undefined, "relay");
-		if (publicIdentity) return publicIdentity;
-
 		const user =
 			relay?.loginManager?.user ??
 			relay?.relayManager?.user ??
@@ -468,14 +497,6 @@ export default class CriticMarkupPlugin
 	): ReviewerIdentity | null {
 		if (!filePath) return null;
 		const relay = this.getRelayPlugin();
-		const apiIdentity = relay?.api?.attribution?.getDominantAuthorForRange(
-			filePath,
-			fromOffset,
-			toOffset,
-		);
-		const publicIdentity = userToIdentity(apiIdentity ?? undefined, "relay");
-		if (publicIdentity) return publicIdentity;
-
 		const folder = relay?.sharedFolders?.lookup(filePath);
 		const ydoc = folder?.proxy?.getDoc(filePath)?.localDoc;
 		if (!relay || !folder || !ydoc) return null;
@@ -616,24 +637,6 @@ export default class CriticMarkupPlugin
 		this.bumpRenderVersion();
 	}
 
-	async replyToMark(mark: CriticMark): Promise<void> {
-		const view = this.getCurrentMarkdownView();
-		const editor = view?.editor;
-		if (!editor) return;
-		const reply = await promptText(this.app, "Reply", {
-			placeholder: "Write a reply",
-			submitText: "Insert reply",
-		});
-		if (reply === null || reply.length === 0) return;
-		editor.replaceRange(
-			this.formatAttachedCommentMarkup(reply),
-			editor.offsetToPos(mark.to),
-			undefined,
-			"criticmarkup",
-		);
-		this.bumpRenderVersion();
-	}
-
 	insertReplyToMark(mark: CriticMark, reply: string): boolean {
 		const view = this.getCurrentMarkdownView();
 		const editor = view?.editor;
@@ -664,7 +667,7 @@ export default class CriticMarkupPlugin
 		if (!editor) return false;
 		const range = mark.ranges.commentText ?? [mark.contentFrom, mark.contentTo];
 		editor.replaceRange(
-			text,
+			sanitizeCommentText(text),
 			editor.offsetToPos(range[0]),
 			editor.offsetToPos(range[1]),
 			"criticmarkup",
@@ -675,11 +678,15 @@ export default class CriticMarkupPlugin
 
 	private formatCommentMarkup(comment: string): string {
 		const identity = this.getCurrentReviewerIdentity();
-		const metadata = [
+		const metadata: string[] = [];
+		if (identity.source === "relay" && identity.id) {
+			metadata.push(`authorId="${formatMetadataValue(identity.id)}"`);
+		}
+		metadata.push(
 			`author="${formatMetadataValue(identity.name)}"`,
 			`date="${new Date().toISOString()}"`,
-		].join(" ");
-		return `{{${metadata}>>${comment}<<}}`;
+		);
+		return `{{${metadata.join(" ")}>>${sanitizeCommentText(comment)}<<}}`;
 	}
 
 	private formatAttachedCommentMarkup(comment: string): string {
@@ -933,6 +940,7 @@ function userToIdentity(
 		user.colorLight ??
 		(typeof user.color === "string" ? undefined : user.color?.light);
 	return {
+		id: user.id,
 		name,
 		picture: user.picture,
 		color,
@@ -947,6 +955,17 @@ function isSameReviewerName(left: string, right: string): boolean {
 
 function formatMetadataValue(value: string): string {
 	return value.replace(/"/g, "'");
+}
+
+function sanitizeCommentText(value: string): string {
+	return value
+		.replace(/\r\n?/g, "\n")
+		// Blank lines would split the note into separate Markdown sections
+		// around an inline comment; keep single line breaks.
+		.replace(/[\t ]*\n[\t ]*\n[\t \n]*/g, "\n")
+		// "<<}" inside a comment body would close the mark early.
+		.replace(/<<(?=\})/g, "<< ")
+		.trim();
 }
 
 function fallbackIdentity(): ReviewerIdentity {

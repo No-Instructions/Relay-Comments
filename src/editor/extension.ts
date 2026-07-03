@@ -1,12 +1,18 @@
 import { editorInfoField, editorLivePreviewField, setIcon } from "obsidian";
-import { Prec, type Extension, type Range } from "@codemirror/state";
+import {
+	Prec,
+	StateEffect,
+	StateField,
+	type EditorState,
+	type Extension,
+	type Range,
+} from "@codemirror/state";
 import {
 	Decoration,
 	EditorView,
 	ViewPlugin,
 	type DecorationSet,
 	type ViewUpdate,
-	WidgetType,
 } from "@codemirror/view";
 import { parseCriticMarkup } from "../critic/parse";
 import { collectAttachedComments } from "../critic/threading";
@@ -17,6 +23,7 @@ export interface CriticMarkupEditorController {
 	getRenderVersion(): number;
 	shouldShowInlineActions(): boolean;
 	activateCommentThread(path: string | null, from: number, to: number): void;
+	notifyEditorSelectionChanged(): void;
 	startCommentDraft(
 		path: string | null,
 		from: number,
@@ -25,98 +32,149 @@ export interface CriticMarkupEditorController {
 	): void;
 }
 
-class IconWidget extends WidgetType {
-	constructor(
-		private className: string,
-		private icon: string,
-		private title?: string,
-	) {
-		super();
-	}
+interface CommentButtonPlacement {
+	left: number;
+	top: number;
+}
 
-	toDOM(view: EditorView): HTMLElement {
-		const span = view.dom.ownerDocument.createElement("span");
-		span.className = this.className;
-		if (this.title) span.title = this.title;
-		setIcon(span, this.icon);
-		return span;
-	}
-
-	eq(other: IconWidget): boolean {
-		return (
-			this.className === other.className &&
-			this.icon === other.icon &&
-			this.title === other.title
-		);
-	}
+interface CriticFieldValue {
+	decorations: DecorationSet;
+	atomics: DecorationSet;
+	marks: CriticMark[];
+	livePreview: boolean;
+	domLivePreview: boolean | null;
+	renderVersion: number;
+	path: string | null;
 }
 
 export function createCriticMarkupExtension(
 	controller: CriticMarkupEditorController,
 ): Extension {
+	// Live-preview state observed from the DOM by the view plugin; the state
+	// field itself must stay DOM-free.
+	const setDomLivePreview = StateEffect.define<boolean | null>();
+
+	const buildFieldValue = (
+		state: EditorState,
+		domLivePreview: boolean | null,
+	): CriticFieldValue => {
+		const livePreview =
+			domLivePreview ?? state.field(editorLivePreviewField, false) ?? false;
+		const renderVersion = controller.getRenderVersion();
+		const path = readPath(state);
+		const { decorations, atomics, marks } = buildDecorations(
+			state,
+			livePreview,
+			controller,
+		);
+		return {
+			decorations,
+			atomics,
+			marks,
+			livePreview,
+			domLivePreview,
+			renderVersion,
+			path,
+		};
+	};
+
+	// Block decorations (used to hide comment markup that spans line breaks)
+	// may only be provided by a state field, not a view plugin.
+	const criticField = StateField.define<CriticFieldValue>({
+		create(state) {
+			return buildFieldValue(state, null);
+		},
+		update(value, tr) {
+			let domLivePreview = value.domLivePreview;
+			for (const effect of tr.effects) {
+				if (effect.is(setDomLivePreview)) {
+					domLivePreview = effect.value;
+				}
+			}
+			const livePreview =
+				domLivePreview ??
+				tr.state.field(editorLivePreviewField, false) ??
+				false;
+			if (
+				!tr.docChanged &&
+				domLivePreview === value.domLivePreview &&
+				livePreview === value.livePreview &&
+				controller.getRenderVersion() === value.renderVersion &&
+				readPath(tr.state) === value.path
+			) {
+				return value;
+			}
+			return buildFieldValue(tr.state, domLivePreview);
+		},
+		provide: (field) => [
+			EditorView.decorations.from(field, (value) => value.decorations),
+			EditorView.atomicRanges.of(
+				(view) => view.state.field(field).atomics,
+			),
+		],
+	});
+
 	const criticMarkupPlugin = ViewPlugin.fromClass(
 		class {
-			decorations: DecorationSet = Decoration.none;
-			atomicRanges: DecorationSet = Decoration.none;
-			private renderVersion = -1;
 			private commentButton: HTMLButtonElement;
 			private sourceViewEl: HTMLElement | null = null;
 			private sourceViewObserver: MutationObserver | null = null;
-			private path: string | null = null;
-			private mode: DisplayMode = "review";
-			private livePreview = false;
+			private livePreviewPollId: number | null = null;
+			private lastDomSignal: boolean | null = null;
+			private destroyed = false;
 			private handleClick = (event: MouseEvent): void => {
 				const target = event.target as HTMLElement | null;
 				const anchor = target?.closest<HTMLElement>(
-					".cm-critic-thread-anchor, .cm-critic-anchored-comment",
+					".cm-critic-thread-anchor",
 				);
 				if (!anchor) return;
 				const from = Number(anchor.dataset.criticFrom);
 				const to = Number(anchor.dataset.criticTo);
 				if (!Number.isFinite(from) || !Number.isFinite(to)) return;
-				controller.activateCommentThread(readPath(this.view), from, to);
+				controller.activateCommentThread(
+					readPath(this.view.state),
+					from,
+					to,
+				);
 			};
 
 			constructor(private view: EditorView) {
 				this.commentButton = this.createCommentButton();
 				this.view.dom.appendChild(this.commentButton);
 				this.view.dom.addEventListener("click", this.handleClick);
-				this.rebuild();
 				this.observeSourceView();
-				this.view.requestMeasure({
-					read: () => null,
-					write: () => {
-						this.observeSourceView();
-						this.rebuildIfLivePreviewChanged();
-					},
-				});
+				this.syncDomLivePreview();
+				this.livePreviewPollId = window.setInterval(
+					() => this.syncDomLivePreview(),
+					500,
+				);
+				this.scheduleCommentButtonUpdate();
 			}
 
 			update(update: ViewUpdate): void {
-				const nextVersion = controller.getRenderVersion();
-				const nextPath = readPath(update.view);
-				const nextMode = controller.getDisplayMode(nextPath);
-				const nextLivePreview = readLivePreview(update.view);
+				this.observeSourceView();
+				if (update.selectionSet) {
+					controller.notifyEditorSelectionChanged();
+				}
 				if (
-					update.docChanged ||
 					update.selectionSet ||
+					update.docChanged ||
 					update.viewportChanged ||
-					nextVersion !== this.renderVersion ||
-					nextPath !== this.path ||
-					nextMode !== this.mode ||
-					nextLivePreview !== this.livePreview
+					update.startState.field(criticField) !==
+						update.state.field(criticField)
 				) {
-					this.observeSourceView();
-					this.rebuild();
-				} else {
-					this.observeSourceView();
-					this.updateCommentButton();
+					this.scheduleCommentButtonUpdate();
 				}
 			}
 
 			destroy(): void {
+				this.destroyed = true;
 				this.sourceViewObserver?.disconnect();
 				this.sourceViewObserver = null;
+				if (this.livePreviewPollId !== null) {
+					window.clearInterval(this.livePreviewPollId);
+					this.livePreviewPollId = null;
+				}
 				this.view.dom.removeEventListener("click", this.handleClick);
 				this.commentButton.remove();
 			}
@@ -132,7 +190,7 @@ export function createCriticMarkupExtension(
 				if (!sourceView) return;
 
 				this.sourceViewObserver = new MutationObserver(() => {
-					this.rebuildIfLivePreviewChanged();
+					this.syncDomLivePreview();
 				});
 				this.sourceViewObserver.observe(sourceView, {
 					attributes: true,
@@ -140,12 +198,19 @@ export function createCriticMarkupExtension(
 				});
 			}
 
-			private rebuildIfLivePreviewChanged(): void {
-				const livePreview = readLivePreview(this.view);
-				if (livePreview !== this.livePreview) {
-					this.rebuild();
-					this.view.dispatch({});
-				}
+			private syncDomLivePreview(): void {
+				const sourceView = this.view.dom.closest(".markdown-source-view");
+				const domSignal = sourceView
+					? sourceView.classList.contains("is-live-preview")
+					: null;
+				if (domSignal === this.lastDomSignal) return;
+				this.lastDomSignal = domSignal;
+				queueMicrotask(() => {
+					if (this.destroyed) return;
+					this.view.dispatch({
+						effects: setDomLivePreview.of(domSignal),
+					});
+				});
 			}
 
 			private createCommentButton(): HTMLButtonElement {
@@ -165,7 +230,7 @@ export function createCriticMarkupExtension(
 					const selection = this.view.state.selection.main;
 					if (selection.empty) return;
 					controller.startCommentDraft(
-						readPath(this.view),
+						readPath(this.view.state),
 						selection.from,
 						selection.to,
 						this.view.state.sliceDoc(selection.from, selection.to),
@@ -174,252 +239,303 @@ export function createCriticMarkupExtension(
 				return button;
 			}
 
-			private rebuild(): void {
-				this.renderVersion = controller.getRenderVersion();
-				const text = this.view.state.doc.toString();
-				const path = readPath(this.view);
-				const mode = controller.getDisplayMode(path);
-				const livePreview = readLivePreview(this.view);
-				this.path = path;
-				this.mode = mode;
-				this.livePreview = livePreview;
-				const ranges: Array<Range<Decoration>> = [];
-				const atomRanges: Array<Range<Decoration>> = [];
-				const marks = parseCriticMarkup(text);
-				const anchoredComments = findAnchoredComments(marks, text);
-
-				for (const mark of marks) {
-					if (!mark.valid) {
-						addReplace(
-							ranges,
-							mark.from,
-							mark.to,
-							new IconWidget(
-								"cm-critic-invalid-widget",
-								"alert-triangle",
-								mark.error,
-							),
-						);
-						addAtom(atomRanges, mark.from, mark.to);
-						continue;
-					}
-
-					const anchoredComment = anchoredComments.byAnchorId.get(mark.id);
-					if (anchoredComment && anchoredComment.length > 0) {
-						const separators =
-							anchoredComments.separatorRangesByAnchorId.get(mark.id) ?? [];
-						if (mode === "clean") {
-							this.decorateClean(mark, true, ranges);
-							hideRanges(separators, ranges, atomRanges);
-							for (const comment of anchoredComment) {
-								addReplace(ranges, comment.from, comment.to);
-								addAtom(atomRanges, comment.from, comment.to);
-							}
-						} else {
-							this.decorateReview(
-								mark,
-								true,
-								ranges,
-								anchoredComments.commentIds,
-								threadAttributes(mark, anchoredComment),
-							);
-							hideRanges(separators, ranges, atomRanges);
-							for (const comment of anchoredComment) {
-								addReplace(ranges, comment.from, comment.to);
-								addAtom(atomRanges, comment.from, comment.to);
-							}
-						}
-						continue;
-					}
-					if (anchoredComments.commentIds.has(mark.id)) {
-						continue;
-					}
-					if (mode === "clean") {
-						this.decorateClean(mark, true, ranges);
-					} else {
-						this.decorateReview(mark, true, ranges, anchoredComments.commentIds);
-					}
-				}
-
-				ranges.sort((a, b) => a.from - b.from || a.to - b.to);
-				atomRanges.sort((a, b) => a.from - b.from || a.to - b.to);
-				this.decorations = Decoration.set(ranges, true);
-				this.atomicRanges = Decoration.set(atomRanges, true);
-				this.updateCommentButton();
+			private scheduleCommentButtonUpdate(): void {
+				this.view.requestMeasure({
+					read: () => this.measureCommentButton(),
+					write: (placement) => this.applyCommentButtonPlacement(placement),
+				});
 			}
 
-			private decorateReview(
-				mark: CriticMark,
-				hideRaw: boolean,
-				ranges: Array<Range<Decoration>>,
-				anchoredCommentIds: Set<string> = new Set(),
-				threadAttrs?: Record<string, string>,
-			): void {
-				if (mark.type === "comment" && hideRaw) {
-					if (anchoredCommentIds.has(mark.id)) {
-						addReplace(ranges, mark.from, mark.to);
-						return;
-					}
-					hideDelimiters(mark, ranges);
-					return;
-				}
-
-				if (hideRaw) hideDelimiters(mark, ranges);
-
-				switch (mark.type) {
-					case "addition":
-						addMark(
-							ranges,
-							mark.contentFrom,
-							mark.contentTo,
-							attributeClass("cm-critic-addition", threadAttrs),
-							undefined,
-							threadAttrs,
-						);
-						break;
-					case "deletion":
-						addMark(
-							ranges,
-							mark.contentFrom,
-							mark.contentTo,
-							attributeClass("cm-critic-deletion", threadAttrs),
-							undefined,
-							threadAttrs,
-						);
-						break;
-					case "substitution":
-						if (hideRaw && mark.ranges.separator) {
-							addReplace(
-								ranges,
-								mark.ranges.separator[0],
-								mark.ranges.separator[1],
-							);
-						}
-						if (mark.ranges.oldText) {
-							addMark(
-								ranges,
-								mark.ranges.oldText[0],
-								mark.ranges.oldText[1],
-								attributeClass("cm-critic-deletion", threadAttrs),
-								undefined,
-								threadAttrs,
-							);
-						}
-						if (mark.ranges.newText) {
-							addMark(
-								ranges,
-								mark.ranges.newText[0],
-								mark.ranges.newText[1],
-								attributeClass("cm-critic-addition", threadAttrs),
-								undefined,
-								threadAttrs,
-							);
-						}
-						break;
-					case "comment":
-						addMark(ranges, mark.from, mark.to, "cm-critic-comment-raw");
-						break;
-					case "highlight":
-						addMark(
-							ranges,
-							mark.contentFrom,
-							mark.contentTo,
-							attributeClass("cm-critic-highlight", threadAttrs),
-							undefined,
-							threadAttrs,
-						);
-						break;
-				}
-			}
-
-			private decorateClean(
-				mark: CriticMark,
-				hideRaw: boolean,
-				ranges: Array<Range<Decoration>>,
-			): void {
-				if (!hideRaw) {
-					this.decorateReview(mark, false, ranges);
-					return;
-				}
-
-				switch (mark.type) {
-					case "addition":
-					case "highlight":
-						hideDelimiters(mark, ranges);
-						break;
-					case "deletion":
-						addReplace(ranges, mark.from, mark.to);
-						break;
-					case "comment":
-						hideDelimiters(mark, ranges);
-						break;
-					case "substitution":
-						if (mark.ranges.opening && mark.ranges.newText) {
-							addReplace(ranges, mark.ranges.opening[0], mark.ranges.newText[0]);
-						}
-						if (mark.ranges.closing) {
-							addReplace(ranges, mark.ranges.closing[0], mark.ranges.closing[1]);
-						}
-						break;
-				}
-			}
-
-			private updateCommentButton(): void {
+			private measureCommentButton(): CommentButtonPlacement | null {
 				const selection = this.view.state.selection.main;
-				const selectedText = selection.empty
-					? ""
-					: this.view.state.sliceDoc(selection.from, selection.to);
+				const fieldValue = this.view.state.field(criticField);
 				if (
 					!controller.shouldShowInlineActions() ||
-					!this.livePreview ||
-					selection.empty ||
-					selectedText.trim().length === 0
+					!fieldValue.livePreview ||
+					selection.empty
 				) {
-					this.commentButton.classList.remove("is-visible");
-					return;
+					return null;
+				}
+				const selectedText = this.view.state.sliceDoc(
+					selection.from,
+					selection.to,
+				);
+				if (selectedText.trim().length === 0) {
+					return null;
+				}
+				// CriticMarkup can't express overlapping marks; don't offer a
+				// comment that would nest inside existing markup.
+				if (
+					fieldValue.marks.some(
+						(mark) => mark.from < selection.to && mark.to > selection.from,
+					)
+				) {
+					return null;
 				}
 
 				const coords = this.view.coordsAtPos(selection.to);
-				if (!coords) {
+				if (!coords) return null;
+
+				// Sit in the editor's right margin (like Google Docs) instead
+				// of floating over the text that follows the selection.
+				const editorRect = this.view.dom.getBoundingClientRect();
+				const contentRect = this.view.contentDOM.getBoundingClientRect();
+				const left = Math.min(
+					contentRect.right - editorRect.left + 12,
+					editorRect.width - 40,
+				);
+				const top = coords.top - editorRect.top - 6;
+				return { left: Math.round(left), top: Math.round(top) };
+			}
+
+			private applyCommentButtonPlacement(
+				placement: CommentButtonPlacement | null,
+			): void {
+				if (!placement) {
 					this.commentButton.classList.remove("is-visible");
 					return;
 				}
-
-				const editorRect = this.view.dom.getBoundingClientRect();
-				const left = Math.min(
-					Math.max(coords.right - editorRect.left + 8, 8),
-					editorRect.width - 34,
-				);
-				const top = coords.top - editorRect.top - 5;
-
-				this.commentButton.style.left = `${Math.round(left)}px`;
-				this.commentButton.style.top = `${Math.round(top)}px`;
+				this.commentButton.style.left = `${placement.left}px`;
+				this.commentButton.style.top = `${placement.top}px`;
 				this.commentButton.classList.add("is-visible");
 			}
 		},
-		{
-			decorations: (value) => value.decorations,
-			provide: (plugin) =>
-				EditorView.atomicRanges.of((view) => {
-					const value = view.plugin(plugin);
-					return value?.atomicRanges ?? Decoration.none;
-				}),
-		},
 	);
 
-	return [Prec.highest(criticMarkupPlugin), criticMarkupTheme];
+	return [Prec.highest(criticField), criticMarkupPlugin, criticMarkupTheme];
 }
 
-function readPath(view: EditorView): string | null {
-	const fileInfo = view.state.field(editorInfoField, false);
+function readPath(state: EditorState): string | null {
+	const fileInfo = state.field(editorInfoField, false);
 	return fileInfo?.file?.path ?? null;
 }
 
-function readLivePreview(view: EditorView): boolean {
-	return (
-		(view.state.field(editorLivePreviewField, false) ?? false) ||
-		Boolean(view.dom.closest(".markdown-source-view.is-live-preview"))
+function buildDecorations(
+	state: EditorState,
+	livePreview: boolean,
+	controller: CriticMarkupEditorController,
+): { decorations: DecorationSet; atomics: DecorationSet; marks: CriticMark[] } {
+	if (!livePreview) {
+		return { decorations: Decoration.none, atomics: Decoration.none, marks: [] };
+	}
+	try {
+		return buildDecorationsInner(state, controller);
+	} catch (error) {
+		console.error("[CriticMarkup] decoration build failed", error);
+		return { decorations: Decoration.none, atomics: Decoration.none, marks: [] };
+	}
+}
+
+function buildDecorationsInner(
+	state: EditorState,
+	controller: CriticMarkupEditorController,
+): { decorations: DecorationSet; atomics: DecorationSet; marks: CriticMark[] } {
+	const text = state.doc.toString();
+	const path = readPath(state);
+	const mode = controller.getDisplayMode(path);
+	const ranges: Array<Range<Decoration>> = [];
+	const atomRanges: Array<Range<Decoration>> = [];
+	const marks = parseCriticMarkup(text);
+	const anchoredComments = findAnchoredComments(marks, text);
+
+	for (const mark of marks) {
+		if (!mark.valid) {
+			// Never hide invalid/incomplete markup: the user may be mid-typing,
+			// and replacing it would blank out real text.
+			addMark(ranges, mark.from, mark.to, "cm-critic-invalid", mark.error);
+			continue;
+		}
+		if (anchoredComments.commentIds.has(mark.id)) {
+			// Rendered as part of its thread anchor below.
+			continue;
+		}
+
+		const attached = anchoredComments.byAnchorId.get(mark.id) ?? [];
+		const separators =
+			anchoredComments.separatorRangesByAnchorId.get(mark.id) ?? [];
+
+		if (mark.type === "comment") {
+			// Comment thread root: anchor the thread to the preceding word
+			// (Google Docs-style) and hide the markup itself. Threads with no
+			// visible text render nothing at all.
+			const threadTexts = [mark, ...attached]
+				.map((comment) => comment.content.trim())
+				.filter((content) => content.length > 0);
+			if (mode !== "clean" && threadTexts.length > 0) {
+				const anchor = findPrecedingWordRange(text, mark.from, marks);
+				if (anchor) {
+					addMark(
+						ranges,
+						anchor[0],
+						anchor[1],
+						"cm-critic-comment-anchor cm-critic-thread-anchor",
+						undefined,
+						{
+							"data-critic-from": String(mark.from),
+							"data-critic-to": String(mark.to),
+							title: threadTexts.join("\n"),
+						},
+					);
+				}
+			}
+			addReplace(ranges, mark.from, mark.to, mark.raw.includes("\n"));
+			addAtom(atomRanges, mark.from, mark.to);
+		} else if (mode === "clean") {
+			decorateClean(mark, ranges);
+		} else {
+			decorateReview(
+				mark,
+				ranges,
+				attached.length > 0 ? threadAttributes(mark, attached) : undefined,
+			);
+		}
+
+		hideRanges(text, separators, ranges, atomRanges);
+		for (const comment of attached) {
+			addReplace(ranges, comment.from, comment.to, comment.raw.includes("\n"));
+			addAtom(atomRanges, comment.from, comment.to);
+		}
+	}
+
+	ranges.sort((a, b) => a.from - b.from || a.to - b.to);
+	atomRanges.sort((a, b) => a.from - b.from || a.to - b.to);
+	return {
+		decorations: Decoration.set(ranges, true),
+		atomics: Decoration.set(atomRanges, true),
+		marks,
+	};
+}
+
+function decorateReview(
+	mark: CriticMark,
+	ranges: Array<Range<Decoration>>,
+	threadAttrs?: Record<string, string>,
+): void {
+	hideDelimiters(mark, ranges);
+
+	switch (mark.type) {
+		case "addition":
+			addMark(
+				ranges,
+				mark.contentFrom,
+				mark.contentTo,
+				attributeClass("cm-critic-addition", threadAttrs),
+				undefined,
+				threadAttrs,
+			);
+			break;
+		case "deletion":
+			addMark(
+				ranges,
+				mark.contentFrom,
+				mark.contentTo,
+				attributeClass("cm-critic-deletion", threadAttrs),
+				undefined,
+				threadAttrs,
+			);
+			break;
+		case "substitution":
+			if (mark.ranges.separator) {
+				addReplace(ranges, mark.ranges.separator[0], mark.ranges.separator[1]);
+			}
+			if (mark.ranges.oldText) {
+				addMark(
+					ranges,
+					mark.ranges.oldText[0],
+					mark.ranges.oldText[1],
+					attributeClass("cm-critic-deletion", threadAttrs),
+					undefined,
+					threadAttrs,
+				);
+			}
+			if (mark.ranges.newText) {
+				addMark(
+					ranges,
+					mark.ranges.newText[0],
+					mark.ranges.newText[1],
+					attributeClass("cm-critic-addition", threadAttrs),
+					undefined,
+					threadAttrs,
+				);
+			}
+			break;
+		case "highlight":
+			addMark(
+				ranges,
+				mark.contentFrom,
+				mark.contentTo,
+				attributeClass("cm-critic-highlight", threadAttrs),
+				undefined,
+				threadAttrs,
+			);
+			break;
+		case "comment":
+			// Comment roots are handled in buildDecorationsInner().
+			break;
+	}
+}
+
+function decorateClean(
+	mark: CriticMark,
+	ranges: Array<Range<Decoration>>,
+): void {
+	switch (mark.type) {
+		case "addition":
+		case "highlight":
+			hideDelimiters(mark, ranges);
+			break;
+		case "deletion":
+		case "comment":
+			addReplace(ranges, mark.from, mark.to, mark.raw.includes("\n"));
+			break;
+		case "substitution":
+			if (mark.ranges.opening && mark.ranges.newText) {
+				addReplace(
+					ranges,
+					mark.ranges.opening[0],
+					mark.ranges.newText[0],
+					(mark.oldText ?? "").includes("\n"),
+				);
+			}
+			if (mark.ranges.closing) {
+				addReplace(ranges, mark.ranges.closing[0], mark.ranges.closing[1]);
+			}
+			break;
+	}
+}
+
+/**
+ * The word immediately before `from` on the same line, used to anchor a
+ * standalone comment to visible text. Returns null when the line starts at
+ * the comment or the candidate range touches other CriticMarkup marks.
+ */
+function findPrecedingWordRange(
+	text: string,
+	from: number,
+	marks: CriticMark[],
+): [number, number] | null {
+	let end = from;
+	while (end > 0) {
+		const char = text[end - 1];
+		if (char === "\n") return null;
+		if (char === " " || char === "\t") {
+			end -= 1;
+			continue;
+		}
+		break;
+	}
+	if (end === 0) return null;
+	let start = end;
+	while (start > 0) {
+		const char = text[start - 1];
+		if (char === "\n" || char === " " || char === "\t") break;
+		start -= 1;
+	}
+	if (end <= start) return null;
+	const touchesMark = marks.some(
+		(mark) => mark.from < end && mark.to > start,
 	);
+	return touchesMark ? null : [start, end];
 }
 
 function findAnchoredComments(
@@ -437,7 +553,9 @@ function findAnchoredComments(
 		const mark = marks[index];
 		if (!mark.valid || commentIds.has(mark.id)) continue;
 
-		const attached = collectAttachedComments(marks, text, index, commentIds);
+		const attached = collectAttachedComments(marks, text, index, commentIds, {
+			allowCommentAnchor: true,
+		});
 		if (attached.comments.length > 0) {
 			for (const comment of attached.comments) {
 				commentIds.add(comment.id);
@@ -452,12 +570,13 @@ function findAnchoredComments(
 }
 
 function hideRanges(
+	text: string,
 	sourceRanges: Array<[number, number]>,
 	ranges: Array<Range<Decoration>>,
 	atomRanges: Array<Range<Decoration>>,
 ): void {
 	for (const [from, to] of sourceRanges) {
-		addReplace(ranges, from, to);
+		addReplace(ranges, from, to, text.slice(from, to).includes("\n"));
 		addAtom(atomRanges, from, to);
 	}
 }
@@ -481,7 +600,10 @@ function threadAttributes(
 	return {
 		"data-critic-from": String(mark.from),
 		"data-critic-to": String(mark.to),
-		title: comments.map((comment) => comment.content).join("\n"),
+		title: comments
+			.map((comment) => comment.content.trim())
+			.filter((content) => content.length > 0)
+			.join("\n"),
 	};
 }
 
@@ -501,19 +623,10 @@ function addMark(
 	attributes?: Record<string, string>,
 ): void {
 	if (to <= from) return;
-	const markAttributes = attributes ? { ...attributes } : undefined;
-	if (title) {
-		if (markAttributes) {
-			markAttributes.title = title;
-		} else {
-			ranges.push(
-				Decoration.mark({
-					class: className,
-					attributes: { title },
-				}).range(from, to),
-			);
-			return;
-		}
+	const markAttributes: Record<string, string> | undefined =
+		attributes || title ? { ...(attributes ?? {}) } : undefined;
+	if (title && markAttributes) {
+		markAttributes.title = title;
 	}
 	ranges.push(
 		Decoration.mark({
@@ -527,13 +640,13 @@ function addReplace(
 	ranges: Array<Range<Decoration>>,
 	from: number,
 	to: number,
-	widget?: WidgetType,
+	block = false,
 ): void {
 	if (to <= from) return;
 	ranges.push(
 		Decoration.replace({
-			widget,
 			inclusive: false,
+			block,
 		}).range(from, to),
 	);
 }
@@ -546,29 +659,5 @@ function addAtom(ranges: Array<Range<Decoration>>, from: number, to: number): vo
 const criticMarkupTheme = EditorView.baseTheme({
 	"&": {
 		position: "relative",
-	},
-	".cm-critic-addition": {
-		backgroundColor: "rgba(46, 160, 67, 0.16)",
-		borderBottom: "1px solid rgba(46, 160, 67, 0.75)",
-	},
-	".cm-critic-deletion": {
-		backgroundColor: "rgba(218, 54, 51, 0.14)",
-		color: "var(--text-muted)",
-		textDecoration: "line-through",
-		textDecorationThickness: "1.5px",
-	},
-	".cm-critic-highlight": {
-		backgroundColor: "rgba(227, 179, 65, 0.32)",
-		borderRadius: "2px",
-	},
-	".cm-critic-comment-raw": {
-		color: "var(--text-accent)",
-	},
-	".cm-critic-invalid": {
-		textDecoration: "underline wavy var(--text-error)",
-	},
-	".cm-critic-invalid-widget": {
-		color: "var(--text-error)",
-		borderBottom: "1px wavy var(--text-error)",
 	},
 });

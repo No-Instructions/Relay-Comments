@@ -35,12 +35,3 @@ export function applyMarkAction(
 		text.slice(mark.to)
 	);
 }
-
-export function applyAllMarkActions(text: string, action: CriticAction): string {
-	const marks = parseCriticMarkup(text).filter((mark) => mark.valid);
-	let next = text;
-	for (let i = marks.length - 1; i >= 0; i--) {
-		next = applyMarkAction(next, marks[i], action);
-	}
-	return next;
-}

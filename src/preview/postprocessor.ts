@@ -1,5 +1,9 @@
-import { setIcon, type MarkdownPostProcessorContext } from "obsidian";
-import { renderDisplaySegments } from "../critic/render";
+import {
+	type MarkdownPostProcessorContext,
+	type MarkdownSectionInformation,
+} from "obsidian";
+import { parseCriticMarkup } from "../critic/parse";
+import { renderDisplaySegments, renderSliceSegments } from "../critic/render";
 import type { DisplayMode, RenderSegment } from "../critic/types";
 
 export interface PreviewDisplayController {
@@ -69,11 +73,65 @@ function rewriteSourceBackedElements(
 		const section = ctx.getSectionInfo(candidate);
 		const source = section?.text;
 		if (!source || !SOURCE_PATTERN.test(source)) continue;
+		if (section && rewriteMultilineSlice(candidate, section, mode)) {
+			rewritten.add(candidate);
+			continue;
+		}
 		const sourceText = selectSourceTextForElement(candidate, source);
 		if (!sourceText) continue;
 		rewriteElementFromSource(candidate, normalizeSectionText(candidate, sourceText), mode);
 		rewritten.add(candidate);
 	}
+}
+
+/**
+ * Render a section that intersects a mark spanning line breaks. Uses the
+ * section's exact offsets in the full note source, so a mark crossing
+ * section boundaries renders each of its slices correctly.
+ */
+function rewriteMultilineSlice(
+	el: HTMLElement,
+	section: MarkdownSectionInformation,
+	mode: DisplayMode,
+): boolean {
+	// Only plain paragraphs: other blocks (lists, quotes, headings) carry
+	// per-line Markdown prefixes that offset-based slicing can't honor.
+	if (el.tagName !== "P") return false;
+
+	const text = section.text;
+	const lines = text.split("\n");
+	if (section.lineStart >= lines.length) return false;
+	let from = 0;
+	for (let i = 0; i < section.lineStart; i += 1) {
+		from += lines[i].length + 1;
+	}
+	let to = from;
+	const lastLine = Math.min(section.lineEnd, lines.length - 1);
+	for (let i = section.lineStart; i <= lastLine; i += 1) {
+		to += lines[i].length + 1;
+	}
+	to = Math.min(to - 1, text.length);
+
+	const crossesLines = parseCriticMarkup(text).some(
+		(mark) =>
+			mark.valid &&
+			mark.raw.includes("\n") &&
+			mark.from < to &&
+			mark.to > from,
+	);
+	if (!crossesLines) return false;
+	if (!elementCoversSource(el, text.slice(from, to))) return false;
+
+	const segments = renderSliceSegments(text, from, to, mode);
+	if (segments.length === 1 && segments[0].kind === "text") return false;
+
+	const fragment = el.ownerDocument.createDocumentFragment();
+	for (const segment of segments) {
+		appendSegment(fragment, segment);
+	}
+	el.replaceChildren(fragment);
+	el.addClass("critic-preview-source-rendered");
+	return true;
 }
 
 function selectSourceTextForElement(
@@ -90,6 +148,17 @@ function selectSourceTextForElement(
 	if (sourceLines.length === 0) return null;
 	if (sourceLines.length === 1) return sourceLines[0];
 
+	// Marks spanning line breaks cannot be reconstructed line by line; the
+	// slice-based path handles paragraphs, and other blocks are left with
+	// visible source rather than risking corruption.
+	if (
+		parseCriticMarkup(sectionSource).some(
+			(mark) => mark.valid && mark.raw.includes("\n"),
+		)
+	) {
+		return null;
+	}
+
 	const domWords = words(domText);
 	let bestLine: string | null = null;
 	let bestScore = 0;
@@ -104,6 +173,19 @@ function selectSourceTextForElement(
 		}
 	}
 	return bestScore > 0 ? bestLine : null;
+}
+
+function elementCoversSource(el: HTMLElement, source: string): boolean {
+	const domWords = words(el.textContent ?? "");
+	const sourceWords = words(`${source} ${getRenderedSearchText(source)}`);
+	if (domWords.length === 0 || sourceWords.length === 0) return false;
+	const domInSource =
+		domWords.filter((word) => sourceWords.includes(word)).length /
+		domWords.length;
+	const sourceInDom =
+		sourceWords.filter((word) => domWords.includes(word)).length /
+		sourceWords.length;
+	return domInSource >= 0.7 && sourceInDom >= 0.7;
 }
 
 function getRenderedSearchText(source: string): string {
@@ -174,7 +256,11 @@ function replaceTextNode(node: Text, mode: DisplayMode): void {
 
 function appendSegment(parent: DocumentFragment, segment: RenderSegment): void {
 	if (segment.kind === "text") {
-		parent.append(segment.text);
+		const parts = segment.text.split("\n");
+		parts.forEach((part, index) => {
+			if (index > 0) parent.append(parent.ownerDocument.createElement("br"));
+			if (part.length > 0) parent.append(part);
+		});
 		return;
 	}
 
@@ -189,12 +275,7 @@ function appendSegment(parent: DocumentFragment, segment: RenderSegment): void {
 					: "span";
 	const el = doc.createElement(tag);
 	el.className = `critic-preview-${segment.kind}`;
-	if (segment.kind === "comment") {
-		setIcon(el, "message-square");
-		el.setAttribute("aria-label", "Comment");
-	} else {
-		el.textContent = segment.text;
-	}
+	el.textContent = segment.text;
 	if (segment.title) el.title = segment.title;
 	parent.append(el);
 }

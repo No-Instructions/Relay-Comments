@@ -21,16 +21,129 @@ const METADATA_COMMENT_CLOSE = "<<}}";
 
 export function parseCriticMarkup(text: string): CriticMark[] {
 	const marks: CriticMark[] = [];
-	let lineStart = 0;
-	let line = 0;
+	const lineAt = createLineTracker(text);
+	let cursor = 0;
 
-	while (lineStart <= text.length) {
-		const nextNewline = text.indexOf("\n", lineStart);
-		const lineEnd = nextNewline === -1 ? text.length : nextNewline;
-		parseLine(text.slice(lineStart, lineEnd), lineStart, line, marks);
-		if (nextNewline === -1) break;
-		lineStart = nextNewline + 1;
-		line += 1;
+	while (cursor < text.length) {
+		const start = text.indexOf("{", cursor);
+		if (start === -1) break;
+
+		if (text.startsWith(METADATA_COMMENT_OPEN, start)) {
+			const mark = parseMetadataComment(text, start, lineAt);
+			if (mark) {
+				marks.push(mark);
+				cursor = mark.to;
+			} else {
+				// Not a metadata comment; the next char may still open a
+				// standard mark ("{{++…"), so only skip one character.
+				cursor = start + 1;
+			}
+			continue;
+		}
+
+		const syntax = SYNTAX.find((candidate) =>
+			text.startsWith(candidate.open, start),
+		);
+		if (!syntax) {
+			cursor = start + 1;
+			continue;
+		}
+
+		const contentStart = start + syntax.open.length;
+		const closeStart = text.indexOf(syntax.close, contentStart);
+		if (closeStart === -1) {
+			// Unclosed marker (often mid-typing). Flag only its own line so we
+			// never swallow the rest of the document.
+			const lineEnd = endOfLine(text, start);
+			marks.push(
+				makeInvalidMark(
+					syntax.type,
+					text,
+					start,
+					lineEnd,
+					contentStart,
+					"Unclosed CriticMarkup mark.",
+					lineAt(start),
+				),
+			);
+			cursor = lineEnd;
+			continue;
+		}
+
+		const closeEnd = closeStart + syntax.close.length;
+		const raw = text.slice(start, closeEnd);
+		const rawContent = text.slice(contentStart, closeStart);
+		const nested = containsNestedCriticMarkup(rawContent);
+		const line = lineAt(start);
+
+		if (syntax.type === "substitution") {
+			const separator = rawContent.indexOf("~>");
+			if (separator === -1) {
+				marks.push(
+					makeInvalidMark(
+						syntax.type,
+						text,
+						start,
+						closeEnd,
+						contentStart,
+						"Substitution marks require a ~> separator.",
+						line,
+					),
+				);
+			} else {
+				const oldFrom = contentStart;
+				const oldTo = oldFrom + separator;
+				const separatorTo = oldTo + 2;
+				marks.push({
+					id: makeMarkId(syntax.type, start, closeEnd, raw),
+					type: syntax.type,
+					from: start,
+					to: closeEnd,
+					raw,
+					content: rawContent,
+					oldText: rawContent.slice(0, separator),
+					newText: rawContent.slice(separator + 2),
+					contentFrom: contentStart,
+					contentTo: closeStart,
+					line,
+					ranges: {
+						opening: [start, contentStart],
+						oldText: [oldFrom, oldTo],
+						separator: [oldTo, separatorTo],
+						newText: [separatorTo, closeStart],
+						closing: [closeStart, closeEnd],
+					},
+					valid: !nested,
+					error: nested
+						? "Nested CriticMarkup is not supported yet."
+						: undefined,
+				});
+			}
+		} else {
+			marks.push({
+				id: makeMarkId(syntax.type, start, closeEnd, raw),
+				type: syntax.type,
+				from: start,
+				to: closeEnd,
+				raw,
+				content: rawContent,
+				contentFrom: contentStart,
+				contentTo: closeStart,
+				line,
+				ranges: {
+					opening: [start, contentStart],
+					closing: [closeStart, closeEnd],
+					commentText:
+						syntax.type === "comment"
+							? [contentStart, closeStart]
+							: undefined,
+				},
+				valid: !nested,
+				error: nested ? "Nested CriticMarkup is not supported yet." : undefined,
+			});
+		}
+
+		cursor = closeEnd;
 	}
 
 	return marks;
@@ -59,163 +172,36 @@ export function findFirstMarkInRange(
 	);
 }
 
-function parseLine(
-	lineText: string,
-	lineStart: number,
-	line: number,
-	marks: CriticMark[],
-): void {
-	let cursor = 0;
-	while (cursor < lineText.length) {
-		const start = lineText.indexOf("{", cursor);
-		if (start === -1) return;
-
-		if (lineText.startsWith(METADATA_COMMENT_OPEN, start)) {
-			const mark = parseMetadataComment(lineText, lineStart, line, start);
-			if (mark) {
-				marks.push(mark);
-				cursor = mark.to - lineStart;
-			} else {
-				cursor = start + METADATA_COMMENT_OPEN.length;
-			}
-			continue;
-		}
-
-		const syntax = SYNTAX.find((candidate) =>
-			lineText.startsWith(candidate.open, start),
-		);
-		if (!syntax) {
-			cursor = start + 1;
-			continue;
-		}
-
-		const contentStart = start + syntax.open.length;
-		const closeStart = lineText.indexOf(syntax.close, contentStart);
-		if (closeStart === -1) {
-			marks.push(
-				makeInvalidMark(
-					syntax,
-					lineText,
-					lineStart,
-					line,
-					start,
-					lineText.length,
-					"Multiline or unclosed CriticMarkup is not supported yet.",
-				),
-			);
-			return;
-		}
-
-		const closeEnd = closeStart + syntax.close.length;
-		const absoluteFrom = lineStart + start;
-		const absoluteTo = lineStart + closeEnd;
-		const raw = lineText.slice(start, closeEnd);
-		const rawContent = lineText.slice(contentStart, closeStart);
-		const nested = containsNestedCriticMarkup(rawContent);
-
-		if (syntax.type === "substitution") {
-			const separator = rawContent.indexOf("~>");
-			if (separator === -1) {
-				marks.push(
-					makeInvalidMark(
-						syntax,
-						lineText,
-						lineStart,
-						line,
-						start,
-						closeEnd,
-						"Substitution marks require a ~> separator.",
-					),
-				);
-			} else {
-				const oldFrom = lineStart + contentStart;
-				const oldTo = oldFrom + separator;
-				const separatorFrom = oldTo;
-				const separatorTo = separatorFrom + 2;
-				const newFrom = separatorTo;
-				const newTo = lineStart + closeStart;
-				marks.push({
-					id: makeMarkId(syntax.type, absoluteFrom, absoluteTo, raw),
-					type: syntax.type,
-					from: absoluteFrom,
-					to: absoluteTo,
-					raw,
-					content: rawContent,
-					oldText: rawContent.slice(0, separator),
-					newText: rawContent.slice(separator + 2),
-					contentFrom: lineStart + contentStart,
-					contentTo: lineStart + closeStart,
-					line,
-					ranges: {
-						opening: [absoluteFrom, lineStart + contentStart],
-						oldText: [oldFrom, oldTo],
-						separator: [separatorFrom, separatorTo],
-						newText: [newFrom, newTo],
-						closing: [lineStart + closeStart, absoluteTo],
-					},
-					valid: !nested,
-					error: nested
-						? "Nested CriticMarkup is not supported yet."
-						: undefined,
-				});
-			}
-		} else {
-			marks.push({
-				id: makeMarkId(syntax.type, absoluteFrom, absoluteTo, raw),
-				type: syntax.type,
-				from: absoluteFrom,
-				to: absoluteTo,
-				raw,
-				content: rawContent,
-				contentFrom: lineStart + contentStart,
-				contentTo: lineStart + closeStart,
-				line,
-				ranges: {
-					opening: [absoluteFrom, lineStart + contentStart],
-					closing: [lineStart + closeStart, absoluteTo],
-					commentText:
-						syntax.type === "comment"
-							? [lineStart + contentStart, lineStart + closeStart]
-							: undefined,
-				},
-				valid: !nested,
-				error: nested ? "Nested CriticMarkup is not supported yet." : undefined,
-			});
-		}
-
-		cursor = closeEnd;
-	}
-}
-
 function parseMetadataComment(
-	lineText: string,
-	lineStart: number,
-	line: number,
+	text: string,
 	start: number,
+	lineAt: (offset: number) => number,
 ): CriticMark | null {
 	const metadataStart = start + METADATA_COMMENT_OPEN.length;
-	const separatorStart = lineText.indexOf(
-		METADATA_COMMENT_SEPARATOR,
-		metadataStart,
-	);
-	if (separatorStart === -1) return null;
+	// The metadata section must stay on the opening line; otherwise any "{{"
+	// would greedily pair with a ">>" much later in the document.
+	const openLineEnd = endOfLine(text, start);
+	const separatorStart = text.indexOf(METADATA_COMMENT_SEPARATOR, metadataStart);
+	if (separatorStart === -1 || separatorStart >= openLineEnd) return null;
 
 	const contentStart = separatorStart + METADATA_COMMENT_SEPARATOR.length;
-	const closeStart = lineText.indexOf(METADATA_COMMENT_CLOSE, contentStart);
+	const metadataRaw = text.slice(metadataStart, separatorStart);
+	const line = lineAt(start);
+	const closeStart = text.indexOf(METADATA_COMMENT_CLOSE, contentStart);
 	if (closeStart === -1) {
-		const to = lineText.length;
-		const raw = lineText.slice(start, to);
+		const to = openLineEnd;
+		const raw = text.slice(start, to);
 		return {
-			id: makeMarkId("comment", lineStart + start, lineStart + to, raw),
+			id: makeMarkId("comment", start, to, raw),
 			type: "comment",
-			from: lineStart + start,
-			to: lineStart + to,
+			from: start,
+			to,
 			raw,
 			content: "",
-			contentFrom: lineStart + contentStart,
-			contentTo: lineStart + to,
-			metadataRaw: lineText.slice(metadataStart, separatorStart),
-			metadata: parseMetadata(lineText.slice(metadataStart, separatorStart)),
+			contentFrom: contentStart,
+			contentTo: to,
+			metadataRaw,
+			metadata: parseMetadata(metadataRaw),
 			line,
 			ranges: {},
 			valid: false,
@@ -224,29 +210,26 @@ function parseMetadataComment(
 	}
 
 	const closeEnd = closeStart + METADATA_COMMENT_CLOSE.length;
-	const absoluteFrom = lineStart + start;
-	const absoluteTo = lineStart + closeEnd;
-	const raw = lineText.slice(start, closeEnd);
-	const metadataRaw = lineText.slice(metadataStart, separatorStart);
-	const content = lineText.slice(contentStart, closeStart);
+	const raw = text.slice(start, closeEnd);
+	const content = text.slice(contentStart, closeStart);
 	const nested = containsNestedCriticMarkup(content);
 
 	return {
-		id: makeMarkId("comment", absoluteFrom, absoluteTo, raw),
+		id: makeMarkId("comment", start, closeEnd, raw),
 		type: "comment",
-		from: absoluteFrom,
-		to: absoluteTo,
+		from: start,
+		to: closeEnd,
 		raw,
 		content,
-		contentFrom: lineStart + contentStart,
-		contentTo: lineStart + closeStart,
+		contentFrom: contentStart,
+		contentTo: closeStart,
 		metadataRaw,
 		metadata: parseMetadata(metadataRaw),
 		line,
 		ranges: {
-			opening: [absoluteFrom, lineStart + contentStart],
-			closing: [lineStart + closeStart, absoluteTo],
-			commentText: [lineStart + contentStart, lineStart + closeStart],
+			opening: [start, contentStart],
+			closing: [closeStart, closeEnd],
+			commentText: [contentStart, closeStart],
 		},
 		valid: !nested,
 		error: nested ? "Nested CriticMarkup is not supported yet." : undefined,
@@ -254,28 +237,52 @@ function parseMetadataComment(
 }
 
 function makeInvalidMark(
-	syntax: SyntaxDef,
-	lineText: string,
-	lineStart: number,
-	line: number,
+	type: CriticMarkType,
+	text: string,
 	from: number,
 	to: number,
+	contentFrom: number,
 	error: string,
+	line: number,
 ): CriticMark {
-	const raw = lineText.slice(from, to);
+	const raw = text.slice(from, to);
 	return {
-		id: makeMarkId(syntax.type, lineStart + from, lineStart + to, raw),
-		type: syntax.type,
-		from: lineStart + from,
-		to: lineStart + to,
+		id: makeMarkId(type, from, to, raw),
+		type,
+		from,
+		to,
 		raw,
 		content: "",
-		contentFrom: lineStart + from + syntax.open.length,
-		contentTo: lineStart + to,
+		contentFrom,
+		contentTo: to,
 		line,
 		ranges: {},
 		valid: false,
 		error,
+	};
+}
+
+function endOfLine(text: string, offset: number): number {
+	const nextNewline = text.indexOf("\n", offset);
+	return nextNewline === -1 ? text.length : nextNewline;
+}
+
+function createLineTracker(text: string): (offset: number) => number {
+	let scanned = 0;
+	let line = 0;
+	return (offset: number): number => {
+		if (offset < scanned) {
+			scanned = 0;
+			line = 0;
+		}
+		while (scanned < offset) {
+			const nextNewline = text.indexOf("\n", scanned);
+			if (nextNewline === -1 || nextNewline >= offset) break;
+			line += 1;
+			scanned = nextNewline + 1;
+		}
+		scanned = offset;
+		return line;
 	};
 }
 

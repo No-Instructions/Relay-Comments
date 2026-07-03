@@ -1,6 +1,8 @@
 import type { CriticMark } from "./types";
 
-export const CRITIC_SECTION_SEPARATOR = "\n";
+// New threads are written adjacent to their anchor ({==text==}{>>comment<<});
+// legacy content separated by a single newline still parses as one thread.
+export const CRITIC_SECTION_SEPARATOR = "";
 
 export interface AttachedComments {
 	comments: CriticMark[];
@@ -12,9 +14,13 @@ export function collectAttachedComments(
 	text: string,
 	anchorIndex: number,
 	consumed?: Set<string>,
+	options: { allowCommentAnchor?: boolean } = {},
 ): AttachedComments {
 	const anchor = marks[anchorIndex];
-	if (!anchor?.valid || anchor.type === "comment") {
+	if (
+		!anchor?.valid ||
+		(anchor.type === "comment" && !options.allowCommentAnchor)
+	) {
 		return { comments: [], separatorRanges: [] };
 	}
 

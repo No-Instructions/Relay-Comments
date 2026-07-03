@@ -4,11 +4,7 @@ import {
 	findMarkAtOffset,
 	parseCriticMarkup,
 } from "../critic/parse";
-import {
-	applyAllMarkActions,
-	replacementForMark,
-	type CriticAction,
-} from "../critic/transform";
+import { replacementForMark, type CriticAction } from "../critic/transform";
 import type { CriticMark } from "../critic/types";
 import { promptText } from "../ui/PromptModal";
 
@@ -23,7 +19,11 @@ export function wrapSelection(
 		highlight: ["{==", "==}"],
 	} as const;
 	const [open, close] = wrappers[type];
+	const insertionStart = editor.posToOffset(editor.getCursor("from"));
 	editor.replaceSelection(`${open}${selection}${close}`, "criticmarkup");
+	if (selection.length === 0) {
+		editor.setCursor(editor.offsetToPos(insertionStart + open.length));
+	}
 }
 
 export async function addSubstitution(app: App, editor: Editor): Promise<void> {
@@ -50,13 +50,25 @@ export function applyCurrentMarkAction(
 }
 
 export function applyAllInEditor(editor: Editor, action: CriticAction): void {
-	const text = editor.getValue();
-	const next = applyAllMarkActions(text, action);
-	if (next === text) {
+	const marks = parseCriticMarkup(editor.getValue()).filter(
+		(mark) => mark.valid,
+	);
+	if (marks.length === 0) {
 		new Notice("No CriticMarkup marks to update.");
 		return;
 	}
-	editor.setValue(next);
+	// One transaction with per-mark changes keeps undo atomic and avoids the
+	// whole-document rewrite that setValue would push through collaboration.
+	editor.transaction(
+		{
+			changes: marks.map((mark) => ({
+				from: editor.offsetToPos(mark.from),
+				to: editor.offsetToPos(mark.to),
+				text: replacementForMark(mark, action),
+			})),
+		},
+		"criticmarkup",
+	);
 }
 
 export function replaceMark(
