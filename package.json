@@ -21,8 +21,8 @@
 	"author": "System 3",
 	"license": "MIT",
 	"devDependencies": {
-		"@codemirror/state": "^6.4.1",
-		"@codemirror/view": "^6.26.3",
+		"@codemirror/state": "6.5.0",
+		"@codemirror/view": "6.38.6",
 		"@types/jest": "^29.5.14",
 		"@types/node": "^16.11.6",
 		"builtin-modules": "^3.3.0",
