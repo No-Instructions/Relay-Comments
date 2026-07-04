@@ -3,18 +3,16 @@
    ============================================================ */
 
 .relay-comments-settings-tab {
-	position: relative;
-	min-height: 100%;
-	padding-bottom: 28px;
+	padding-bottom: 8px;
 }
 
 .relay-comments-settings-version {
-	position: absolute;
-	right: 0;
-	bottom: 0;
+	width: fit-content;
+	margin: 18px 0 0 auto;
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
 	line-height: 1.2;
+	text-align: right;
 	user-select: text;
 }
 
