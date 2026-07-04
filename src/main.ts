@@ -27,6 +27,7 @@ import {
 	createReviewEditorExtension,
 	type ReviewEditorController,
 } from "./editor/extension";
+import { ADD_COMMENT_HOTKEYS } from "./editor/hotkeys";
 import { createReviewPostProcessor } from "./preview/postprocessor";
 import {
 	DEFAULT_SETTINGS,
@@ -146,13 +147,6 @@ interface RelayPluginLike {
 	};
 	sharedFolders?: RelaySharedFoldersLike;
 }
-
-const ADD_COMMENT_HOTKEYS: Hotkey[] = [
-	// Ctrl-Alt-M on Windows/Linux, Command-Option-M on macOS.
-	{ modifiers: ["Mod", "Alt"], key: "m" },
-	// macOS Option-M reports as "µ" in KeyboardEvent.key on common layouts.
-	{ modifiers: ["Mod", "Alt"], key: "µ" },
-];
 
 export default class RelayCommentsPlugin
 	extends Plugin
