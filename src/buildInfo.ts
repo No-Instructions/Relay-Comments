@@ -1,3 +1,5 @@
+declare const __RELAY_COMMENTS_VERSION__: string;
 declare const __RELAY_COMMENTS_BUILD_ID__: string;
 
+export const RELAY_COMMENTS_VERSION = __RELAY_COMMENTS_VERSION__;
 export const RELAY_COMMENTS_BUILD_ID = __RELAY_COMMENTS_BUILD_ID__;

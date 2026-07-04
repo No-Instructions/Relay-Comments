@@ -1,6 +1,7 @@
 import esbuild from "esbuild";
 import builtins from "builtin-modules";
 import { execFileSync } from "child_process";
+import { readFileSync } from "fs";
 import process from "process";
 
 const banner = `/*
@@ -44,7 +45,19 @@ function getBuildId() {
 	return trackedChanges ? `${shortCommit}-dirty` : shortCommit;
 }
 
+function getManifestVersion() {
+	try {
+		const manifest = JSON.parse(readFileSync("manifest.json", "utf8"));
+		return typeof manifest.version === "string" && manifest.version.trim()
+			? manifest.version.trim()
+			: "0.0.0";
+	} catch {
+		return "0.0.0";
+	}
+}
+
 const buildId = getBuildId();
+const manifestVersion = getManifestVersion();
 
 const context = await esbuild.context({
 	banner: { js: banner },
@@ -62,6 +75,7 @@ const context = await esbuild.context({
 	minify: production,
 	logLevel: "info",
 	define: {
+		__RELAY_COMMENTS_VERSION__: JSON.stringify(manifestVersion),
 		__RELAY_COMMENTS_BUILD_ID__: JSON.stringify(buildId),
 	},
 	sourcemap: production ? false : "inline",

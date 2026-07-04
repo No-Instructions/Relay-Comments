@@ -1,5 +1,8 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
-import { RELAY_COMMENTS_BUILD_ID } from "./buildInfo";
+import {
+	RELAY_COMMENTS_BUILD_ID,
+	RELAY_COMMENTS_VERSION,
+} from "./buildInfo";
 import type RelayCommentsPlugin from "./main";
 
 export {
@@ -49,7 +52,7 @@ export class RelayCommentsSettingTab extends PluginSettingTab {
 	}
 
 	private renderVersionLabel(containerEl: HTMLElement): void {
-		const version = this.plugin.manifest.version || "0.0.0";
+		const version = RELAY_COMMENTS_VERSION || "0.0.0";
 		const buildId = RELAY_COMMENTS_BUILD_ID || "dev";
 		const label = `${version} · ${buildId}`;
 
