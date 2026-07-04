@@ -175,7 +175,7 @@ export default class RelayCommentsPlugin
 		this.addSettingTab(new RelayCommentsSettingTab(this.app, this));
 
 		this.addRibbonIcon("message-square-text", "Open Relay Comments", () => {
-			void this.openReviewSidebar();
+			void this.toggleReviewSidebarFromRibbon();
 		});
 
 		this.registerCommands();
@@ -722,12 +722,34 @@ export default class RelayCommentsPlugin
 		this.refreshReviewSidebars();
 	}
 
-	closeReviewSidebar(): void {
-		this.reviewSidebarOpenPromise = null;
-		for (const leaf of this.app.workspace.getLeavesOfType(
+	private async toggleReviewSidebarFromRibbon(): Promise<void> {
+		const existing = this.app.workspace.getLeavesOfType(
 			VIEW_TYPE_CRITIC_REVIEW,
-		)) {
-			leaf.detach();
+		)[0];
+		if (existing && this.isReviewSidebarActiveVisible(existing)) {
+			this.closeReviewSidebar(existing);
+			return;
+		}
+		await this.openReviewSidebar();
+	}
+
+	private isReviewSidebarActiveVisible(leaf: WorkspaceLeaf): boolean {
+		const rightSplit = (
+			this.app.workspace as typeof this.app.workspace & {
+				rightSplit?: { collapsed?: boolean };
+			}
+		).rightSplit;
+		return this.app.workspace.activeLeaf === leaf && rightSplit?.collapsed !== true;
+	}
+
+	closeReviewSidebar(leaf?: WorkspaceLeaf): void {
+		this.reviewSidebarOpenPromise = null;
+		const leaves =
+			leaf !== undefined
+				? [leaf]
+				: this.app.workspace.getLeavesOfType(VIEW_TYPE_CRITIC_REVIEW);
+		for (const reviewLeaf of leaves) {
+			reviewLeaf.detach();
 		}
 	}
 

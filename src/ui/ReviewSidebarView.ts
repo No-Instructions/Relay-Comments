@@ -279,7 +279,7 @@ export class ReviewSidebarView extends ItemView {
 		setIcon(closeButton, "x");
 		closeButton.addEventListener("click", (event) => {
 			event.stopPropagation();
-			this.plugin.closeReviewSidebar();
+			this.plugin.closeReviewSidebar(this.leaf);
 		});
 	}
 
