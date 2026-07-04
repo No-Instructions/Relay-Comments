@@ -3,6 +3,7 @@ import {
 	Notice,
 	Plugin,
 	type Editor,
+	type Hotkey,
 	type MarkdownFileInfo,
 	type Menu,
 	type TFile,
@@ -145,6 +146,13 @@ interface RelayPluginLike {
 	};
 	sharedFolders?: RelaySharedFoldersLike;
 }
+
+const ADD_COMMENT_HOTKEYS: Hotkey[] = [
+	// Ctrl-Alt-M on Windows/Linux, Command-Option-M on macOS.
+	{ modifiers: ["Mod", "Alt"], key: "m" },
+	// macOS Option-M reports as "µ" in KeyboardEvent.key on common layouts.
+	{ modifiers: ["Mod", "Alt"], key: "µ" },
+];
 
 export default class RelayCommentsPlugin
 	extends Plugin
@@ -760,8 +768,11 @@ export default class RelayCommentsPlugin
 		this.addEditorCommand("add-substitution", "Mark selection as substitution", (editor) =>
 			addSubstitution(this.app, editor),
 		);
-		this.addEditorCommand("add-comment", "Add comment", (editor) =>
-			this.startCommentDraftFromEditor(editor),
+		this.addEditorCommand(
+			"add-comment",
+			"Add comment",
+			(editor) => this.startCommentDraftFromEditor(editor),
+			ADD_COMMENT_HOTKEYS,
 		);
 		this.addEditorCommand("add-highlight", "Highlight selection", (editor) =>
 			wrapSelection(editor, "highlight"),
@@ -792,10 +803,12 @@ export default class RelayCommentsPlugin
 		id: string,
 		name: string,
 		callback: (editor: Editor) => void | Promise<void>,
+		hotkeys?: Hotkey[],
 	): void {
 		this.addCommand({
 			id,
 			name,
+			hotkeys,
 			editorCallback: async (editor) => {
 				await callback(editor);
 				this.refreshReviewSidebars();
