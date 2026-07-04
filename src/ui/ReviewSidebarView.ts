@@ -220,13 +220,11 @@ export class ReviewSidebarView extends ItemView {
 		root.addClass("critic-sidebar");
 
 		const state = this.plugin.getActiveReviewState();
+		this.renderHeader(root, state?.file.basename ?? "Relay Comments");
 		if (!state) {
 			this.renderEmptyState(root, "Open a Markdown note to review comments and suggestions.");
 			return;
 		}
-
-		const header = root.createDiv({ cls: "critic-sidebar-header" });
-		header.createEl("h3", { text: state.file.basename });
 
 		const validMarks = state.marks
 			.filter((mark) => mark.valid)
@@ -268,6 +266,21 @@ export class ReviewSidebarView extends ItemView {
 			}
 		}
 		this.scrollSelectedIntoView(list, visiblySelectedId);
+	}
+
+	private renderHeader(root: HTMLElement, title: string): void {
+		const header = root.createDiv({ cls: "critic-sidebar-header" });
+		header.createEl("h3", { text: title });
+		const closeButton = header.createEl("button", {
+			cls: "critic-icon-button critic-sidebar-close-button",
+			attr: { "aria-label": "Close review sidebar" },
+		});
+		setTooltip(closeButton, "Close review sidebar");
+		setIcon(closeButton, "x");
+		closeButton.addEventListener("click", (event) => {
+			event.stopPropagation();
+			this.plugin.closeReviewSidebar();
+		});
 	}
 
 	private renderEmptyState(root: HTMLElement, text: string): void {

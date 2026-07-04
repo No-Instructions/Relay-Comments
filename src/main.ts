@@ -244,6 +244,10 @@ export default class RelayCommentsPlugin
 			return;
 		}
 
+		if (!this.settings.openSidebarOnCommentSelect) {
+			return;
+		}
+
 		void this.openReviewSidebar().then(() => {
 			activate(this.app.workspace.getLeavesOfType(VIEW_TYPE_CRITIC_REVIEW)[0]);
 		});
@@ -696,11 +700,6 @@ export default class RelayCommentsPlugin
 	}
 
 	async openReviewSidebar(): Promise<void> {
-		if (!this.settings.enableReviewSidebar) {
-			new Notice("Enable the Relay Comments sidebar in settings.");
-			return;
-		}
-
 		if (this.reviewSidebarOpenPromise) {
 			return this.reviewSidebarOpenPromise;
 		}
@@ -723,6 +722,15 @@ export default class RelayCommentsPlugin
 		this.refreshReviewSidebars();
 	}
 
+	closeReviewSidebar(): void {
+		this.reviewSidebarOpenPromise = null;
+		for (const leaf of this.app.workspace.getLeavesOfType(
+			VIEW_TYPE_CRITIC_REVIEW,
+		)) {
+			leaf.detach();
+		}
+	}
+
 	refreshReviewSidebars(): void {
 		for (const leaf of this.app.workspace.getLeavesOfType(
 			VIEW_TYPE_CRITIC_REVIEW,
@@ -740,8 +748,10 @@ export default class RelayCommentsPlugin
 				loaded?.showAuthorChips ?? DEFAULT_SETTINGS.showAuthorChips,
 			showInlineActions:
 				loaded?.showInlineActions ?? DEFAULT_SETTINGS.showInlineActions,
-			enableReviewSidebar:
-				loaded?.enableReviewSidebar ?? DEFAULT_SETTINGS.enableReviewSidebar,
+			openSidebarOnCommentSelect:
+				loaded?.openSidebarOnCommentSelect ??
+				loaded?.enableReviewSidebar ??
+				DEFAULT_SETTINGS.openSidebarOnCommentSelect,
 		};
 	}
 
@@ -751,6 +761,13 @@ export default class RelayCommentsPlugin
 			name: "Open review sidebar",
 			callback: () => {
 				void this.openReviewSidebar();
+			},
+		});
+		this.addCommand({
+			id: "close-review-sidebar",
+			name: "Close review sidebar",
+			callback: () => {
+				this.closeReviewSidebar();
 			},
 		});
 		this.addEditorCommand("add-addition", "Mark selection as addition", (editor) =>

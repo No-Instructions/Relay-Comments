@@ -4,13 +4,13 @@ import type RelayCommentsPlugin from "./main";
 export interface RelayCommentsSettings {
 	showAuthorChips: boolean;
 	showInlineActions: boolean;
-	enableReviewSidebar: boolean;
+	openSidebarOnCommentSelect: boolean;
 }
 
 export const DEFAULT_SETTINGS: RelayCommentsSettings = {
 	showAuthorChips: true,
 	showInlineActions: true,
-	enableReviewSidebar: true,
+	openSidebarOnCommentSelect: true,
 };
 
 export class RelayCommentsSettingTab extends PluginSettingTab {
@@ -24,13 +24,15 @@ export class RelayCommentsSettingTab extends PluginSettingTab {
 		containerEl.createEl("h2", { text: "Relay Comments" });
 
 		new Setting(containerEl)
-			.setName("Review sidebar")
-			.setDesc("Enable the document-scoped sidebar for comments and suggestions.")
+			.setName("Open sidebar when selecting comments")
+			.setDesc(
+				"When you select a comment in the note, open the review sidebar if it is not already open.",
+			)
 			.addToggle((toggle) => {
 				toggle
-					.setValue(this.plugin.settings.enableReviewSidebar)
+					.setValue(this.plugin.settings.openSidebarOnCommentSelect)
 					.onChange(async (value) => {
-						this.plugin.settings.enableReviewSidebar = value;
+						this.plugin.settings.openSidebarOnCommentSelect = value;
 						await this.plugin.saveSettingsAndRefresh();
 					});
 			});
