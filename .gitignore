@@ -17,4 +17,5 @@ CLAUDE.md
 .igitignore
 test-results/
 tests/integration/
+tests/demos/
 wiki/
