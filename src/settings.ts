@@ -1,4 +1,5 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
+import { RELAY_COMMENTS_BUILD_ID } from "./buildInfo";
 import type RelayCommentsPlugin from "./main";
 
 export {
@@ -15,6 +16,7 @@ export class RelayCommentsSettingTab extends PluginSettingTab {
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
+		containerEl.addClass("relay-comments-settings-tab");
 		containerEl.createEl("h2", { text: "Relay Comments" });
 
 		new Setting(containerEl)
@@ -42,5 +44,22 @@ export class RelayCommentsSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettingsAndRefresh();
 					});
 			});
+
+		this.renderVersionLabel(containerEl);
+	}
+
+	private renderVersionLabel(containerEl: HTMLElement): void {
+		const version = this.plugin.manifest.version || "0.0.0";
+		const buildId = RELAY_COMMENTS_BUILD_ID || "dev";
+		const label = `${version} · ${buildId}`;
+
+		containerEl.createDiv({
+			cls: "relay-comments-settings-version",
+			text: label,
+			attr: {
+				"aria-label": `Relay Comments version ${version}, build ${buildId}`,
+				title: `Relay Comments ${label}`,
+			},
+		});
 	}
 }

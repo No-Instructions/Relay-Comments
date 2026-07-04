@@ -1,4 +1,24 @@
 /* ============================================================
+   Settings
+   ============================================================ */
+
+.relay-comments-settings-tab {
+	position: relative;
+	min-height: 100%;
+	padding-bottom: 28px;
+}
+
+.relay-comments-settings-version {
+	position: absolute;
+	right: 0;
+	bottom: 0;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.2;
+	user-select: text;
+}
+
+/* ============================================================
    Inline marks (Live Preview + Reading mode)
    ============================================================ */
 
