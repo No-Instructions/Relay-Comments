@@ -12,6 +12,7 @@ __pycache__/
 # developer harness (igit-owned, including integration tests)
 .claude/
 .githooks/
+CLAUDE.md
 .igit/
 .igitignore
 test-results/
