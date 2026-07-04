@@ -34,9 +34,10 @@ jobs:
             styles.css
       # Provenance attestation so installs can be verified against this
       # workflow (gh attestation verify main.js --repo relay-md/relay-comments).
-      # Fork PRs cannot mint attestations; only attest our own refs.
+      # GitHub only persists attestations for public repos on our plan, and
+      # fork PRs cannot mint them — this activates when the repo goes public.
       - uses: actions/attest-build-provenance@v2
-        if: ${{ github.event_name == 'push' }}
+        if: ${{ github.event_name == 'push' && !github.event.repository.private }}
         with:
           subject-path: |
             main.js
