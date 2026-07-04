@@ -91,7 +91,3 @@ Unit tests under `tests/unit/` are encrypted with git-crypt and require the
 repo key (`npm test` after `git-crypt unlock`). Checkouts without the key
 still typecheck and build; maintainers run the test suites for pull
 requests.
-
-## License
-
-MIT
