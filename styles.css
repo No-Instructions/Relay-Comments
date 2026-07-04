@@ -518,10 +518,29 @@
 }
 
 .critic-composer-hint {
-	margin-top: 6px;
 	color: var(--text-faint);
 	font-size: var(--font-ui-smaller);
 	line-height: 1.3;
+	margin-top: 0;
+	max-height: 0;
+	opacity: 0;
+	overflow: hidden;
+	transition:
+		opacity 120ms ease,
+		max-height 120ms ease,
+		margin-top 120ms ease;
+}
+
+.critic-composer-hint-sr {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+	border: 0;
 }
 
 .critic-composer-actions {
@@ -536,18 +555,15 @@
 	display: none;
 }
 
-.critic-thread-composer .critic-composer-hint {
-	display: none;
-}
-
 .critic-thread-composer:focus-within .critic-composer-actions,
 .critic-thread-composer.has-content .critic-composer-actions {
 	display: flex;
 }
 
-.critic-thread-composer:focus-within .critic-composer-hint,
-.critic-thread-composer.has-content .critic-composer-hint {
-	display: block;
+.critic-composer-shell:focus-within:not(.has-content) .critic-composer-hint {
+	margin-top: 6px;
+	max-height: 2.6em;
+	opacity: 1;
 }
 
 /* ---------- Buttons ---------- */

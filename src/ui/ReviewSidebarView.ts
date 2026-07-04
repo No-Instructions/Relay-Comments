@@ -73,6 +73,7 @@ export class ReviewSidebarView extends ItemView {
 	private lastScrolledItemId: string | null = null;
 	private removeOutsideClickListener: (() => void) | null = null;
 	private composerSubmits = new WeakMap<HTMLTextAreaElement, () => void>();
+	private composerHintId = 0;
 
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -349,7 +350,9 @@ export class ReviewSidebarView extends ItemView {
 
 	private renderDraft(parent: HTMLElement, draft: CommentDraft): void {
 		const draftKey = `${draft.filePath}:${draft.from}:${draft.to}`;
-		const card = parent.createDiv({ cls: "critic-card critic-draft-card" });
+		const card = parent.createDiv({
+			cls: "critic-card critic-draft-card critic-composer-shell",
+		});
 		this.renderCommentHeader(card, {
 			identity: this.plugin.getCurrentReviewerIdentity(),
 		});
@@ -369,7 +372,7 @@ export class ReviewSidebarView extends ItemView {
 		textarea.addEventListener("input", () => {
 			this.draftText = textarea.value;
 		});
-		this.renderComposerHint(card);
+		this.renderComposerHint(card, textarea);
 		const actions = card.createDiv({ cls: "critic-composer-actions" });
 		const submit = this.addTextButton(
 			actions,
@@ -380,7 +383,7 @@ export class ReviewSidebarView extends ItemView {
 		this.addTextButton(actions, "Cancel", () => {
 			void this.cancelDraftComment(textarea);
 		});
-		bindSubmitToContent(textarea, submit);
+		bindSubmitToContent(textarea, submit, card);
 		this.composerSubmits.set(textarea, () => {
 			if (!submit.disabled) {
 				this.commitDraftComment(textarea);
@@ -726,10 +729,22 @@ export class ReviewSidebarView extends ItemView {
 		return button;
 	}
 
-	private renderComposerHint(parent: HTMLElement): void {
+	private renderComposerHint(
+		parent: HTMLElement,
+		textarea: HTMLTextAreaElement,
+	): void {
+		const hint = formatComposerSubmitHint();
+		const descriptionId = `relay-comments-composer-hint-${++this.composerHintId}`;
+		textarea.setAttr("aria-describedby", descriptionId);
+		parent.createDiv({
+			cls: "critic-composer-hint-sr",
+			text: hint,
+			attr: { id: descriptionId },
+		});
 		parent.createDiv({
 			cls: "critic-composer-hint",
-			text: formatComposerSubmitHint(),
+			text: hint,
+			attr: { "aria-hidden": "true" },
 		});
 	}
 
@@ -798,7 +813,9 @@ export class ReviewSidebarView extends ItemView {
 		item: ReviewItem,
 		comment: CriticMark,
 	): void {
-		const editor = parent.createDiv({ cls: "critic-edit-composer" });
+		const editor = parent.createDiv({
+			cls: "critic-edit-composer critic-composer-shell",
+		});
 		const textarea = editor.createEl("textarea", {
 			cls: "critic-composer-textarea critic-edit-textarea",
 			attr: { placeholder: "Edit comment…" },
@@ -808,7 +825,7 @@ export class ReviewSidebarView extends ItemView {
 		textarea.addEventListener("input", () => {
 			this.editDrafts.set(comment.id, textarea.value);
 		});
-		this.renderComposerHint(editor);
+		this.renderComposerHint(editor, textarea);
 		const actions = editor.createDiv({ cls: "critic-composer-actions" });
 		const submit = this.addTextButton(
 			actions,
@@ -822,7 +839,7 @@ export class ReviewSidebarView extends ItemView {
 		bindSubmitToContent(
 			textarea,
 			submit,
-			undefined,
+			editor,
 			(value) => value.trim().length > 0 && value !== comment.content,
 		);
 		this.composerSubmits.set(textarea, () => {
@@ -894,7 +911,9 @@ export class ReviewSidebarView extends ItemView {
 			return;
 		}
 
-		const composer = card.createDiv({ cls: "critic-thread-composer" });
+		const composer = card.createDiv({
+			cls: "critic-thread-composer critic-composer-shell",
+		});
 		const textarea = composer.createEl("textarea", {
 			cls: "critic-thread-textarea",
 			attr: { placeholder: "Reply…" },
@@ -904,7 +923,7 @@ export class ReviewSidebarView extends ItemView {
 		textarea.addEventListener("input", () => {
 			this.replyDrafts.set(item.id, textarea.value);
 		});
-		this.renderComposerHint(composer);
+		this.renderComposerHint(composer, textarea);
 		const actions = composer.createDiv({ cls: "critic-composer-actions" });
 		const submit = this.addTextButton(
 			actions,
