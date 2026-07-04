@@ -517,6 +517,13 @@
 	padding: 8px 12px;
 }
 
+.critic-composer-hint {
+	margin-top: 6px;
+	color: var(--text-faint);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.3;
+}
+
 .critic-composer-actions {
 	display: flex;
 	justify-content: flex-end;
@@ -529,9 +536,18 @@
 	display: none;
 }
 
+.critic-thread-composer .critic-composer-hint {
+	display: none;
+}
+
 .critic-thread-composer:focus-within .critic-composer-actions,
 .critic-thread-composer.has-content .critic-composer-actions {
 	display: flex;
+}
+
+.critic-thread-composer:focus-within .critic-composer-hint,
+.critic-thread-composer.has-content .critic-composer-hint {
+	display: block;
 }
 
 /* ---------- Buttons ---------- */
@@ -638,4 +654,17 @@
 	justify-content: flex-end;
 	gap: 8px;
 	margin-top: 12px;
+}
+
+/* ---------- Discard modal ---------- */
+
+.critic-discard-modal .critic-discard-message {
+	color: var(--text-muted);
+	margin-bottom: 12px;
+}
+
+.critic-discard-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
 }

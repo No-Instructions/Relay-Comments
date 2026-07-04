@@ -1,10 +1,14 @@
 import {
 	ItemView,
 	Menu,
+	Modal,
+	Platform,
 	Scope,
 	setIcon,
 	setTooltip,
+	type App,
 	type IconName,
+	type Modifier,
 	type WorkspaceLeaf,
 } from "obsidian";
 import { collectAttachedComments } from "../critic/threading";
@@ -50,6 +54,8 @@ const MARK_TYPE_LABELS: Partial<Record<CriticMarkType, string>> = {
 	highlight: "Highlight",
 };
 
+const COMPOSER_SUBMIT_KEY: "mod-enter" | "enter" = "mod-enter";
+
 interface PendingFocus {
 	kind: "edit" | "draft";
 	key: string;
@@ -73,11 +79,12 @@ export class ReviewSidebarView extends ItemView {
 		private plugin: RelayCommentsPlugin,
 	) {
 		super(leaf);
-		// Mod+Enter must submit the focused composer even though Obsidian's
-		// global "open link in new leaf" hotkey also claims Mod+Enter.
+		// The scope gives the configured submit key first chance before
+		// Obsidian's global keymaps can consume it.
+		const submitKey = getComposerSubmitScopeBinding();
 		this.scope = new Scope(this.app.scope);
-		this.scope.register(["Mod"], "Enter", (event) => {
-			if (this.submitFocusedComposer()) {
+		this.scope.register(submitKey.modifiers, submitKey.key, (event) => {
+			if (isComposerSubmitKey(event) && this.submitFocusedComposer()) {
 				event.preventDefault();
 				return false;
 			}
@@ -358,32 +365,49 @@ export class ReviewSidebarView extends ItemView {
 			attr: { placeholder: "Write a comment…" },
 		});
 		textarea.value = this.draftText;
-		this.composerSubmits.set(textarea, () => this.commitDraftComment(textarea));
 		this.installTextareaEventGuards(textarea);
 		textarea.addEventListener("input", () => {
 			this.draftText = textarea.value;
+		});
+		this.renderComposerHint(card);
+		const actions = card.createDiv({ cls: "critic-composer-actions" });
+		const submit = this.addTextButton(
+			actions,
+			"Send",
+			() => this.commitDraftComment(textarea),
+			{ primary: true },
+		);
+		this.addTextButton(actions, "Cancel", () => {
+			void this.cancelDraftComment(textarea);
+		});
+		bindSubmitToContent(textarea, submit);
+		this.composerSubmits.set(textarea, () => {
+			if (!submit.disabled) {
+				this.commitDraftComment(textarea);
+			}
 		});
 		textarea.addEventListener("keydown", (event) => {
 			event.stopPropagation();
 			if (event.key === "Escape") {
 				event.preventDefault();
-				this.plugin.cancelCommentDraft();
+				void this.cancelDraftComment(textarea);
 				return;
 			}
-			if (!(event.metaKey || event.ctrlKey) || event.key !== "Enter") return;
+			if (!isComposerSubmitKey(event)) return;
 			event.preventDefault();
-			this.commitDraftComment(textarea);
+			if (!submit.disabled) {
+				this.commitDraftComment(textarea);
+			}
 		});
-		const actions = card.createDiv({ cls: "critic-composer-actions" });
-		this.addTextButton(actions, "Cancel", () => this.plugin.cancelCommentDraft());
-		const submit = this.addTextButton(
-			actions,
-			"Comment",
-			() => this.commitDraftComment(textarea),
-			{ primary: true },
-		);
-		bindSubmitToContent(textarea, submit);
 		this.consumePendingFocus("draft", draftKey, textarea);
+	}
+
+	private async cancelDraftComment(textarea: HTMLTextAreaElement): Promise<void> {
+		if (!(await this.confirmDiscardIfNeeded(textarea.value.trim().length > 0))) {
+			textarea.focus();
+			return;
+		}
+		this.plugin.cancelCommentDraft();
 	}
 
 	private commitDraftComment(textarea: HTMLTextAreaElement): void {
@@ -687,7 +711,10 @@ export class ReviewSidebarView extends ItemView {
 		callback: () => void,
 		options: { primary?: boolean } = {},
 	): HTMLButtonElement {
-		const button = parent.createEl("button", { text: label });
+		const button = parent.createEl("button", {
+			text: label,
+			attr: { type: "button" },
+		});
 		button.addClass("critic-text-button");
 		if (options.primary) {
 			button.addClass("critic-button-primary");
@@ -697,6 +724,13 @@ export class ReviewSidebarView extends ItemView {
 			callback();
 		});
 		return button;
+	}
+
+	private renderComposerHint(parent: HTMLElement): void {
+		parent.createDiv({
+			cls: "critic-composer-hint",
+			text: formatComposerSubmitHint(),
+		});
 	}
 
 	private installTextareaEventGuards(textarea: HTMLTextAreaElement): void {
@@ -770,37 +804,57 @@ export class ReviewSidebarView extends ItemView {
 			attr: { placeholder: "Edit comment…" },
 		});
 		textarea.value = this.editDrafts.get(comment.id) ?? comment.content;
-		this.composerSubmits.set(textarea, () =>
-			this.commitCommentEdit(item, comment, textarea),
-		);
 		this.installTextareaEventGuards(textarea);
 		textarea.addEventListener("input", () => {
 			this.editDrafts.set(comment.id, textarea.value);
 		});
-		textarea.addEventListener("keydown", (event) => {
-			event.stopPropagation();
-			if (event.key === "Escape") {
-				event.preventDefault();
-				this.cancelEditingComment(comment.id);
-				return;
-			}
-			if (!(event.metaKey || event.ctrlKey) || event.key !== "Enter") return;
-			event.preventDefault();
-			this.commitCommentEdit(item, comment, textarea);
-		});
+		this.renderComposerHint(editor);
 		const actions = editor.createDiv({ cls: "critic-composer-actions" });
-		this.addTextButton(actions, "Cancel", () => this.cancelEditingComment(comment.id));
 		const submit = this.addTextButton(
 			actions,
 			"Save",
 			() => this.commitCommentEdit(item, comment, textarea),
 			{ primary: true },
 		);
-		bindSubmitToContent(textarea, submit);
+		this.addTextButton(actions, "Cancel", () => {
+			void this.cancelEditingComment(comment.id, textarea, comment.content);
+		});
+		bindSubmitToContent(
+			textarea,
+			submit,
+			undefined,
+			(value) => value.trim().length > 0 && value !== comment.content,
+		);
+		this.composerSubmits.set(textarea, () => {
+			if (!submit.disabled) {
+				this.commitCommentEdit(item, comment, textarea);
+			}
+		});
+		textarea.addEventListener("keydown", (event) => {
+			event.stopPropagation();
+			if (event.key === "Escape") {
+				event.preventDefault();
+				void this.cancelEditingComment(comment.id, textarea, comment.content);
+				return;
+			}
+			if (!isComposerSubmitKey(event)) return;
+			event.preventDefault();
+			if (!submit.disabled) {
+				this.commitCommentEdit(item, comment, textarea);
+			}
+		});
 		this.consumePendingFocus("edit", comment.id, textarea);
 	}
 
-	private cancelEditingComment(commentId: string): void {
+	private async cancelEditingComment(
+		commentId: string,
+		textarea: HTMLTextAreaElement,
+		originalValue: string,
+	): Promise<void> {
+		if (!(await this.confirmDiscardIfNeeded(textarea.value !== originalValue))) {
+			textarea.focus();
+			return;
+		}
 		this.editDrafts.delete(commentId);
 		if (this.editingCommentId === commentId) {
 			this.editingCommentId = null;
@@ -846,39 +900,58 @@ export class ReviewSidebarView extends ItemView {
 			attr: { placeholder: "Reply…" },
 		});
 		textarea.value = this.replyDrafts.get(item.id) ?? "";
-		this.composerSubmits.set(textarea, () =>
-			this.commitThreadReply(item, mark, textarea),
-		);
 		this.installTextareaEventGuards(textarea);
 		textarea.addEventListener("input", () => {
 			this.replyDrafts.set(item.id, textarea.value);
+		});
+		this.renderComposerHint(composer);
+		const actions = composer.createDiv({ cls: "critic-composer-actions" });
+		const submit = this.addTextButton(
+			actions,
+			"Send",
+			() => this.commitThreadReply(item, mark, textarea),
+			{ primary: true },
+		);
+		this.addTextButton(actions, "Cancel", () => {
+			void this.cancelThreadReply(item, textarea);
+		});
+		bindSubmitToContent(textarea, submit, composer);
+		this.composerSubmits.set(textarea, () => {
+			if (!submit.disabled) {
+				this.commitThreadReply(item, mark, textarea);
+			}
 		});
 		textarea.addEventListener("keydown", (event) => {
 			event.stopPropagation();
 			if (event.key === "Escape") {
 				event.preventDefault();
-				this.replyDrafts.delete(item.id);
-				this.replyDraftItemId = null;
-				this.render();
+				void this.cancelThreadReply(item, textarea);
 				return;
 			}
-			if (!(event.metaKey || event.ctrlKey) || event.key !== "Enter") return;
+			if (!isComposerSubmitKey(event)) return;
 			event.preventDefault();
-			this.commitThreadReply(item, mark, textarea);
+			if (!submit.disabled) {
+				this.commitThreadReply(item, mark, textarea);
+			}
 		});
-		const actions = composer.createDiv({ cls: "critic-composer-actions" });
-		this.addTextButton(actions, "Cancel", () => {
-			this.replyDrafts.delete(item.id);
-			this.replyDraftItemId = null;
-			this.render();
-		});
-		const submit = this.addTextButton(
-			actions,
-			"Reply",
-			() => this.commitThreadReply(item, mark, textarea),
-			{ primary: true },
-		);
-		bindSubmitToContent(textarea, submit, composer);
+	}
+
+	private async cancelThreadReply(
+		item: ReviewItem,
+		textarea: HTMLTextAreaElement,
+	): Promise<void> {
+		if (!(await this.confirmDiscardIfNeeded(textarea.value.trim().length > 0))) {
+			textarea.focus();
+			return;
+		}
+		this.replyDrafts.delete(item.id);
+		this.replyDraftItemId = null;
+		this.render();
+	}
+
+	private async confirmDiscardIfNeeded(hasChanges: boolean): Promise<boolean> {
+		if (!hasChanges) return true;
+		return confirmDiscardDraft(this.app);
 	}
 
 	private commitThreadReply(
@@ -942,6 +1015,92 @@ export class ReviewSidebarView extends ItemView {
 	private applyMark(mark: CriticMark, action: CriticAction): void {
 		this.plugin.applyMarkActionFromSidebar(mark, action);
 		this.render();
+	}
+}
+
+function isComposerSubmitKey(event: KeyboardEvent): boolean {
+	if (event.key !== "Enter") return false;
+	if (COMPOSER_SUBMIT_KEY === "enter") {
+		return !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+	}
+	return (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey;
+}
+
+function getComposerSubmitScopeBinding(): { modifiers: Modifier[]; key: string } {
+	if (COMPOSER_SUBMIT_KEY === "enter") {
+		return { modifiers: [], key: "Enter" };
+	}
+	return { modifiers: ["Mod"], key: "Enter" };
+}
+
+function formatComposerSubmitHint(): string {
+	if (COMPOSER_SUBMIT_KEY === "enter") {
+		return "Enter to send · Shift+Enter for newline · Esc to cancel";
+	}
+	return `${Platform.isMacOS ? "Cmd" : "Ctrl"}+Enter to send · Esc to cancel`;
+}
+
+function confirmDiscardDraft(app: App): Promise<boolean> {
+	return new Promise((resolve) => {
+		new DiscardDraftModal(app, resolve).open();
+	});
+}
+
+class DiscardDraftModal extends Modal {
+	private resolved = false;
+
+	constructor(
+		app: App,
+		private resolve: (discard: boolean) => void,
+	) {
+		super(app);
+	}
+
+	onOpen(): void {
+		const { contentEl } = this;
+		contentEl.empty();
+		contentEl.addClass("critic-discard-modal");
+		contentEl.createEl("h2", { text: "Discard draft?" });
+		contentEl.createDiv({
+			cls: "critic-discard-message",
+			text: "Keep writing or discard this unsaved text.",
+		});
+
+		const actions = contentEl.createDiv({ cls: "critic-discard-actions" });
+		const keepWriting = actions.createEl("button", {
+			cls: "mod-cta",
+			text: "Keep writing",
+			attr: { type: "button" },
+		});
+		keepWriting.addEventListener("click", () => this.keepWriting());
+		const discard = actions.createEl("button", {
+			text: "Discard",
+			attr: { type: "button" },
+		});
+		discard.addEventListener("click", () => this.discard());
+		window.setTimeout(() => keepWriting.focus(), 0);
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
+		if (!this.resolved) {
+			this.resolved = true;
+			this.resolve(false);
+		}
+	}
+
+	private keepWriting(): void {
+		if (this.resolved) return;
+		this.resolved = true;
+		this.resolve(false);
+		this.close();
+	}
+
+	private discard(): void {
+		if (this.resolved) return;
+		this.resolved = true;
+		this.resolve(true);
+		this.close();
 	}
 }
 
@@ -1046,9 +1205,10 @@ function bindSubmitToContent(
 	textarea: HTMLTextAreaElement,
 	submit: HTMLButtonElement,
 	composer?: HTMLElement,
+	canSubmit: (value: string) => boolean = (value) => value.trim().length > 0,
 ): void {
 	const update = () => {
-		submit.disabled = textarea.value.trim().length === 0;
+		submit.disabled = !canSubmit(textarea.value);
 		composer?.toggleClass("has-content", textarea.value.length > 0);
 	};
 	textarea.addEventListener("input", update);
