@@ -517,20 +517,6 @@
 	padding: 8px 12px;
 }
 
-.critic-composer-hint {
-	color: var(--text-faint);
-	font-size: var(--font-ui-smaller);
-	line-height: 1.3;
-	margin-top: 0;
-	max-height: 0;
-	opacity: 0;
-	overflow: hidden;
-	transition:
-		opacity 120ms ease,
-		max-height 120ms ease,
-		margin-top 120ms ease;
-}
-
 .critic-composer-hint-sr {
 	position: absolute;
 	width: 1px;
@@ -545,6 +531,7 @@
 
 .critic-composer-actions {
 	display: flex;
+	align-items: center;
 	justify-content: flex-end;
 	gap: 8px;
 	margin-top: 8px;
@@ -560,10 +547,65 @@
 	display: flex;
 }
 
-.critic-composer-shell:focus-within:not(.has-content) .critic-composer-hint {
-	margin-top: 6px;
-	max-height: 2.6em;
+.critic-composer-help {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+}
+
+.critic-sidebar .critic-composer-help-button {
+	width: 24px;
+	height: 24px;
+	color: var(--text-faint);
+}
+
+.critic-sidebar .critic-composer-help-button:hover,
+.critic-sidebar .critic-composer-help-button:focus-visible {
+	color: var(--text-muted);
+}
+
+.critic-sidebar .critic-composer-help-button svg {
+	width: 14px;
+	height: 14px;
+}
+
+.critic-composer-help-tooltip {
+	position: absolute;
+	right: 0;
+	bottom: calc(100% + 6px);
+	z-index: 4;
+	width: max-content;
+	max-width: 220px;
+	padding: 6px 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-primary);
+	box-shadow: 0 3px 12px rgba(0, 0, 0, 0.16);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.3;
+	opacity: 0;
+	pointer-events: none;
+	transform: translateY(2px);
+	transition:
+		opacity 100ms ease,
+		transform 100ms ease,
+		visibility 100ms ease;
+	visibility: hidden;
+	white-space: nowrap;
+}
+
+.critic-composer-help:hover .critic-composer-help-tooltip,
+.critic-composer-help:focus-within .critic-composer-help-tooltip {
 	opacity: 1;
+	transform: translateY(0);
+	visibility: visible;
+}
+
+.critic-composer-help.is-suppressed .critic-composer-help-tooltip {
+	opacity: 0;
+	transform: translateY(2px);
+	visibility: hidden;
 }
 
 /* ---------- Buttons ---------- */

@@ -383,6 +383,7 @@ export class ReviewSidebarView extends ItemView {
 		this.addTextButton(actions, "Cancel", () => {
 			void this.cancelDraftComment(textarea);
 		});
+		this.addComposerHelpButton(actions);
 		bindSubmitToContent(textarea, submit, card);
 		this.composerSubmits.set(textarea, () => {
 			if (!submit.disabled) {
@@ -736,16 +737,57 @@ export class ReviewSidebarView extends ItemView {
 		const hint = formatComposerSubmitHint();
 		const descriptionId = `relay-comments-composer-hint-${++this.composerHintId}`;
 		textarea.setAttr("aria-describedby", descriptionId);
-		parent.createDiv({
+		const description = parent.createDiv({
 			cls: "critic-composer-hint-sr",
-			text: hint,
 			attr: { id: descriptionId },
 		});
-		parent.createDiv({
-			cls: "critic-composer-hint",
-			text: hint,
-			attr: { "aria-hidden": "true" },
+		description.setText(hint);
+	}
+
+	private addComposerHelpButton(parent: HTMLElement): HTMLButtonElement {
+		const hint = formatComposerSubmitHint();
+		const tooltipId = `relay-comments-composer-help-${++this.composerHintId}`;
+		const wrapper = parent.createSpan({ cls: "critic-composer-help" });
+		const button = wrapper.createEl("button", {
+			cls: "critic-icon-button critic-composer-help-button",
+			attr: {
+				type: "button",
+				"aria-label": "Show composer shortcuts",
+				"aria-describedby": tooltipId,
+				"aria-expanded": "false",
+			},
 		});
+		setIcon(button, "keyboard");
+		wrapper.createDiv({
+			cls: "critic-composer-help-tooltip",
+			text: hint,
+			attr: { id: tooltipId, role: "tooltip" },
+		});
+
+		const show = (): void => {
+			wrapper.classList.remove("is-suppressed");
+			button.setAttr("aria-expanded", "true");
+		};
+		const hide = (): void => button.setAttr("aria-expanded", "false");
+		wrapper.addEventListener("mouseenter", show);
+		wrapper.addEventListener("mouseleave", () => {
+			if (document.activeElement !== button) hide();
+		});
+		button.addEventListener("focus", show);
+		button.addEventListener("blur", hide);
+		button.addEventListener("click", (event) => {
+			event.stopPropagation();
+			button.focus();
+			show();
+		});
+		button.addEventListener("keydown", (event) => {
+			event.stopPropagation();
+			if (event.key !== "Escape") return;
+			event.preventDefault();
+			wrapper.classList.add("is-suppressed");
+			hide();
+		});
+		return button;
 	}
 
 	private installTextareaEventGuards(textarea: HTMLTextAreaElement): void {
@@ -836,6 +878,7 @@ export class ReviewSidebarView extends ItemView {
 		this.addTextButton(actions, "Cancel", () => {
 			void this.cancelEditingComment(comment.id, textarea, comment.content);
 		});
+		this.addComposerHelpButton(actions);
 		bindSubmitToContent(
 			textarea,
 			submit,
@@ -934,6 +977,7 @@ export class ReviewSidebarView extends ItemView {
 		this.addTextButton(actions, "Cancel", () => {
 			void this.cancelThreadReply(item, textarea);
 		});
+		this.addComposerHelpButton(actions);
 		bindSubmitToContent(textarea, submit, composer);
 		this.composerSubmits.set(textarea, () => {
 			if (!submit.disabled) {
