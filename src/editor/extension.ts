@@ -20,6 +20,7 @@ import {
 	type ViewUpdate,
 } from "@codemirror/view";
 import { parseCriticMarkup } from "../critic/parse";
+import { findPrecedingWordRange } from "../critic/display";
 import { collectAttachedComments } from "../critic/threading";
 import type { CriticMark, DisplayMode } from "../critic/types";
 
@@ -544,40 +545,6 @@ function decorateClean(
 			}
 			break;
 	}
-}
-
-/**
- * The word immediately before `from` on the same line, used to anchor a
- * standalone comment to visible text. Returns null when the line starts at
- * the comment or the candidate range touches other CriticMarkup marks.
- */
-function findPrecedingWordRange(
-	text: string,
-	from: number,
-	marks: CriticMark[],
-): [number, number] | null {
-	let end = from;
-	while (end > 0) {
-		const char = text[end - 1];
-		if (char === "\n") return null;
-		if (char === " " || char === "\t") {
-			end -= 1;
-			continue;
-		}
-		break;
-	}
-	if (end === 0) return null;
-	let start = end;
-	while (start > 0) {
-		const char = text[start - 1];
-		if (char === "\n" || char === " " || char === "\t") break;
-		start -= 1;
-	}
-	if (end <= start) return null;
-	const touchesMark = marks.some(
-		(mark) => mark.from < end && mark.to > start,
-	);
-	return touchesMark ? null : [start, end];
 }
 
 function findAnchoredComments(

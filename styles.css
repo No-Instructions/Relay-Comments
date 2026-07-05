@@ -141,7 +141,8 @@
 .critic-thread-preview-anchor {
 	margin-bottom: 8px;
 	padding-left: 8px;
-	border-left: 2px solid var(--interactive-accent);
+	/* Same amber quote ink as the sidebar cards */
+	border-left: 2px solid color-mix(in srgb, var(--color-yellow) 55%, transparent);
 	color: var(--text-muted);
 }
 

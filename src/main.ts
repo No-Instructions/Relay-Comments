@@ -19,6 +19,14 @@ import {
 import type { CriticAction } from "./critic/transform";
 import type { CriticMark, DisplayMode } from "./critic/types";
 import {
+	clampPreviewSnippet,
+	findPrecedingWordRange,
+	formatMarkDate,
+	getPreviewAnchorText,
+	isSuggestionMark,
+	normalizeWhitespace,
+} from "./critic/display";
+import {
 	applyAllInEditor,
 	applyCurrentMarkAction,
 	replaceMark,
@@ -467,7 +475,7 @@ export default class RelayCommentsPlugin
 		}
 		element.createDiv({
 			cls: "critic-thread-preview-anchor",
-			text: normalizePreviewText(data.anchorText),
+			text: normalizeWhitespace(data.anchorText),
 		});
 		element.createDiv({
 			cls: "critic-thread-preview-message",
@@ -593,7 +601,7 @@ export default class RelayCommentsPlugin
 				label: resolved
 					? "Resolved comment"
 					: isSuggestionMark(mark)
-						? "Suggestion comment"
+						? "Comment on suggestion"
 						: "Comment",
 				countLabel: `${visibleComments.length} ${
 					visibleComments.length === 1 ? "comment" : "comments"
@@ -607,7 +615,7 @@ export default class RelayCommentsPlugin
 							}`
 						: null,
 				author: identity.source === "fallback" ? null : identity.name,
-				date: formatPreviewDate(firstComment),
+				date: formatMarkDate(firstComment),
 				resolved,
 			};
 		}
@@ -1339,91 +1347,6 @@ function rectFromElement(element: HTMLElement): ClientRectLike {
 		left: rect.left,
 		right: rect.right,
 	};
-}
-
-function getPreviewAnchorText(
-	mark: CriticMark,
-	text: string,
-	marks: CriticMark[],
-): string {
-	switch (mark.type) {
-		case "substitution":
-			return [mark.oldText, mark.newText]
-				.map((value) => normalizePreviewText(value ?? ""))
-				.filter((value) => value.length > 0)
-				.join(" → ");
-		case "comment": {
-			const range = findPrecedingWordRange(text, mark.from, marks);
-			return range ? text.slice(range[0], range[1]) : "Comment";
-		}
-		default:
-			return mark.content;
-	}
-}
-
-function clampPreviewSnippet(value: string): string {
-	const lines = value
-		.replace(/\r\n?/g, "\n")
-		.split("\n")
-		.map((line) => line.trim())
-		.filter((line) => line.length > 0);
-	const clipped = lines.slice(0, 3).join("\n");
-	const suffix = lines.length > 3 ? "…" : "";
-	if (clipped.length <= 320) return `${clipped}${suffix}`;
-	return `${clipped.slice(0, 317).trimEnd()}…`;
-}
-
-function normalizePreviewText(value: string): string {
-	return value.replace(/\s+/g, " ").trim();
-}
-
-function formatPreviewDate(mark: CriticMark): string | null {
-	const rawDate = mark.metadata?.date?.trim();
-	if (!rawDate) return null;
-	const date = new Date(rawDate);
-	if (Number.isNaN(date.getTime())) return rawDate;
-	return new Intl.DateTimeFormat(undefined, {
-		month: "short",
-		day: "numeric",
-		year: "numeric",
-	}).format(date);
-}
-
-function isSuggestionMark(mark: CriticMark): boolean {
-	return (
-		mark.type === "addition" ||
-		mark.type === "deletion" ||
-		mark.type === "substitution"
-	);
-}
-
-function findPrecedingWordRange(
-	text: string,
-	from: number,
-	marks: CriticMark[],
-): [number, number] | null {
-	let end = from;
-	while (end > 0) {
-		const char = text[end - 1];
-		if (char === "\n") return null;
-		if (char === " " || char === "\t") {
-			end -= 1;
-			continue;
-		}
-		break;
-	}
-	if (end === 0) return null;
-	let start = end;
-	while (start > 0) {
-		const char = text[start - 1];
-		if (char === "\n" || char === " " || char === "\t") break;
-		start -= 1;
-	}
-	if (end <= start) return null;
-	const touchesMark = marks.some(
-		(mark) => mark.from < end && mark.to > start,
-	);
-	return touchesMark ? null : [start, end];
 }
 
 function userToIdentity(

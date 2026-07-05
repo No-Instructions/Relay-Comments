@@ -12,6 +12,11 @@ import {
 } from "obsidian";
 import { collectAttachedComments } from "../critic/threading";
 import {
+	formatMarkDate,
+	isSuggestionMark,
+	normalizeWhitespace,
+} from "../critic/display";
+import {
 	formatComposerSubmitHint,
 	getComposerSubmitScopeBinding,
 	isComposerSubmitKey,
@@ -492,7 +497,7 @@ export class ReviewSidebarView extends ItemView {
 				cls: "critic-card-quote",
 				text: normalizeWhitespace(item.anchor.content),
 			});
-		} else if (isSuggestion(item.anchor)) {
+		} else if (isSuggestionMark(item.anchor)) {
 			this.renderTypeEyebrow(card, item.anchor.type);
 			const identity = this.plugin.getReviewerIdentityForMark(
 				item.anchor,
@@ -667,10 +672,10 @@ export class ReviewSidebarView extends ItemView {
 			const menu = new Menu();
 			const suggestion =
 				item.kind === "anchored-comment"
-					? isSuggestion(item.anchor)
+					? isSuggestionMark(item.anchor)
 						? item.anchor
 						: null
-					: isSuggestion(item.mark)
+					: isSuggestionMark(item.mark)
 						? item.mark
 						: null;
 			if (suggestion) {
@@ -1044,7 +1049,7 @@ export class ReviewSidebarView extends ItemView {
 	): void {
 		if (item.anchor.type === "comment") {
 			this.plugin.replaceReviewRangeFromSidebar(item.from, item.to, "");
-		} else if (isSuggestion(item.anchor)) {
+		} else if (isSuggestionMark(item.anchor)) {
 			this.plugin.replaceReviewRangeFromSidebar(item.anchor.to, item.to, "");
 		} else {
 			this.plugin.replaceReviewRangeFromSidebar(
@@ -1222,18 +1227,10 @@ function isSelected(item: ReviewItem, activeMarkId: string | null): boolean {
 	return item.mark.id === activeMarkId;
 }
 
-function isSuggestion(mark: CriticMark): boolean {
-	return (
-		mark.type === "addition" ||
-		mark.type === "deletion" ||
-		mark.type === "substitution"
-	);
-}
-
 function itemHasSecondaryActions(item: ReviewItem): boolean {
 	return (
-		(item.kind === "anchored-comment" && isSuggestion(item.anchor)) ||
-		(item.kind === "mark" && isSuggestion(item.mark))
+		(item.kind === "anchored-comment" && isSuggestionMark(item.anchor)) ||
+		(item.kind === "mark" && isSuggestionMark(item.mark))
 	);
 }
 
@@ -1265,8 +1262,8 @@ function formatCounts(items: ReviewItem[]): string {
 	}, 0);
 	const suggestions = items.filter(
 		(item) =>
-			(item.kind === "mark" && isSuggestion(item.mark)) ||
-			(item.kind === "anchored-comment" && isSuggestion(item.anchor)),
+			(item.kind === "mark" && isSuggestionMark(item.mark)) ||
+			(item.kind === "anchored-comment" && isSuggestionMark(item.anchor)),
 	).length;
 	const highlights = items.filter(
 		(item) => item.kind === "mark" && item.type === "highlight",
@@ -1282,10 +1279,6 @@ function formatCounts(items: ReviewItem[]): string {
 	return parts.join(" · ");
 }
 
-function normalizeWhitespace(text: string): string {
-	return text.replace(/\s+/g, " ").trim();
-}
-
 function initials(name: string): string {
 	const words = name.trim().split(/\s+/).filter(Boolean);
 	if (words.length === 0) return "?";
@@ -1293,16 +1286,4 @@ function initials(name: string): string {
 		.slice(0, 2)
 		.map((word) => word[0]?.toUpperCase() ?? "")
 		.join("");
-}
-
-function formatMarkDate(mark: CriticMark): string | null {
-	const raw = mark.metadata?.date?.trim();
-	if (!raw) return null;
-	const date = new Date(raw);
-	if (Number.isNaN(date.getTime())) return raw;
-	return new Intl.DateTimeFormat(undefined, {
-		month: "short",
-		day: "numeric",
-		year: "numeric",
-	}).format(date);
 }
