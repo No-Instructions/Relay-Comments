@@ -12,7 +12,10 @@ import {
 import type { Extension } from "@codemirror/state";
 import { EditorView as CodeMirrorEditorView } from "@codemirror/view";
 import { parseCriticMarkup } from "./critic/parse";
-import { CRITIC_SECTION_SEPARATOR } from "./critic/threading";
+import {
+	CRITIC_SECTION_SEPARATOR,
+	collectAttachedComments,
+} from "./critic/threading";
 import type { CriticAction } from "./critic/transform";
 import type { CriticMark, DisplayMode } from "./critic/types";
 import {
@@ -75,6 +78,26 @@ interface CodeMirrorAdapter {
 	dispatch(spec?: { effects?: unknown }): void;
 	dom?: HTMLElement;
 	scrollDOM?: HTMLElement;
+}
+
+interface ThreadPreviewData {
+	label: string;
+	countLabel: string;
+	anchorText: string;
+	snippet: string;
+	moreLabel: string | null;
+	author: string | null;
+	date: string | null;
+	resolved: boolean;
+}
+
+interface ActiveThreadPreview {
+	element: HTMLElement;
+	anchor: HTMLElement | null;
+	originalTitle: string | null;
+	originalAriaDescribedBy: string | null;
+	returnFocus: (() => void) | null;
+	cleanup: () => void;
 }
 
 interface RelayUserLike {
@@ -158,6 +181,10 @@ export default class RelayCommentsPlugin
 	private lastMarkdownPath: string | null = null;
 	private reviewSidebarOpenPromise: Promise<void> | null = null;
 	private selectionRefreshTimer: number | null = null;
+	private previewShowTimer: number | null = null;
+	private previewHideTimer: number | null = null;
+	private activeThreadPreview: ActiveThreadPreview | null = null;
+	private previewId = 0;
 	private readonly editorExtensions: Extension[] = [];
 
 	async onload(): Promise<void> {
@@ -196,6 +223,7 @@ export default class RelayCommentsPlugin
 			window.clearTimeout(this.selectionRefreshTimer);
 			this.selectionRefreshTimer = null;
 		}
+		this.hideThreadPreview();
 		this.editorExtensions.length = 0;
 		this.app.workspace.detachLeavesOfType(VIEW_TYPE_CRITIC_REVIEW);
 		this.app.workspace.updateOptions();
@@ -253,6 +281,236 @@ export default class RelayCommentsPlugin
 		});
 	}
 
+	queueThreadPreview(
+		path: string | null,
+		from: number,
+		to: number,
+		anchor: HTMLElement,
+	): void {
+		const active = document.activeElement;
+		if (
+			active instanceof HTMLTextAreaElement &&
+			active.closest(".critic-sidebar")
+		) {
+			return;
+		}
+		const filePath = path ?? this.app.workspace.getActiveFile()?.path ?? null;
+		if (!filePath || !anchor.isConnected) return;
+		const previewId = this.previewId + 1;
+		this.previewId = previewId;
+		this.clearPreviewTimers();
+		this.previewShowTimer = window.setTimeout(() => {
+			if (this.previewId !== previewId || !anchor.isConnected) return;
+			this.showThreadPreview(filePath, from, to, anchor.getBoundingClientRect(), {
+				anchor,
+				returnFocus: null,
+				role: "tooltip",
+			});
+		}, 300);
+	}
+
+	scheduleThreadPreviewDismiss(): void {
+		if (this.previewShowTimer !== null) {
+			window.clearTimeout(this.previewShowTimer);
+			this.previewShowTimer = null;
+		}
+		if (!this.activeThreadPreview) return;
+		if (this.previewHideTimer !== null) {
+			window.clearTimeout(this.previewHideTimer);
+		}
+		this.previewHideTimer = window.setTimeout(() => {
+			this.hideThreadPreview();
+		}, 180);
+	}
+
+	hideThreadPreview(): void {
+		this.clearPreviewTimers();
+		const active = this.activeThreadPreview;
+		if (!active) return;
+		this.activeThreadPreview = null;
+		active.cleanup();
+		active.element.remove();
+		active.returnFocus?.();
+	}
+
+	private clearPreviewTimers(): void {
+		if (this.previewShowTimer !== null) {
+			window.clearTimeout(this.previewShowTimer);
+			this.previewShowTimer = null;
+		}
+		if (this.previewHideTimer !== null) {
+			window.clearTimeout(this.previewHideTimer);
+			this.previewHideTimer = null;
+		}
+	}
+
+	private showThreadPreview(
+		filePath: string,
+		from: number,
+		to: number,
+		anchorRect: ClientRectLike,
+		options: {
+			anchor: HTMLElement | null;
+			returnFocus: (() => void) | null;
+			role: "tooltip" | "dialog";
+		},
+	): boolean {
+		const data = this.buildThreadPreviewData(filePath, from, to);
+		if (!data) return false;
+		this.hideThreadPreview();
+
+		const element = this.renderThreadPreview(data, options.role);
+		document.body.appendChild(element);
+		this.positionThreadPreview(element, anchorRect);
+		const previousTitle = options.anchor?.getAttribute("title") ?? null;
+		const previousDescribedBy =
+			options.anchor?.getAttribute("aria-describedby") ?? null;
+		if (options.anchor) {
+			options.anchor.removeAttribute("title");
+			options.anchor.setAttribute("aria-describedby", element.id);
+		}
+
+		const cancelDismiss = () => {
+			if (this.previewHideTimer !== null) {
+				window.clearTimeout(this.previewHideTimer);
+				this.previewHideTimer = null;
+			}
+		};
+		const scheduleDismiss = () => this.scheduleThreadPreviewDismiss();
+		const onDocumentMouseDown = (event: MouseEvent) => {
+			const target = event.target as Node | null;
+			if (
+				target &&
+				(element.contains(target) ||
+					(options.anchor?.contains(target) ?? false))
+			) {
+				return;
+			}
+			this.hideThreadPreview();
+		};
+		const onDocumentKeyDown = (event: KeyboardEvent) => {
+			if (event.key !== "Escape") return;
+			event.preventDefault();
+			this.hideThreadPreview();
+		};
+		const onScroll = () => this.hideThreadPreview();
+		element.addEventListener("pointerenter", cancelDismiss);
+		element.addEventListener("pointerleave", scheduleDismiss);
+		document.addEventListener("mousedown", onDocumentMouseDown, true);
+		document.addEventListener("keydown", onDocumentKeyDown, true);
+		document.addEventListener("scroll", onScroll, true);
+
+		this.activeThreadPreview = {
+			element,
+			anchor: options.anchor,
+			originalTitle: previousTitle,
+			originalAriaDescribedBy: previousDescribedBy,
+			returnFocus: options.returnFocus,
+			cleanup: () => {
+				element.removeEventListener("pointerenter", cancelDismiss);
+				element.removeEventListener("pointerleave", scheduleDismiss);
+				document.removeEventListener("mousedown", onDocumentMouseDown, true);
+				document.removeEventListener("keydown", onDocumentKeyDown, true);
+				document.removeEventListener("scroll", onScroll, true);
+				if (options.anchor) {
+					if (previousTitle === null) {
+						options.anchor.removeAttribute("title");
+					} else {
+						options.anchor.setAttribute("title", previousTitle);
+					}
+					if (previousDescribedBy === null) {
+						options.anchor.removeAttribute("aria-describedby");
+					} else {
+						options.anchor.setAttribute(
+							"aria-describedby",
+							previousDescribedBy,
+						);
+					}
+				}
+			},
+		};
+		if (options.role === "dialog") {
+			element.focus();
+		}
+		return true;
+	}
+
+	private renderThreadPreview(
+		data: ThreadPreviewData,
+		role: "tooltip" | "dialog",
+	): HTMLElement {
+		const element = document.createElement("div");
+		element.id = `critic-thread-preview-${this.previewId}`;
+		element.className = data.resolved
+			? "critic-thread-preview is-resolved"
+			: "critic-thread-preview";
+		element.setAttribute("role", role);
+		element.setAttribute(
+			role === "dialog" ? "aria-label" : "aria-live",
+			role === "dialog" ? "Comment preview" : "polite",
+		);
+		if (role === "dialog") {
+			element.tabIndex = -1;
+		}
+
+		const header = element.createDiv({ cls: "critic-thread-preview-header" });
+		header.createSpan({ cls: "critic-thread-preview-label", text: data.label });
+		header.createSpan({
+			cls: "critic-thread-preview-count",
+			text: data.countLabel,
+		});
+		if (data.resolved) {
+			header.createSpan({
+				cls: "critic-thread-preview-badge",
+				text: "Resolved",
+			});
+		}
+		element.createDiv({
+			cls: "critic-thread-preview-anchor",
+			text: normalizePreviewText(data.anchorText),
+		});
+		element.createDiv({
+			cls: "critic-thread-preview-message",
+			text: data.snippet,
+		});
+		const metaParts = [
+			data.author,
+			data.date,
+			data.moreLabel,
+		].filter((part): part is string => Boolean(part));
+		if (metaParts.length > 0) {
+			element.createDiv({
+				cls: "critic-thread-preview-meta",
+				text: metaParts.join(" · "),
+			});
+		}
+		return element;
+	}
+
+	private positionThreadPreview(
+		element: HTMLElement,
+		anchorRect: ClientRectLike,
+	): void {
+		const margin = 12;
+		const gap = 8;
+		const width = Math.min(360, Math.max(280, window.innerWidth - margin * 2));
+		element.style.width = `${width}px`;
+		const previewRect = element.getBoundingClientRect();
+		let left = anchorRect.left;
+		if (left + width > window.innerWidth - margin) {
+			left = window.innerWidth - width - margin;
+		}
+		left = Math.max(margin, left);
+
+		let top = anchorRect.bottom + gap;
+		if (top + previewRect.height > window.innerHeight - margin) {
+			top = anchorRect.top - previewRect.height - gap;
+		}
+		top = Math.max(margin, top);
+		element.style.left = `${Math.round(left)}px`;
+		element.style.top = `${Math.round(top)}px`;
+	}
+
 	getCurrentReviewerIdentity(): ReviewerIdentity {
 		return this.getCurrentRelayIdentity() ?? fallbackIdentity();
 	}
@@ -293,6 +551,117 @@ export default class RelayCommentsPlugin
 			return { name: metadataAuthor, source: "metadata" };
 		}
 		return relayIdentity ?? fallbackIdentity();
+	}
+
+	private buildThreadPreviewData(
+		filePath: string,
+		from: number,
+		to: number,
+	): ThreadPreviewData | null {
+		const view = this.getMarkdownViewByPath(filePath);
+		const editor = view?.editor;
+		if (!view?.file || view.file.path !== filePath || !editor) return null;
+		const text = editor.getValue();
+		const marks = parseCriticMarkup(text)
+			.filter((mark) => mark.valid)
+			.sort((a, b) => a.from - b.from || a.to - b.to);
+		const consumed = new Set<string>();
+
+		for (let index = 0; index < marks.length; index += 1) {
+			const mark = marks[index];
+			if (consumed.has(mark.id)) continue;
+			const attached = collectAttachedComments(marks, text, index, consumed, {
+				allowCommentAnchor: true,
+			}).comments;
+			consumed.add(mark.id);
+			for (const comment of attached) {
+				consumed.add(comment.id);
+			}
+			if (mark.from !== from || mark.to !== to) continue;
+
+			const run = mark.type === "comment" ? [mark, ...attached] : attached;
+			const visibleComments = run.filter(
+				(comment) => comment.content.trim().length > 0,
+			);
+			if (visibleComments.length === 0) return null;
+			const firstComment = visibleComments[0];
+			const identity = this.getReviewerIdentityForMark(firstComment, filePath);
+			const resolved = [mark, ...visibleComments].some(
+				(candidate) => candidate.metadata?.resolved === "true",
+			);
+			return {
+				label: resolved
+					? "Resolved comment"
+					: isSuggestionMark(mark)
+						? "Suggestion comment"
+						: "Comment",
+				countLabel: `${visibleComments.length} ${
+					visibleComments.length === 1 ? "comment" : "comments"
+				}`,
+				anchorText: getPreviewAnchorText(mark, text, marks),
+				snippet: clampPreviewSnippet(firstComment.content),
+				moreLabel:
+					visibleComments.length > 1
+						? `+${visibleComments.length - 1} ${
+								visibleComments.length === 2 ? "reply" : "replies"
+							}`
+						: null,
+				author: identity.source === "fallback" ? null : identity.name,
+				date: formatPreviewDate(firstComment),
+				resolved,
+			};
+		}
+		return null;
+	}
+
+	private showCommentPreviewAtCursor(editor: Editor): void {
+		const file = this.getCurrentMarkdownView()?.file;
+		if (!file) {
+			new Notice("Open a Markdown note to preview comments.");
+			return;
+		}
+		const mark = getCurrentMark(editor);
+		if (!mark?.valid) {
+			new Notice("No comment thread at the cursor.");
+			return;
+		}
+		const cm = this.getCodeMirrorEditor(editor);
+		const anchor = cm ? this.getRenderedRangeElement(cm, mark.from, mark.to) : null;
+		const rect =
+			anchor?.getBoundingClientRect() ??
+			this.getEditorOffsetRect(editor, mark.contentFrom, mark.contentTo, cm);
+		if (!rect) {
+			new Notice("No visible comment anchor at the cursor.");
+			return;
+		}
+		const shown = this.showThreadPreview(file.path, mark.from, mark.to, rect, {
+			anchor,
+			returnFocus: () => editor.focus(),
+			role: "dialog",
+		});
+		if (!shown) {
+			new Notice("No comment thread at the cursor.");
+		}
+	}
+
+	private getEditorOffsetRect(
+		editor: Editor,
+		fromOffset: number,
+		toOffset: number,
+		cm: CodeMirrorAdapter | null = this.getCodeMirrorEditor(editor),
+	): ClientRectLike | null {
+		if (!cm) return null;
+		const start = cm.coordsAtPos(fromOffset);
+		const end = cm.coordsAtPos(Math.max(fromOffset, toOffset - 1));
+		if (!start && !end) return null;
+		if (!start) return end;
+		if (!end) return start;
+		return {
+			top: Math.min(start.top, end.top),
+			bottom: Math.max(start.bottom, end.bottom),
+			left: Math.min(start.left, end.left),
+			right: Math.max(start.right, end.right),
+		};
 	}
 
 	async saveSettingsAndRefresh(): Promise<void> {
@@ -782,6 +1151,11 @@ export default class RelayCommentsPlugin
 				this.closeReviewSidebar();
 			},
 		});
+		this.addEditorCommand(
+			"show-comment-preview-at-cursor",
+			"Show comment preview at cursor",
+			(editor) => this.showCommentPreviewAtCursor(editor),
+		);
 		this.addEditorCommand("add-addition", "Mark selection as addition", (editor) =>
 			wrapSelection(editor, "addition"),
 		);
@@ -848,12 +1222,14 @@ export default class RelayCommentsPlugin
 		this.registerEvent(
 			this.app.workspace.on("editor-change", () => {
 				this.captureActiveMarkdownPath();
+				this.hideThreadPreview();
 				this.refreshReviewSidebars();
 			}),
 		);
 		this.registerEvent(
 			this.app.workspace.on("active-leaf-change", () => {
 				this.captureActiveMarkdownPath();
+				this.hideThreadPreview();
 				this.queueEditorExtensionRefresh(0);
 				this.refreshReviewSidebars();
 			}),
@@ -861,6 +1237,7 @@ export default class RelayCommentsPlugin
 		this.registerEvent(
 			this.app.workspace.on("file-open", () => {
 				this.captureActiveMarkdownPath();
+				this.hideThreadPreview();
 				this.queueEditorExtensionRefresh(0);
 				this.refreshReviewSidebars();
 			}),
@@ -962,6 +1339,91 @@ function rectFromElement(element: HTMLElement): ClientRectLike {
 		left: rect.left,
 		right: rect.right,
 	};
+}
+
+function getPreviewAnchorText(
+	mark: CriticMark,
+	text: string,
+	marks: CriticMark[],
+): string {
+	switch (mark.type) {
+		case "substitution":
+			return [mark.oldText, mark.newText]
+				.map((value) => normalizePreviewText(value ?? ""))
+				.filter((value) => value.length > 0)
+				.join(" → ");
+		case "comment": {
+			const range = findPrecedingWordRange(text, mark.from, marks);
+			return range ? text.slice(range[0], range[1]) : "Comment";
+		}
+		default:
+			return mark.content;
+	}
+}
+
+function clampPreviewSnippet(value: string): string {
+	const lines = value
+		.replace(/\r\n?/g, "\n")
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0);
+	const clipped = lines.slice(0, 3).join("\n");
+	const suffix = lines.length > 3 ? "…" : "";
+	if (clipped.length <= 320) return `${clipped}${suffix}`;
+	return `${clipped.slice(0, 317).trimEnd()}…`;
+}
+
+function normalizePreviewText(value: string): string {
+	return value.replace(/\s+/g, " ").trim();
+}
+
+function formatPreviewDate(mark: CriticMark): string | null {
+	const rawDate = mark.metadata?.date?.trim();
+	if (!rawDate) return null;
+	const date = new Date(rawDate);
+	if (Number.isNaN(date.getTime())) return rawDate;
+	return new Intl.DateTimeFormat(undefined, {
+		month: "short",
+		day: "numeric",
+		year: "numeric",
+	}).format(date);
+}
+
+function isSuggestionMark(mark: CriticMark): boolean {
+	return (
+		mark.type === "addition" ||
+		mark.type === "deletion" ||
+		mark.type === "substitution"
+	);
+}
+
+function findPrecedingWordRange(
+	text: string,
+	from: number,
+	marks: CriticMark[],
+): [number, number] | null {
+	let end = from;
+	while (end > 0) {
+		const char = text[end - 1];
+		if (char === "\n") return null;
+		if (char === " " || char === "\t") {
+			end -= 1;
+			continue;
+		}
+		break;
+	}
+	if (end === 0) return null;
+	let start = end;
+	while (start > 0) {
+		const char = text[start - 1];
+		if (char === "\n" || char === " " || char === "\t") break;
+		start -= 1;
+	}
+	if (end <= start) return null;
+	const touchesMark = marks.some(
+		(mark) => mark.from < end && mark.to > start,
+	);
+	return touchesMark ? null : [start, end];
 }
 
 function userToIdentity(

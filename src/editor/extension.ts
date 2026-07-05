@@ -28,6 +28,14 @@ export interface ReviewEditorController {
 	getRenderVersion(): number;
 	shouldShowInlineActions(): boolean;
 	activateCommentThread(path: string | null, from: number, to: number): void;
+	queueThreadPreview(
+		path: string | null,
+		from: number,
+		to: number,
+		anchor: HTMLElement,
+	): void;
+	scheduleThreadPreviewDismiss(): void;
+	hideThreadPreview(): void;
 	notifyEditorSelectionChanged(): void;
 	startCommentDraft(
 		path: string | null,
@@ -142,11 +150,35 @@ export function createReviewEditorExtension(
 					to,
 				);
 			};
+			private handlePointerOver = (event: PointerEvent): void => {
+				const target = event.target as HTMLElement | null;
+				const anchor = target?.closest<HTMLElement>(
+					".cm-critic-thread-anchor",
+				);
+				if (!anchor || !this.view.dom.contains(anchor)) return;
+				const from = Number(anchor.dataset.criticFrom);
+				const to = Number(anchor.dataset.criticTo);
+				if (!Number.isFinite(from) || !Number.isFinite(to)) return;
+				if (event.buttons !== 0) return;
+				controller.queueThreadPreview(readPath(this.view.state), from, to, anchor);
+			};
+			private handlePointerOut = (event: PointerEvent): void => {
+				const target = event.target as HTMLElement | null;
+				const anchor = target?.closest<HTMLElement>(
+					".cm-critic-thread-anchor",
+				);
+				if (!anchor || !this.view.dom.contains(anchor)) return;
+				const related = event.relatedTarget as Node | null;
+				if (related && anchor.contains(related)) return;
+				controller.scheduleThreadPreviewDismiss();
+			};
 
 			constructor(private view: EditorView) {
 				this.commentButton = this.createCommentButton();
 				this.view.dom.appendChild(this.commentButton);
 				this.view.dom.addEventListener("click", this.handleClick);
+				this.view.dom.addEventListener("pointerover", this.handlePointerOver);
+				this.view.dom.addEventListener("pointerout", this.handlePointerOut);
 				this.observeSourceView();
 				this.syncDomLivePreview();
 				this.livePreviewPollId = window.setInterval(
@@ -181,6 +213,9 @@ export function createReviewEditorExtension(
 					this.livePreviewPollId = null;
 				}
 				this.view.dom.removeEventListener("click", this.handleClick);
+				this.view.dom.removeEventListener("pointerover", this.handlePointerOver);
+				this.view.dom.removeEventListener("pointerout", this.handlePointerOut);
+				controller.hideThreadPreview();
 				this.commentButton.remove();
 			}
 
