@@ -5,6 +5,7 @@ import {
 	formatMarkDate,
 	getPreviewAnchorText,
 	normalizeWhitespace,
+	rectDrifted,
 } from "src/critic/display";
 import { parseCriticMarkup } from "src/critic/parse";
 
@@ -97,5 +98,27 @@ describe("formatMarkDate", () => {
 describe("normalizeWhitespace", () => {
 	it("collapses runs and trims", () => {
 		expect(normalizeWhitespace("  a\n\tb   c ")).toBe("a b c");
+	});
+});
+
+describe("rectDrifted", () => {
+	const rect = (top: number, left: number, width = 100, height = 20) => ({
+		top,
+		left,
+		width,
+		height,
+	});
+
+	it("tolerates sub-pixel jitter", () => {
+		expect(rectDrifted(rect(10, 10), rect(11.5, 10))).toBe(false);
+	});
+
+	it("fires on real movement", () => {
+		expect(rectDrifted(rect(10, 10), rect(16, 10))).toBe(true);
+		expect(rectDrifted(rect(10, 10), rect(10, 30))).toBe(true);
+	});
+
+	it("fires when the anchor is resized", () => {
+		expect(rectDrifted(rect(10, 10, 100), rect(10, 10, 60))).toBe(true);
 	});
 });

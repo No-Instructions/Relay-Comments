@@ -73,6 +73,26 @@ export function clampPreviewSnippet(value: string): string {
 	return `${clipped.slice(0, 317).trimEnd()}…`;
 }
 
+export interface RectLike {
+	top: number;
+	left: number;
+	width: number;
+	height: number;
+}
+
+/**
+ * Whether an anchored overlay's reference rect has moved or resized enough
+ * that the overlay is no longer where the user saw it appear.
+ */
+export function rectDrifted(a: RectLike, b: RectLike, tolerance = 2): boolean {
+	return (
+		Math.abs(a.top - b.top) > tolerance ||
+		Math.abs(a.left - b.left) > tolerance ||
+		Math.abs(a.width - b.width) > tolerance ||
+		Math.abs(a.height - b.height) > tolerance
+	);
+}
+
 /** The quoted text a preview shows for a thread's anchor mark. */
 export function getPreviewAnchorText(
 	mark: CriticMark,

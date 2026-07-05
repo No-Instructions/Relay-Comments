@@ -25,6 +25,7 @@ import {
 	getPreviewAnchorText,
 	isSuggestionMark,
 	normalizeWhitespace,
+	rectDrifted,
 } from "./critic/display";
 import {
 	applyAllInEditor,
@@ -402,11 +403,28 @@ export default class RelayCommentsPlugin
 			this.hideThreadPreview();
 		};
 		const onScroll = () => this.hideThreadPreview();
+		// The preview is positioned once at fixed viewport coordinates. Any
+		// anchor movement that is not a scroll (window or splitter resize,
+		// panes reflowing, zoom changes) would orphan it — watch the anchor
+		// and dismiss the moment it drifts.
+		const onResize = () => this.hideThreadPreview();
+		const anchorHomeRect = options.anchor?.getBoundingClientRect() ?? null;
+		const driftWatcher = window.setInterval(() => {
+			const watched = options.anchor;
+			if (!watched || !anchorHomeRect) return;
+			if (
+				!watched.isConnected ||
+				rectDrifted(anchorHomeRect, watched.getBoundingClientRect())
+			) {
+				this.hideThreadPreview();
+			}
+		}, 120);
 		element.addEventListener("pointerenter", cancelDismiss);
 		element.addEventListener("pointerleave", scheduleDismiss);
 		document.addEventListener("mousedown", onDocumentMouseDown, true);
 		document.addEventListener("keydown", onDocumentKeyDown, true);
 		document.addEventListener("scroll", onScroll, true);
+		window.addEventListener("resize", onResize);
 
 		this.activeThreadPreview = {
 			element,
@@ -420,6 +438,8 @@ export default class RelayCommentsPlugin
 				document.removeEventListener("mousedown", onDocumentMouseDown, true);
 				document.removeEventListener("keydown", onDocumentKeyDown, true);
 				document.removeEventListener("scroll", onScroll, true);
+				window.removeEventListener("resize", onResize);
+				window.clearInterval(driftWatcher);
 				if (options.anchor) {
 					if (previousTitle === null) {
 						options.anchor.removeAttribute("title");
