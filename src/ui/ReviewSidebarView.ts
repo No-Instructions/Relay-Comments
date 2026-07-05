@@ -8,10 +8,14 @@ import {
 	setTooltip,
 	type App,
 	type IconName,
-	type Modifier,
 	type WorkspaceLeaf,
 } from "obsidian";
 import { collectAttachedComments } from "../critic/threading";
+import {
+	formatComposerSubmitHint,
+	getComposerSubmitScopeBinding,
+	isComposerSubmitKey,
+} from "./composer-keys";
 import { replacementForMark, type CriticAction } from "../critic/transform";
 import type { CriticMark, CriticMarkType } from "../critic/types";
 import type RelayCommentsPlugin from "../main";
@@ -53,8 +57,6 @@ const MARK_TYPE_LABELS: Partial<Record<CriticMarkType, string>> = {
 	substitution: "Suggested replacement",
 	highlight: "Highlight",
 };
-
-const COMPOSER_SUBMIT_KEY: "mod-enter" | "enter" = "mod-enter";
 
 interface PendingFocus {
 	kind: "edit" | "draft";
@@ -376,7 +378,7 @@ export class ReviewSidebarView extends ItemView {
 		const actions = card.createDiv({ cls: "critic-composer-actions" });
 		const submit = this.addTextButton(
 			actions,
-			"Send",
+			"Comment",
 			() => this.commitDraftComment(textarea),
 			{ primary: true },
 		);
@@ -734,7 +736,7 @@ export class ReviewSidebarView extends ItemView {
 		parent: HTMLElement,
 		textarea: HTMLTextAreaElement,
 	): void {
-		const hint = formatComposerSubmitHint();
+		const hint = formatComposerSubmitHint(Platform.isMacOS);
 		const descriptionId = `relay-comments-composer-hint-${++this.composerHintId}`;
 		textarea.setAttr("aria-describedby", descriptionId);
 		const description = parent.createDiv({
@@ -745,7 +747,7 @@ export class ReviewSidebarView extends ItemView {
 	}
 
 	private addComposerHelpButton(parent: HTMLElement): HTMLButtonElement {
-		const hint = formatComposerSubmitHint();
+		const hint = formatComposerSubmitHint(Platform.isMacOS);
 		const tooltipId = `relay-comments-composer-help-${++this.composerHintId}`;
 		const wrapper = parent.createSpan({ cls: "critic-composer-help" });
 		const button = wrapper.createEl("button", {
@@ -970,7 +972,7 @@ export class ReviewSidebarView extends ItemView {
 		const actions = composer.createDiv({ cls: "critic-composer-actions" });
 		const submit = this.addTextButton(
 			actions,
-			"Send",
+			"Reply",
 			() => this.commitThreadReply(item, mark, textarea),
 			{ primary: true },
 		);
@@ -1079,28 +1081,6 @@ export class ReviewSidebarView extends ItemView {
 		this.plugin.applyMarkActionFromSidebar(mark, action);
 		this.render();
 	}
-}
-
-function isComposerSubmitKey(event: KeyboardEvent): boolean {
-	if (event.key !== "Enter") return false;
-	if (COMPOSER_SUBMIT_KEY === "enter") {
-		return !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
-	}
-	return (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey;
-}
-
-function getComposerSubmitScopeBinding(): { modifiers: Modifier[]; key: string } {
-	if (COMPOSER_SUBMIT_KEY === "enter") {
-		return { modifiers: [], key: "Enter" };
-	}
-	return { modifiers: ["Mod"], key: "Enter" };
-}
-
-function formatComposerSubmitHint(): string {
-	if (COMPOSER_SUBMIT_KEY === "enter") {
-		return "Enter to send · Shift+Enter for newline · Esc to cancel";
-	}
-	return `${Platform.isMacOS ? "Cmd" : "Ctrl"}+Enter to send · Esc to cancel`;
 }
 
 function confirmDiscardDraft(app: App): Promise<boolean> {
