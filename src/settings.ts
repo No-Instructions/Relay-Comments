@@ -1,17 +1,11 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type RelayCommentsPlugin from "./main";
 
-export interface RelayCommentsSettings {
-	showAuthorChips: boolean;
-	showInlineActions: boolean;
-	openSidebarOnCommentSelect: boolean;
-}
-
-export const DEFAULT_SETTINGS: RelayCommentsSettings = {
-	showAuthorChips: true,
-	showInlineActions: true,
-	openSidebarOnCommentSelect: true,
-};
+export {
+	DEFAULT_SETTINGS,
+	resolveSettings,
+	type RelayCommentsSettings,
+} from "./settings-data";
 
 export class RelayCommentsSettingTab extends PluginSettingTab {
 	constructor(app: App, private plugin: RelayCommentsPlugin) {

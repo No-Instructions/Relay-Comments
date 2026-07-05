@@ -30,7 +30,7 @@ import {
 import { ADD_COMMENT_HOTKEYS } from "./editor/hotkeys";
 import { createReviewPostProcessor } from "./preview/postprocessor";
 import {
-	DEFAULT_SETTINGS,
+	resolveSettings,
 	RelayCommentsSettingTab,
 	type RelayCommentsSettings,
 } from "./settings";
@@ -764,17 +764,7 @@ export default class RelayCommentsPlugin
 	}
 
 	private async loadSettings(): Promise<void> {
-		const loaded = await this.loadData();
-		this.settings = {
-			showAuthorChips:
-				loaded?.showAuthorChips ?? DEFAULT_SETTINGS.showAuthorChips,
-			showInlineActions:
-				loaded?.showInlineActions ?? DEFAULT_SETTINGS.showInlineActions,
-			openSidebarOnCommentSelect:
-				loaded?.openSidebarOnCommentSelect ??
-				loaded?.enableReviewSidebar ??
-				DEFAULT_SETTINGS.openSidebarOnCommentSelect,
-		};
+		this.settings = resolveSettings(await this.loadData());
 	}
 
 	private registerCommands(): void {
