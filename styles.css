@@ -52,6 +52,16 @@
 	transition: background-color 120ms ease;
 }
 
+/* A done task's strikethrough is painted by the line element and ends up
+   beneath this span's background; re-declare it locally so it draws on
+   top. (Reading mode already computes line-through on the mark itself.) */
+.HyperMD-task-line[data-task="x"] .cm-critic-highlight,
+.HyperMD-task-line[data-task="X"] .cm-critic-highlight,
+.HyperMD-task-line[data-task="x"] .cm-critic-comment-anchor,
+.HyperMD-task-line[data-task="X"] .cm-critic-comment-anchor {
+	text-decoration-line: line-through;
+}
+
 .cm-critic-highlight.cm-critic-thread-anchor:hover,
 .cm-critic-comment-anchor:hover {
 	background-color: color-mix(in srgb, var(--color-yellow) 42%, transparent);
