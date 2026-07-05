@@ -9,7 +9,7 @@ Markdown file as plain [CriticMarkup](#the-format), so review state
 survives without a server, syncs with anything that syncs text, and stays
 readable in any editor.
 
-![A comment arriving in a daily note and getting a reply](docs/comment-thread.gif)
+![A comment arrives in a daily note, is read from the hover preview, and gets a reply](docs/comment-thread.gif)
 
 ## Features
 
@@ -23,6 +23,9 @@ readable in any editor.
 - **Review sidebar** — every comment, suggestion, and highlight in the
   active note, in document order. Cards carry a colored spine and diff
   chips so you can scan what kind of change each one is.
+- **Read without opening** — hover a commented passage to preview the
+  thread in place: the quote, the comment, and the reply count. A command
+  shows the same preview at the cursor for keyboard users.
 - **Clean reading** — Live Preview and Reading mode render review marks and
   hide the raw delimiters; Source mode shows the plain text. Half-typed
   markup is never hidden, so nothing silently disappears while you type.
@@ -37,15 +40,17 @@ readable in any editor.
 
 - Select text and click the comment button that appears in the margin, use
   the right-click menu, or press `Ctrl+Alt+M` (`Cmd+Opt+M` on macOS).
-- Click any highlighted passage to open its thread in the sidebar; click a
-  sidebar card to jump to its place in the note.
+- Hover a highlighted passage to read its thread without leaving the note;
+  click it to open the thread in the sidebar. Click a sidebar card to jump
+  to its place in the note.
 - Hover a card for **Resolve**; suggestions add **Accept** / **Reject**
   under the `⋯` menu.
 
-Commands (search "Relay Comments" in the command palette): open review
-sidebar, add comment, highlight selection, mark selection as
-addition/deletion/substitution, accept/reject current, accept/reject all,
-and finalize for publish.
+Commands (search "Relay Comments" in the command palette): open/close the
+review sidebar, add comment, show comment preview at cursor, highlight
+selection, mark selection as addition/deletion/substitution, accept/reject
+current, accept/reject all, and finalize for publish. The ribbon icon
+toggles the sidebar.
 
 ## The format
 
