@@ -257,7 +257,12 @@ export default class RelayCommentsPlugin
 		return this.settings.showInlineActions;
 	}
 
-	activateCommentThread(path: string | null, from: number, to: number): void {
+	activateCommentThread(
+		path: string | null,
+		from: number,
+		to: number,
+		options?: { focusReply?: boolean },
+	): void {
 		// The thread is opening where the preview points; keep both around
 		// and they compete for the same attention.
 		this.hideThreadPreview();
@@ -268,7 +273,7 @@ export default class RelayCommentsPlugin
 
 		const activate = (leaf: WorkspaceLeaf | undefined) => {
 			if (leaf?.view instanceof ReviewSidebarView) {
-				leaf.view.activateThreadForRange(from, to);
+				leaf.view.activateThreadForRange(from, to, options);
 			}
 		};
 
@@ -296,6 +301,9 @@ export default class RelayCommentsPlugin
 		anchor: HTMLElement,
 	): void {
 		if (!this.settings.showHoverPreview) return;
+		// A visible sidebar already shows the thread; a preview on top of
+		// that is noise. (A closed or covered sidebar doesn't count.)
+		if (this.isReviewSidebarVisible()) return;
 		const active = document.activeElement;
 		if (
 			active instanceof HTMLTextAreaElement &&
@@ -316,6 +324,16 @@ export default class RelayCommentsPlugin
 				role: "tooltip",
 			});
 		}, 300);
+	}
+
+	private isReviewSidebarVisible(): boolean {
+		return this.app.workspace
+			.getLeavesOfType(VIEW_TYPE_CRITIC_REVIEW)
+			.some(
+				(leaf) =>
+					leaf.view instanceof ReviewSidebarView &&
+					leaf.view.containerEl.isShown(),
+			);
 	}
 
 	scheduleThreadPreviewDismiss(): void {
@@ -368,14 +386,11 @@ export default class RelayCommentsPlugin
 		if (!data) return false;
 		this.hideThreadPreview();
 
-		const element = this.renderThreadPreview(data, options.role);
+		const element = this.renderThreadPreview(data, options.role, (opts) =>
+			this.activateCommentThread(filePath, from, to, opts),
+		);
 		document.body.appendChild(element);
 		this.positionThreadPreview(element, anchorRect);
-		// The preview is a doorway, not a destination: clicking it opens the
-		// thread in the sidebar (which also dismisses the preview).
-		element.addEventListener("click", () => {
-			this.activateCommentThread(filePath, from, to);
-		});
 		const previousTitle = options.anchor?.getAttribute("title") ?? null;
 		const previousDescribedBy =
 			options.anchor?.getAttribute("aria-describedby") ?? null;
@@ -471,7 +486,25 @@ export default class RelayCommentsPlugin
 	private renderThreadPreview(
 		data: ThreadPreviewData,
 		role: "tooltip" | "dialog",
+		onOpen: (opts?: { focusReply?: boolean }) => void,
 	): HTMLElement {
+		// The popover is for reading; everything else is a CTA into the
+		// sidebar — reply, or follow the breadcrumb to the full thread. The
+		// body stays plain (normal pointer, selectable text).
+		const wireOpenLink = (
+			link: HTMLElement,
+			opts?: { focusReply?: boolean },
+		) => {
+			link.addClass("critic-thread-preview-link");
+			link.setAttribute("role", "button");
+			link.tabIndex = 0;
+			link.addEventListener("click", () => onOpen(opts));
+			link.addEventListener("keydown", (event) => {
+				if (event.key !== "Enter" && event.key !== " ") return;
+				event.preventDefault();
+				onOpen(opts);
+			});
+		};
 		const element = document.createElement("div");
 		element.id = `critic-thread-preview-${this.previewId}`;
 		element.className = data.resolved
@@ -489,10 +522,13 @@ export default class RelayCommentsPlugin
 		const header = element.createDiv({ cls: "critic-thread-preview-header" });
 		header.createSpan({ cls: "critic-thread-preview-label", text: data.label });
 		if (data.countLabel) {
-			header.createSpan({
-				cls: "critic-thread-preview-count",
-				text: data.countLabel,
-			});
+			wireOpenLink(
+				header.createSpan({
+					cls: "critic-thread-preview-count",
+					text: data.countLabel,
+					attr: { "aria-label": "Open thread in sidebar" },
+				}),
+			);
 		}
 		if (data.resolved) {
 			header.createSpan({
@@ -504,16 +540,27 @@ export default class RelayCommentsPlugin
 			cls: "critic-thread-preview-message",
 			text: data.snippet,
 		});
-		const metaParts = [
-			data.author,
-			data.date,
-			data.moreLabel,
-		].filter((part): part is string => Boolean(part));
-		if (metaParts.length > 0) {
-			element.createDiv({
-				cls: "critic-thread-preview-meta",
-				text: metaParts.join(" · "),
-			});
+		const metaParts = [data.author, data.date].filter(
+			(part): part is string => Boolean(part),
+		);
+		const meta = element.createDiv({ cls: "critic-thread-preview-meta" });
+		meta.appendText(metaParts.join(" · "));
+		if (metaParts.length > 0) meta.appendText(" · ");
+		wireOpenLink(
+			meta.createSpan({
+				text: "Reply",
+				attr: { "aria-label": "Reply in sidebar" },
+			}),
+			{ focusReply: true },
+		);
+		if (data.moreLabel) {
+			meta.appendText(" · ");
+			wireOpenLink(
+				meta.createSpan({
+					text: data.moreLabel,
+					attr: { "aria-label": "Open thread in sidebar" },
+				}),
+			);
 		}
 		return element;
 	}
@@ -534,12 +581,22 @@ export default class RelayCommentsPlugin
 		left = Math.max(margin, left);
 
 		let top = anchorRect.bottom + gap;
+		let placedAbove = false;
 		if (top + previewRect.height > window.innerHeight - margin) {
 			top = anchorRect.top - previewRect.height - gap;
+			placedAbove = true;
 		}
 		top = Math.max(margin, top);
 		element.style.left = `${Math.round(left)}px`;
 		element.style.top = `${Math.round(top)}px`;
+		// The caret pins the popover to its anchor: aim it at the anchor's
+		// horizontal center, kept clear of the rounded corners.
+		const caretX = Math.min(
+			width - 18,
+			Math.max(18, anchorRect.left + (anchorRect.right - anchorRect.left) / 2 - left),
+		);
+		element.style.setProperty("--critic-preview-caret-x", `${Math.round(caretX)}px`);
+		element.toggleClass("is-above", placedAbove);
 	}
 
 	getCurrentReviewerIdentity(): ReviewerIdentity {

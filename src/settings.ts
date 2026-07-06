@@ -39,7 +39,7 @@ export class RelayCommentsSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Comment preview on hover")
 			.setDesc(
-				"Show a floating preview when hovering commented text. Click the preview to open the thread in the sidebar.",
+				"Show a floating preview when hovering commented text. Its links reply or open the thread in the sidebar.",
 			)
 			.addToggle((toggle) => {
 				toggle

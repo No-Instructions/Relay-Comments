@@ -103,8 +103,8 @@
 .critic-thread-preview {
 	position: fixed;
 	z-index: 40;
-	max-height: 45vh;
-	overflow: auto;
+	/* No overflow clipping: the caret renders outside the border box, and
+	   the body is height-bounded by its own line clamp */
 	padding: 10px 12px;
 	border: 1px solid var(--background-modifier-border);
 	border-radius: 8px;
@@ -113,8 +113,9 @@
 	box-shadow: 0 8px 28px rgba(0, 0, 0, 0.22);
 	font-size: var(--font-ui-small);
 	line-height: 1.35;
-	/* The preview is clickable: it opens the thread in the sidebar */
-	cursor: pointer;
+	/* Reading surface: normal pointer, selectable text; only the links
+	   inside act as CTAs */
+	user-select: text;
 }
 
 .critic-thread-preview:focus {
@@ -148,6 +149,47 @@
 	background: var(--background-modifier-border);
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
+}
+
+/* The caret that pins the popover to its anchor text. A rotated square
+   sharing the popover's border and background; --critic-preview-caret-x
+   is set by the positioning code to aim at the anchor's center. */
+.critic-thread-preview::before {
+	content: "";
+	position: absolute;
+	top: -6px;
+	left: var(--critic-preview-caret-x, 24px);
+	width: 10px;
+	height: 10px;
+	margin-left: -5px;
+	background: var(--background-primary);
+	border-left: 1px solid var(--background-modifier-border);
+	border-top: 1px solid var(--background-modifier-border);
+	transform: rotate(45deg);
+}
+
+.critic-thread-preview.is-above::before {
+	top: auto;
+	bottom: -6px;
+	border-left: none;
+	border-top: none;
+	border-right: 1px solid var(--background-modifier-border);
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.critic-thread-preview-link {
+	color: var(--text-accent);
+	cursor: pointer;
+}
+
+.critic-thread-preview-link:hover {
+	text-decoration: underline;
+}
+
+.critic-thread-preview-link:focus-visible {
+	outline: 2px solid var(--text-accent);
+	outline-offset: 1px;
+	border-radius: 2px;
 }
 
 .critic-thread-preview-message {

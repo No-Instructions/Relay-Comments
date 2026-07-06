@@ -148,7 +148,11 @@ export class ReviewSidebarView extends ItemView {
 		this.render();
 	}
 
-	activateThreadForRange(from: number, to: number): void {
+	activateThreadForRange(
+		from: number,
+		to: number,
+		options?: { focusReply?: boolean },
+	): void {
 		const state = this.plugin.getActiveReviewState();
 		if (!state) return;
 
@@ -169,6 +173,13 @@ export class ReviewSidebarView extends ItemView {
 		this.selectedItemId = item.id;
 		this.replyDraftItemId = item.id;
 		this.render();
+		if (options?.focusReply) {
+			this.containerEl
+				.querySelector<HTMLTextAreaElement>(
+					`[data-critic-item-id="${CSS.escape(item.id)}"] .critic-thread-textarea`,
+				)
+				?.focus();
+		}
 	}
 
 	private render(): void {
