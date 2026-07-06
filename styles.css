@@ -670,6 +670,8 @@
 	position: relative;
 	display: inline-flex;
 	align-items: center;
+	/* Actions sit left; the keyboard hint keeps to the right edge */
+	margin-left: auto;
 }
 
 .critic-sidebar .critic-composer-help-button {
