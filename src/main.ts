@@ -1302,10 +1302,15 @@ export default class RelayCommentsPlugin
 			}),
 		);
 		this.registerEvent(
-			this.app.workspace.on("active-leaf-change", () => {
+			this.app.workspace.on("active-leaf-change", (leaf) => {
 				this.captureActiveMarkdownPath();
 				this.hideThreadPreview();
 				this.queueEditorExtensionRefresh(0);
+				// Clicking into the sidebar activates its leaf; rebuilding it
+				// for that lands between mousedown and mouseup and swallows
+				// the very button press being made (resolve took two clicks).
+				// Its content tracks the reviewed note, which hasn't changed.
+				if (leaf?.view instanceof ReviewSidebarView) return;
 				this.refreshReviewSidebars();
 			}),
 		);
