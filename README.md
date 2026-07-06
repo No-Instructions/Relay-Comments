@@ -9,50 +9,58 @@ Markdown file as plain [CriticMarkup](#the-format), so review state
 survives without a server, syncs with anything that syncs text, and stays
 readable in any editor.
 
+## Discuss a passage
+
+Select text and comment — `Ctrl+Alt+M` (`Cmd+Opt+M` on macOS), the margin
+button, or the right-click menu. Replies stack into a thread anchored to
+the passage, and collaborators' comments land in your note as they write
+them. Hover any commented passage to read the thread in place; the
+preview's links reply or open the full thread.
+
 ![A comment arrives in a daily note, is read from the hover preview, and gets a reply](docs/comment-thread.gif)
 
-## Features
+## Suggest edits
 
-- **Comment threads** — select text and comment; replies stack into a
-  thread anchored to the passage. Resolving a thread removes the markup and
-  keeps the text.
-- **Suggested edits** — mark additions `{++like this++}`, deletions
-  `{--like this--}`, and replacements `{~~old~>new~~}`. Accept or reject
-  each one from the sidebar, at the cursor, or all at once
-  (`Finalize for publish`).
-- **Review sidebar** — every comment, suggestion, and highlight in the
-  active note, in document order. Cards carry a colored spine and diff
-  chips so you can scan what kind of change each one is.
-- **Read without opening** — hover a commented passage to preview the
-  thread in place, with links to reply or open the full thread. A command
-  shows the same preview at the cursor for keyboard users.
-- **Canvas comments** — Figma-style pins on any canvas: right-click a
-  card or the empty board and the pin lands exactly where you clicked.
-  Pins carry the author's initial, hold their size at any zoom, and open
-  a floating thread card to read, reply, and resolve.
-- **Clean reading** — Live Preview and Reading mode render review marks and
-  hide the raw delimiters; Source mode shows the plain text. Half-typed
-  markup is never hidden, so nothing silently disappears while you type.
-- **Works standalone, better with [Relay](https://relay.md)** — no account
-  or plugin dependency required. When the Relay plugin is present, comments
-  in shared folders resolve to real collaborator names and avatars, and
-  threads update live as teammates type.
+Mark additions `{++like this++}`, deletions `{--like this--}`, and
+replacements `{~~old~>new~~}`. Review them where they sit: hover a
+suggestion and **Accept** or **Reject** it from the preview — or sweep
+the whole note at once with `Finalize for publish`.
 
-![The review sidebar next to a note with comments, suggestions, and highlights](docs/review-sidebar-dark.png)
+![Hovering a suggested replacement shows Accept and Reject; accepting rewrites the text in place](docs/suggested-edits.gif)
+
+## Review in the sidebar
+
+Every comment, suggestion, and highlight in the note, in document order,
+with colored spines and diff chips so you can scan what each one is.
+Click a card to jump to its place in the note; resolve a thread with one
+click — the markup leaves the note, the text stays.
+
+![Opening the review sidebar, jumping to a suggestion from its card, and resolving a thread](docs/review-sidebar.gif)
+
+## Comment on canvases
+
+Figma-style pins on any canvas: right-click a card or the empty board
+and the pin lands exactly where you clicked. Pins carry the author's
+initial, hold their size at any zoom, ride their card when it moves, and
+open a floating thread to read, reply, and resolve.
 
 ![A canvas card gets a comment from its right-click menu, then a freestanding pin lands between two cards](docs/canvas-comments.gif)
 
-## Usage
+## Works standalone, better with Relay
 
-- Select text and click the comment button that appears in the margin, use
-  the right-click menu, or press `Ctrl+Alt+M` (`Cmd+Opt+M` on macOS).
-- Hover a highlighted passage to read its thread without leaving the note;
-  click it to open the thread in the sidebar. Click a sidebar card to jump
-  to its place in the note.
-- Hover a card for **Resolve**; suggestions add **Accept** / **Reject**
-  under the `⋯` menu.
-- On a canvas, right-click a card or empty space and choose
-  **Add comment**, or press the same shortcut for click-to-place.
+No account or plugin dependency required. When the
+[Relay](https://relay.md) plugin is present, comments in shared folders
+resolve to real collaborator names and avatars, and threads update live
+as teammates type.
+
+## Usage notes
+
+- Live Preview and Reading mode render review marks and hide the raw
+  delimiters; Source mode shows the plain text. Half-typed markup is
+  never hidden, so nothing silently disappears while you type.
+- Sidebar cards carry **Resolve**; suggestions add **Accept** /
+  **Reject** under the `⋯` menu.
+- On a canvas, the add-comment shortcut starts click-to-place.
 
 Commands (search "Relay Comments" in the command palette): open/close the
 review sidebar, add comment, add comment to canvas (click to place), show
