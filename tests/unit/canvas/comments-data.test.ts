@@ -5,6 +5,7 @@ import {
 	createThread,
 	isEmptyCarrier,
 	makeCarrierNode,
+	nodeAtPoint,
 	pinInitial,
 	pinPosition,
 	removeThread,
@@ -106,5 +107,16 @@ describe("canvas comment threads", () => {
 		expect(authorInitials("Daniel Kavanagh")).toBe("DK");
 		expect(authorInitials("Matt")).toBe("M");
 		expect(authorInitials("  ")).toBe("?");
+	});
+
+	it("attaches points over a node to that node, topmost first", () => {
+		const below = node({ id: "below" });
+		const above = node({ id: "above" });
+		const carrier = { ...makeCarrierNode("c1", 110, 210), width: 0, height: 0 };
+		expect(nodeAtPoint([below, above, carrier], { x: 120, y: 220 })?.id).toBe(
+			"above",
+		);
+		expect(nodeAtPoint([below], { x: 90, y: 220 })).toBeNull();
+		expect(nodeAtPoint([carrier], { x: 110, y: 210 })).toBeNull();
 	});
 });

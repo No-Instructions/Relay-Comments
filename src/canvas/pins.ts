@@ -11,6 +11,7 @@ import {
 	isEmptyCarrier,
 	makeCarrierNode,
 	newThreadId,
+	nodeAtPoint,
 	pinInitial,
 	pinPosition,
 	removeThread,
@@ -250,6 +251,21 @@ export class CanvasCommentPins {
 		layer.querySelectorAll<HTMLElement>("[data-critic-pin]").forEach((el) => {
 			if (!seen.has(el.dataset.criticPin ?? "")) el.remove();
 		});
+
+		// Keep the open card with its thread: re-anchor for node moves and
+		// zoom changes; close it if the thread disappeared under us.
+		if (this.card && this.cardKey) {
+			const [nodeId, threadId] = this.cardKey.split(":");
+			const nodeData = this.findNode(view, nodeId);
+			const thread = nodeData
+				? threadsOf(nodeData).find((candidate) => candidate.id === threadId)
+				: null;
+			if (!nodeData || !thread) {
+				if (seen.size >= 0 && this.cardOwner === view) this.closeCard();
+			} else if (this.cardOwner === view) {
+				this.positionCard(view, this.card, nodeData, thread);
+			}
+		}
 	}
 
 	private ensureLayer(canvas: CanvasLike): HTMLElement | null {
@@ -403,6 +419,26 @@ export class CanvasCommentPins {
 				canvas.ty,
 				canvas.tZoom || 1,
 			);
+		// A point over a node attaches the thread to that node, so the pin
+		// rides its moves; only empty canvas gets a freestanding carrier.
+		const data = canvas.getData();
+		const hit = nodeAtPoint(data.nodes, point);
+		if (hit) {
+			const thread: CanvasCommentThread = {
+				id: newThreadId(),
+				dx: point.x - hit.x,
+				dy: point.y - hit.y,
+				comments: [],
+			};
+			this.writeNode(view, createThread(hit, thread), hit.id);
+			this.openCard(
+				view,
+				hit.id,
+				thread.id,
+				this.pinEl(view, `${hit.id}:${thread.id}`),
+			);
+			return;
+		}
 		const carrier = makeCarrierNode(newThreadId(), point.x, point.y);
 		const thread: CanvasCommentThread = {
 			id: newThreadId(),
@@ -410,7 +446,6 @@ export class CanvasCommentPins {
 			dy: 0,
 			comments: [],
 		};
-		const data = canvas.getData();
 		canvas.importData(
 			{ ...data, nodes: [...data.nodes, createThread(carrier, thread)] },
 			true,
@@ -447,15 +482,23 @@ export class CanvasCommentPins {
 			: null;
 		if (!node || !thread) return;
 
+		// The card lives INSIDE the canvas's transformed container, in
+		// canvas coordinates, so pan/zoom (and the demo camera) carry it on
+		// the compositor with zero skew — a viewport-fixed card re-synced
+		// from rAF reads lags a frame behind and stutters through zooms.
+		// It counter-scales 1/zoom for constant screen size, like the pins.
 		// The card speaks the sidebar's component language: same card
 		// shell and type spine, same avatar headers, same composer with
 		// primary/cancel actions and the keyboard hint on the right.
-		const card = document.body.createDiv({
+		const layer = view.canvas ? this.ensureLayer(view.canvas) : null;
+		if (!layer) return;
+		const card = layer.createDiv({
 			cls: "critic-card critic-canvas-card",
 			attr: { "data-critic-type": "comment" },
 		});
 		this.card = card;
 		this.cardKey = key;
+		this.cardOwner = view;
 
 		const header = card.createDiv({ cls: "critic-canvas-card-header" });
 		header.createSpan({
@@ -619,22 +662,7 @@ export class CanvasCommentPins {
 			if (!submit.disabled) post();
 		});
 
-		this.positionCard(card, pin);
-		// The card is interactive, so it must FOLLOW its pin when the canvas
-		// pans or zooms underneath — dismissing (like the editor hover
-		// preview does) would eat half-written replies. Track per frame;
-		// close only when the pin itself goes away.
-		const follow = () => {
-			if (this.card !== card) return;
-			const el = this.pinEl(view, key);
-			if (!el || !el.isConnected) {
-				this.closeCard();
-				return;
-			}
-			this.positionCard(card, el);
-			this.cardFollowRaf = requestAnimationFrame(follow);
-		};
-		this.cardFollowRaf = requestAnimationFrame(follow);
+		this.positionCard(view, card, node, thread);
 		const onDocumentMouseDown = (event: MouseEvent) => {
 			const target = event.target as Node | null;
 			if (target && (card.contains(target) || pin?.contains(target))) return;
@@ -654,41 +682,46 @@ export class CanvasCommentPins {
 	}
 
 	private cardCleanup: (() => void) | null = null;
-	private cardFollowRaf: number | null = null;
+	private cardOwner: CanvasViewLike | null = null;
 
-	private positionCard(card: HTMLElement, pin: HTMLElement | null): void {
-		const margin = 12;
-		const width = 320;
-		card.style.width = `${width}px`;
-		const anchor = pin?.getBoundingClientRect();
-		let left = anchor ? anchor.right + 10 : window.innerWidth / 2 - width / 2;
-		let top = anchor ? anchor.top : window.innerHeight / 3;
-		left = Math.min(window.innerWidth - width - margin, Math.max(margin, left));
-		const height = card.getBoundingClientRect().height || 200;
-		top = Math.min(window.innerHeight - height - margin, Math.max(margin, top));
-		card.style.left = `${Math.round(left)}px`;
-		card.style.top = `${Math.round(top)}px`;
-		// Aim the caret at the pin's vertical center, clear of the corners.
-		if (anchor) {
-			const caretY = Math.min(
-				height - 18,
-				Math.max(14, anchor.top + anchor.height / 2 - top),
-			);
-			card.style.setProperty("--critic-canvas-caret-y", `${Math.round(caretY)}px`);
-		} else {
-			card.classList.add("critic-canvas-card-no-caret");
-		}
+	/**
+	 * Place the card next to its pin in CANVAS coordinates and
+	 * counter-scale it. Re-run by the render poll, so it also follows
+	 * node moves and zoom changes between frames of user interaction;
+	 * DURING a pan/zoom gesture the compositor carries it exactly.
+	 */
+	private positionCard(
+		view: CanvasViewLike,
+		card: HTMLElement,
+		node: CommentableNodeData,
+		thread: CanvasCommentThread,
+	): void {
+		const canvas = view.canvas;
+		if (!canvas) return;
+		const zoom = this.canvasScale(canvas);
+		const pos = pinPosition(node, thread);
+		// Pin geometry in canvas units: the pin is 32 screen px tall with
+		// its tip at pos; open the card top-aligned with the pin's bubble,
+		// a constant 38 screen px to the right of the tip.
+		const flip = (() => {
+			const el = this.pinEl(view, `${node.id}:${thread.id}`);
+			const rect = el?.getBoundingClientRect();
+			return rect ? rect.right + 340 > window.innerWidth : false;
+		})();
+		card.style.width = "320px";
+		card.style.left = `${pos.x + (flip ? -352 / zoom : 38 / zoom)}px`;
+		card.style.top = `${pos.y - 32 / zoom}px`;
+		card.style.transform = `scale(${1 / zoom})`;
+		card.classList.toggle("is-flipped", flip);
+		card.style.setProperty("--critic-canvas-caret-y", "16px");
 	}
 
 	closeCard(): void {
-		if (this.cardFollowRaf !== null) {
-			cancelAnimationFrame(this.cardFollowRaf);
-			this.cardFollowRaf = null;
-		}
 		this.cardCleanup?.();
 		this.cardCleanup = null;
 		this.card?.remove();
 		this.card = null;
 		this.cardKey = null;
+		this.cardOwner = null;
 	}
 }

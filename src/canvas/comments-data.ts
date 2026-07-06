@@ -112,6 +112,30 @@ export function makeCarrierNode(
 	};
 }
 
+/**
+ * The topmost real node containing a canvas point, if any. A comment
+ * placed over a node attaches to it (riding its moves); only points on
+ * empty canvas get a freestanding carrier.
+ */
+export function nodeAtPoint(
+	nodes: CommentableNodeData[],
+	point: { x: number; y: number },
+): CommentableNodeData | null {
+	for (let index = nodes.length - 1; index >= 0; index -= 1) {
+		const node = nodes[index];
+		if (node.relayCommentCarrier || !node.width || !node.height) continue;
+		if (
+			point.x >= node.x &&
+			point.x <= node.x + node.width &&
+			point.y >= node.y &&
+			point.y <= node.y + node.height
+		) {
+			return node;
+		}
+	}
+	return null;
+}
+
 /** Pin position in canvas coordinates. */
 export function pinPosition(
 	node: CommentableNodeData,
