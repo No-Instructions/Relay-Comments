@@ -35,10 +35,10 @@ npm run build   # typecheck + produce main.js
   requests.
 - Commit subjects follow `<type>: <subject>` with a lowercase type
   (`feat:`, `fix:`, `ui:`, `docs:`, …).
-- The unit tests under `tests/unit/` are git-crypt encrypted; without the
-  key they look like binary blobs. You can't run or extend them — that's
-  expected. Describe how you tested your change in the PR and maintainers
-  will run the suites and add test coverage for your change.
+- The unit tests under `tests/unit/` are plain text: run them with
+  `npm test` and extend them alongside your change. A test that shows
+  your fix or feature working makes a pull request much easier to land —
+  and we welcome the contribution either way.
 
 ## Support and security
 
