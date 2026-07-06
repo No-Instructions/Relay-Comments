@@ -1457,7 +1457,10 @@ export default class RelayCommentsPlugin
 			(this.app.workspace as unknown as {
 				on(
 					name: "canvas:node-menu",
-					callback: (menu: Menu, node: { id: string }) => void,
+					callback: (
+						menu: Menu,
+						node: { id: string; canvas?: unknown },
+					) => void,
 				): EventRef;
 			}).on("canvas:node-menu", (menu, node) => {
 				menu.addItem((item) => {
@@ -1465,13 +1468,20 @@ export default class RelayCommentsPlugin
 						.setTitle("Add comment")
 						.setIcon("message-square-plus")
 						.onClick(() => {
-							const leaf = this.app.workspace.getLeavesOfType("canvas")[0];
-							const view = this.app.workspace.getActiveViewOfType(ItemView);
-							const canvasView =
-								view?.getViewType() === "canvas" ? view : leaf?.view;
-							if (canvasView) {
+							// Resolve the view that owns THIS node's canvas: with
+							// several canvases open, guessing by active view or
+							// first leaf maps the click through the wrong canvas
+							// and the pin lands somewhere else entirely.
+							const owner = this.app.workspace
+								.getLeavesOfType("canvas")
+								.find(
+									(leaf) =>
+										(leaf.view as unknown as { canvas?: unknown })
+											.canvas === node.canvas,
+								);
+							if (owner) {
 								this.canvasPins?.addThreadToNode(
-									canvasView as never,
+									owner.view as never,
 									node.id,
 								);
 							}

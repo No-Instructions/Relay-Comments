@@ -620,6 +620,21 @@ export class CanvasCommentPins {
 		});
 
 		this.positionCard(card, pin);
+		// The card is interactive, so it must FOLLOW its pin when the canvas
+		// pans or zooms underneath — dismissing (like the editor hover
+		// preview does) would eat half-written replies. Track per frame;
+		// close only when the pin itself goes away.
+		const follow = () => {
+			if (this.card !== card) return;
+			const el = this.pinEl(view, key);
+			if (!el || !el.isConnected) {
+				this.closeCard();
+				return;
+			}
+			this.positionCard(card, el);
+			this.cardFollowRaf = requestAnimationFrame(follow);
+		};
+		this.cardFollowRaf = requestAnimationFrame(follow);
 		const onDocumentMouseDown = (event: MouseEvent) => {
 			const target = event.target as Node | null;
 			if (target && (card.contains(target) || pin?.contains(target))) return;
@@ -639,6 +654,7 @@ export class CanvasCommentPins {
 	}
 
 	private cardCleanup: (() => void) | null = null;
+	private cardFollowRaf: number | null = null;
 
 	private positionCard(card: HTMLElement, pin: HTMLElement | null): void {
 		const margin = 12;
@@ -665,6 +681,10 @@ export class CanvasCommentPins {
 	}
 
 	closeCard(): void {
+		if (this.cardFollowRaf !== null) {
+			cancelAnimationFrame(this.cardFollowRaf);
+			this.cardFollowRaf = null;
+		}
 		this.cardCleanup?.();
 		this.cardCleanup = null;
 		this.card?.remove();
