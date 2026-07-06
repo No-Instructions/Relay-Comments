@@ -407,6 +407,8 @@ function buildDecorationsInner(
 			if (mode !== "clean" && threadTexts.length > 0) {
 				const anchor = findPrecedingWordRange(text, mark.from, marks);
 				if (anchor) {
+					// No native title: the rich hover preview owns this anchor,
+					// and a title pops the browser tooltip next to it.
 					addMark(
 						ranges,
 						anchor[0],
@@ -416,7 +418,6 @@ function buildDecorationsInner(
 						{
 							"data-critic-from": String(mark.from),
 							"data-critic-to": String(mark.to),
-							title: threadTexts.join("\n"),
 						},
 					);
 				}
@@ -602,6 +603,9 @@ function hideDelimiters(
 	}
 }
 
+// No native title here either: these anchors get the rich hover preview,
+// and a title would double it with the browser's own tooltip. (Reading
+// mode, which has no preview, keeps its title in critic/render.ts.)
 function threadAttributes(
 	mark: CriticMark,
 	comments: CriticMark[],
@@ -609,10 +613,6 @@ function threadAttributes(
 	return {
 		"data-critic-from": String(mark.from),
 		"data-critic-to": String(mark.to),
-		title: comments
-			.map((comment) => comment.content.trim())
-			.filter((content) => content.length > 0)
-			.join("\n"),
 	};
 }
 
