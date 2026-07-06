@@ -13,7 +13,6 @@ import {
 	newThreadId,
 	nodeAtPoint,
 	pinInitial,
-	pinPosition,
 	removeThread,
 	screenToCanvas,
 	setThreadResolved,
@@ -48,15 +47,16 @@ export interface PinHost {
 	getCanvasLeaves(): WorkspaceLeaf[];
 }
 
-const LAYER_CLASS = "critic-canvas-pin-layer";
-
 /**
- * Figma-style comment pins for canvases: one pin per thread, rendered in
- * an overlay layer INSIDE the canvas's transformed container so pins ride
- * pan/zoom natively, then counter-scaled by 1/zoom so they keep constant
- * screen size like Figma's. Click opens a floating thread card with a
- * composer; placement mode adds freestanding pins on invisible carrier
- * nodes.
+ * Figma-style comment pins for canvases: one pin per thread, mounted
+ * INSIDE its node's own element at the thread's dx/dy so the node's
+ * transform carries the pin through drags, pans, and zooms on the
+ * compositor — a sibling layer re-synced from data lags every gesture
+ * and reads as "not attached". Pins counter-scale by 1/zoom to keep
+ * constant screen size like Figma's. Click opens a floating thread card
+ * with a composer; placement mode over empty canvas adds freestanding
+ * pins on invisible carrier nodes (which are nodes too, so the same
+ * mounting applies).
  */
 export class CanvasCommentPins {
 	private card: HTMLElement | null = null;
@@ -65,6 +65,10 @@ export class CanvasCommentPins {
 	private menuPatches: Array<{
 		el: HTMLElement;
 		listener: (event: MouseEvent) => void;
+	}> = [];
+	private transformWatchers: Array<{
+		el: HTMLElement;
+		observer: MutationObserver;
 	}> = [];
 	/** Last right-click on a canvas — the node menu event carries no mouse
 	    event, so "Add comment" on a node uses this to pin at the click. */
@@ -85,10 +89,14 @@ export class CanvasCommentPins {
 			el.removeEventListener("contextmenu", listener, { capture: true });
 		}
 		this.menuPatches = [];
+		for (const { observer } of this.transformWatchers) {
+			observer.disconnect();
+		}
+		this.transformWatchers = [];
 		for (const leaf of this.host.getCanvasLeaves()) {
 			const view = leaf.view as unknown as CanvasViewLike;
 			view.containerEl
-				.querySelectorAll(`.${LAYER_CLASS}`)
+				.querySelectorAll("[data-critic-pin], .critic-canvas-card")
 				.forEach((el) => el.remove());
 		}
 	}
@@ -203,26 +211,30 @@ export class CanvasCommentPins {
 	private renderCanvas(view: CanvasViewLike): void {
 		const canvas = view.canvas;
 		if (!canvas) return;
-		const layer = this.ensureLayer(canvas);
-		if (!layer) return;
+		this.watchTransform(view, canvas);
 
 		const zoom = this.canvasScale(canvas);
 		const identity = this.host.getIdentity();
 		const seen = new Set<string>();
 		for (const node of canvas.nodes.values()) {
+			const nodeEl = node.nodeEl;
+			// Unmounted (virtualized) nodes get their pins when their element
+			// comes back; a pin can't outlive the element it rode on.
+			if (!nodeEl || !nodeEl.isConnected) continue;
 			const data = node.getData();
 			for (const thread of threadsOf(data)) {
 				const key = `${data.id}:${thread.id}`;
 				seen.add(key);
-				const pos = pinPosition(data, thread);
-				let pin = layer.querySelector<HTMLElement>(
-					`[data-critic-pin="${CSS.escape(key)}"]`,
+				let pin = nodeEl.querySelector<HTMLElement>(
+					`:scope > [data-critic-pin="${CSS.escape(key)}"]`,
 				);
 				if (!pin) {
-					pin = this.createPin(layer, key, view, data.id, thread.id);
+					pin = this.createPin(nodeEl, key, view, data.id, thread.id);
 				}
-				pin.style.left = `${pos.x}px`;
-				pin.style.top = `${pos.y}px`;
+				// Node-local coordinates: the node's own transform places the
+				// pin on screen, so drags carry it with zero lag.
+				pin.style.left = `${thread.dx}px`;
+				pin.style.top = `${thread.dy}px`;
 				// Constant screen size, Figma-style: undo the canvas zoom.
 				pin.style.transform = `translate(0, -100%) scale(${1 / zoom})`;
 				pin.classList.toggle("is-resolved", thread.resolved === true);
@@ -248,46 +260,81 @@ export class CanvasCommentPins {
 				}
 			}
 		}
-		layer.querySelectorAll<HTMLElement>("[data-critic-pin]").forEach((el) => {
-			if (!seen.has(el.dataset.criticPin ?? "")) el.remove();
-		});
+		view.containerEl
+			.querySelectorAll<HTMLElement>("[data-critic-pin]")
+			.forEach((el) => {
+				if (!seen.has(el.dataset.criticPin ?? "")) el.remove();
+			});
 
-		// Keep the open card with its thread: re-anchor for node moves and
-		// zoom changes; close it if the thread disappeared under us.
-		if (this.card && this.cardKey) {
-			const [nodeId, threadId] = this.cardKey.split(":");
-			const nodeData = this.findNode(view, nodeId);
-			const thread = nodeData
-				? threadsOf(nodeData).find((candidate) => candidate.id === threadId)
-				: null;
-			if (!nodeData || !thread) {
-				if (seen.size >= 0 && this.cardOwner === view) this.closeCard();
-			} else if (this.cardOwner === view) {
-				this.positionCard(view, this.card, nodeData, thread);
-			}
-		}
+		if (this.cardOwner === view) this.syncCard(view, zoom);
 	}
 
-	private ensureLayer(canvas: CanvasLike): HTMLElement | null {
-		// Pins must live beside the nodes, inside the pan/zoom transform.
-		const nodeEl = canvas.nodes.values().next().value?.nodeEl;
-		const container = nodeEl?.parentElement ?? canvas.canvasEl ?? null;
-		if (!container) return null;
-		let layer = container.querySelector<HTMLElement>(`.${LAYER_CLASS}`);
-		if (!layer) {
-			layer = container.createDiv({ cls: LAYER_CLASS });
+	/**
+	 * Keep the open card with its thread: re-parent if Obsidian recreated
+	 * the node's element, re-anchor for zoom changes, close it if the
+	 * thread disappeared under us.
+	 */
+	private syncCard(view: CanvasViewLike, zoom: number): void {
+		if (!this.card || !this.cardKey) return;
+		const [nodeId, threadId] = this.cardKey.split(":");
+		const node = this.findNodeObject(view, nodeId);
+		const data = node?.nodeEl?.isConnected ? node.getData() : null;
+		const thread = data
+			? threadsOf(data).find((candidate) => candidate.id === threadId)
+			: null;
+		if (!node?.nodeEl || !thread) {
+			this.closeCard();
+			return;
 		}
-		return layer;
+		if (this.card.parentElement !== node.nodeEl) {
+			node.nodeEl.appendChild(this.card);
+		}
+		this.positionCard(view, this.card, thread, zoom);
+	}
+
+	/**
+	 * Counter-scales must track the zoom gesture frame by frame — the data
+	 * poll alone lets pins grow with the canvas for up to 400ms and then
+	 * snap back. The canvas pans and zooms by mutating one container's
+	 * style, so watch that attribute and re-scale synchronously (the
+	 * observer runs before the next paint). Pans keep the scale, so the
+	 * epsilon check makes them free.
+	 */
+	private watchTransform(view: CanvasViewLike, canvas: CanvasLike): void {
+		const el =
+			canvas.nodes.values().next().value?.nodeEl?.parentElement ??
+			canvas.canvasEl;
+		if (!el) return;
+		this.transformWatchers = this.transformWatchers.filter((watcher) => {
+			if (watcher.el.isConnected) return true;
+			watcher.observer.disconnect();
+			return false;
+		});
+		if (this.transformWatchers.some((watcher) => watcher.el === el)) return;
+		let lastZoom = 0;
+		const observer = new MutationObserver(() => {
+			const zoom = this.canvasScale(canvas);
+			if (!zoom || Math.abs(zoom - lastZoom) < 0.0005) return;
+			lastZoom = zoom;
+			view.containerEl
+				.querySelectorAll<HTMLElement>("[data-critic-pin]")
+				.forEach((pin) => {
+					pin.style.transform = `translate(0, -100%) scale(${1 / zoom})`;
+				});
+			if (this.cardOwner === view) this.syncCard(view, zoom);
+		});
+		observer.observe(el, { attributes: true, attributeFilter: ["style"] });
+		this.transformWatchers.push({ el, observer });
 	}
 
 	private createPin(
-		layer: HTMLElement,
+		parent: HTMLElement,
 		key: string,
 		view: CanvasViewLike,
 		nodeId: string,
 		threadId: string,
 	): HTMLElement {
-		const pin = layer.createDiv({
+		const pin = parent.createDiv({
 			cls: "critic-canvas-pin",
 			attr: { "data-critic-pin": key, "aria-label": "Comment thread" },
 		});
@@ -318,6 +365,16 @@ export class CanvasCommentPins {
 		canvas.importData({ ...data, nodes }, true);
 		canvas.requestSave();
 		this.renderAll();
+	}
+
+	private findNodeObject(
+		view: CanvasViewLike,
+		nodeId: string,
+	): { getData(): CommentableNodeData; nodeEl?: HTMLElement } | null {
+		for (const node of view.canvas?.nodes.values() ?? []) {
+			if (node.getData().id === nodeId) return node;
+		}
+		return null;
 	}
 
 	private findNode(
@@ -473,26 +530,42 @@ export class CanvasCommentPins {
 		nodeId: string,
 		threadId: string,
 		pin: HTMLElement | null,
+		retries = 10,
 	): void {
 		const key = `${nodeId}:${threadId}`;
 		this.closeCard();
-		const node = this.findNode(view, nodeId);
-		const thread = node
-			? threadsOf(node).find((candidate) => candidate.id === threadId)
+		const nodeObject = this.findNodeObject(view, nodeId);
+		const data = nodeObject?.getData();
+		const thread = data
+			? threadsOf(data).find((candidate) => candidate.id === threadId)
 			: null;
-		if (!node || !thread) return;
+		if (!nodeObject || !thread) return;
 
-		// The card lives INSIDE the canvas's transformed container, in
-		// canvas coordinates, so pan/zoom (and the demo camera) carry it on
-		// the compositor with zero skew — a viewport-fixed card re-synced
-		// from rAF reads lags a frame behind and stutters through zooms.
-		// It counter-scales 1/zoom for constant screen size, like the pins.
+		// The card lives INSIDE the node's element, like the pin, so drags,
+		// pans, and zooms carry it on the compositor with zero skew — a
+		// viewport-fixed card re-synced from rAF reads lags a frame behind
+		// and stutters through zooms. It counter-scales 1/zoom for constant
+		// screen size, like the pins. A just-imported carrier's element may
+		// not exist until the canvas renders a frame; retry briefly.
+		const mount = nodeObject.nodeEl;
+		if (!mount || !mount.isConnected) {
+			if (retries > 0) {
+				requestAnimationFrame(() =>
+					this.openCard(
+						view,
+						nodeId,
+						threadId,
+						pin ?? this.pinEl(view, key),
+						retries - 1,
+					),
+				);
+			}
+			return;
+		}
 		// The card speaks the sidebar's component language: same card
 		// shell and type spine, same avatar headers, same composer with
 		// primary/cancel actions and the keyboard hint on the right.
-		const layer = view.canvas ? this.ensureLayer(view.canvas) : null;
-		if (!layer) return;
-		const card = layer.createDiv({
+		const card = mount.createDiv({
 			cls: "critic-card critic-canvas-card",
 			attr: { "data-critic-type": "comment" },
 		});
@@ -662,7 +735,7 @@ export class CanvasCommentPins {
 			if (!submit.disabled) post();
 		});
 
-		this.positionCard(view, card, node, thread);
+		this.positionCard(view, card, thread, this.canvasScale(view.canvas!));
 		const onDocumentMouseDown = (event: MouseEvent) => {
 			const target = event.target as Node | null;
 			if (target && (card.contains(target) || pin?.contains(target))) return;
@@ -685,32 +758,35 @@ export class CanvasCommentPins {
 	private cardOwner: CanvasViewLike | null = null;
 
 	/**
-	 * Place the card next to its pin in CANVAS coordinates and
-	 * counter-scale it. Re-run by the render poll, so it also follows
-	 * node moves and zoom changes between frames of user interaction;
-	 * DURING a pan/zoom gesture the compositor carries it exactly.
+	 * Place the card next to its pin in NODE-LOCAL coordinates and
+	 * counter-scale it. The node's transform does the rest during any
+	 * gesture; this re-runs from the render poll and the transform
+	 * watcher because the gap offsets are in screen pixels.
 	 */
 	private positionCard(
 		view: CanvasViewLike,
 		card: HTMLElement,
-		node: CommentableNodeData,
 		thread: CanvasCommentThread,
+		zoom: number,
 	): void {
-		const canvas = view.canvas;
-		if (!canvas) return;
-		const zoom = this.canvasScale(canvas);
-		const pos = pinPosition(node, thread);
-		// Pin geometry in canvas units: the pin is 32 screen px tall with
-		// its tip at pos; open the card top-aligned with the pin's bubble,
-		// a constant 38 screen px to the right of the tip.
+		// Pin geometry: the pin is 32 screen px tall with its tip at dx/dy;
+		// open the card top-aligned with the pin's bubble, a constant 38
+		// screen px to the right of the tip. Flip against the canvas pane's
+		// edge, not the window's: the pane clips its content, so with a
+		// sidebar open a window-based check leaves the card cut off.
 		const flip = (() => {
-			const el = this.pinEl(view, `${node.id}:${thread.id}`);
-			const rect = el?.getBoundingClientRect();
-			return rect ? rect.right + 340 > window.innerWidth : false;
+			const rect = card.parentElement
+				?.querySelector<HTMLElement>(
+					`:scope > [data-critic-pin="${CSS.escape(this.cardKey ?? "")}"]`,
+				)
+				?.getBoundingClientRect();
+			const pane = view.canvas?.wrapperEl?.getBoundingClientRect();
+			const edge = pane ? pane.right : window.innerWidth;
+			return rect ? rect.right + 340 > edge : false;
 		})();
 		card.style.width = "320px";
-		card.style.left = `${pos.x + (flip ? -352 / zoom : 38 / zoom)}px`;
-		card.style.top = `${pos.y - 32 / zoom}px`;
+		card.style.left = `${thread.dx + (flip ? -352 / zoom : 38 / zoom)}px`;
+		card.style.top = `${thread.dy - 32 / zoom}px`;
 		card.style.transform = `scale(${1 / zoom})`;
 		card.classList.toggle("is-flipped", flip);
 		card.style.setProperty("--critic-canvas-caret-y", "16px");

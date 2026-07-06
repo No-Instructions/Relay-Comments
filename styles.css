@@ -868,18 +868,12 @@
    Canvas comment pins (Figma-style)
    ============================================================ */
 
-.critic-canvas-pin-layer {
-	position: absolute;
-	top: 0;
-	left: 0;
-	width: 0;
-	height: 0;
-	overflow: visible;
-	z-index: 50;
-}
-
+/* Pins are children of their canvas node (node-local dx/dy), so the
+   node's transform carries them through drags, pans, and zooms on the
+   compositor. The z-index lifts them over the node's own content. */
 .critic-canvas-pin {
 	position: absolute;
+	z-index: 50;
 	display: flex;
 	align-items: center;
 	justify-content: center;

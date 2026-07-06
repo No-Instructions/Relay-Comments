@@ -282,6 +282,18 @@ marked `relayCommentCarrier: true` — which is deleted when its last
 thread is removed. Unknown node *types* must never be used for storage:
 Obsidian deletes them on the next save.
 
+### Rendering invariant
+
+Pins and the open thread card are DOM children of their node's element,
+positioned at `dx`/`dy` in node-local coordinates, so the node's own
+transform carries them through drags, pans, and zooms on the compositor
+with zero lag. Any rendering that re-derives pin positions from data on
+a timer or rAF loop visibly detaches pins during a drag and must not
+come back. Counter-scaling (constant screen size) tracks zoom gestures
+via a mutation observer on the canvas transform, not just the data
+poll. The thread card flips to the pin's left when the canvas pane's
+right edge (not the window's — panes clip) would cut it off.
+
 Known gap: pins are not draggable yet, so a pin placed over node
 content stays there until the thread is deleted and recreated. Pin
 dragging (updating `dx`/`dy`, or `x`/`y` on a carrier) is the planned
