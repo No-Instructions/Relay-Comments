@@ -1,14 +1,17 @@
 import {
+	ItemView,
 	MarkdownView,
 	Notice,
 	Plugin,
 	type Editor,
+	type EventRef,
 	type Hotkey,
 	type MarkdownFileInfo,
 	type Menu,
 	type TFile,
 	type WorkspaceLeaf,
 } from "obsidian";
+import { CanvasCommentPins } from "./canvas/pins";
 import type { Extension } from "@codemirror/state";
 import { EditorView as CodeMirrorEditorView } from "@codemirror/view";
 import { parseCriticMarkup } from "./critic/parse";
@@ -191,6 +194,7 @@ export default class RelayCommentsPlugin
 	private lastMarkdownPath: string | null = null;
 	private reviewSidebarOpenPromise: Promise<void> | null = null;
 	private selectionRefreshTimer: number | null = null;
+	private canvasPins: CanvasCommentPins | null = null;
 	private previewShowTimer: number | null = null;
 	private previewHideTimer: number | null = null;
 	private activeThreadPreview: ActiveThreadPreview | null = null;
@@ -220,14 +224,26 @@ export default class RelayCommentsPlugin
 		this.queueEditorExtensionRefresh(0);
 		this.queueEditorExtensionRefresh(250);
 
+		this.canvasPins = new CanvasCommentPins({
+			getIdentity: () => {
+				const identity = this.getCurrentReviewerIdentity();
+				return { name: identity.name, id: identity.id, color: identity.color };
+			},
+			registerInterval: (id) => this.registerInterval(id),
+			getCanvasLeaves: () => this.app.workspace.getLeavesOfType("canvas"),
+		});
+
 		this.app.workspace.onLayoutReady(() => {
 			this.queueEditorExtensionRefresh(0);
 			this.queueEditorExtensionRefresh(250);
 			this.refreshReviewSidebars();
+			this.canvasPins?.start();
 		});
 	}
 
 	onunload(): void {
+		this.canvasPins?.stop();
+		this.canvasPins = null;
 		this.reviewSidebarOpenPromise = null;
 		if (this.selectionRefreshTimer !== null) {
 			window.clearTimeout(this.selectionRefreshTimer);
@@ -1355,6 +1371,16 @@ export default class RelayCommentsPlugin
 				this.closeReviewSidebar();
 			},
 		});
+		this.addCommand({
+			id: "add-canvas-comment",
+			name: "Add comment to canvas (click to place)",
+			checkCallback: (checking) => {
+				const view = this.app.workspace.getActiveViewOfType(ItemView);
+				if (view?.getViewType() !== "canvas") return false;
+				if (!checking) this.canvasPins?.beginPlacement(view as never);
+				return true;
+			},
+		});
 		this.addEditorCommand(
 			"show-comment-preview-at-cursor",
 			"Show comment preview at cursor",
@@ -1421,6 +1447,33 @@ export default class RelayCommentsPlugin
 		this.registerEvent(
 			this.app.workspace.on("editor-menu", (menu, editor, info) => {
 				this.addEditorMenuItems(menu, editor, info);
+			}),
+		);
+		// Canvas node context menu — the event is unofficial but stable.
+		this.registerEvent(
+			(this.app.workspace as unknown as {
+				on(
+					name: "canvas:node-menu",
+					callback: (menu: Menu, node: { id: string }) => void,
+				): EventRef;
+			}).on("canvas:node-menu", (menu, node) => {
+				menu.addItem((item) => {
+					item
+						.setTitle("Add comment")
+						.setIcon("message-square-plus")
+						.onClick(() => {
+							const leaf = this.app.workspace.getLeavesOfType("canvas")[0];
+							const view = this.app.workspace.getActiveViewOfType(ItemView);
+							const canvasView =
+								view?.getViewType() === "canvas" ? view : leaf?.view;
+							if (canvasView) {
+								this.canvasPins?.addThreadToNode(
+									canvasView as never,
+									node.id,
+								);
+							}
+						});
+				});
 			}),
 		);
 		this.registerEvent(

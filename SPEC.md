@@ -242,6 +242,44 @@ The preview renderer should share the parser and rendering policy with the edito
 
 For unsupported marks, the renderer should avoid destructive DOM mutations and leave source text visible rather than corrupting the rendered note.
 
+## Canvas Comments (experimental)
+
+Canvas comments are Figma-style pins: one pin per thread, placed on a
+node or floating at a canvas position. The pin renders at constant
+screen size regardless of zoom; clicking it opens a floating thread
+card with a composer. Adding: "Add comment" in the canvas node menu, or
+the "Add comment to canvas (click to place)" command (crosshair, Escape
+cancels).
+
+### Storage format
+
+Threads live on the canvas node they belong to, in a `relayComments`
+field (verified to survive Obsidian's canvas save cycle; Relay stores
+whole node objects in its CRDT, so the field syncs unchanged):
+
+```json
+{
+  "id": "node1", "type": "text", "x": 0, "y": 0, "width": 320, "height": 120,
+  "relayComments": [
+    {
+      "id": "cc-…",
+      "dx": 320, "dy": 0,
+      "resolved": false,
+      "comments": [
+        { "author": "Daniel", "authorId": "…", "date": "2026-07-06T…Z", "text": "…" }
+      ]
+    }
+  ]
+}
+```
+
+`dx`/`dy` position the pin relative to the node's top-left, in canvas
+units, so pins ride node moves. Freestanding pins use an invisible
+carrier node — `type: "text"`, empty text, zero width and height,
+marked `relayCommentCarrier: true` — which is deleted when its last
+thread is removed. Unknown node *types* must never be used for storage:
+Obsidian deletes them on the next save.
+
 ## Relay Integration
 
 ### Dependency Model

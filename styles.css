@@ -847,3 +847,122 @@
 	justify-content: flex-end;
 	gap: 8px;
 }
+
+/* ============================================================
+   Canvas comment pins (Figma-style)
+   ============================================================ */
+
+.critic-canvas-pin-layer {
+	position: absolute;
+	top: 0;
+	left: 0;
+	width: 0;
+	height: 0;
+	overflow: visible;
+	z-index: 50;
+}
+
+.critic-canvas-pin {
+	position: absolute;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	/* Teardrop: round except the tip corner, which points at the spot */
+	border-radius: 50% 50% 50% 4px;
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	border: 2px solid var(--background-primary);
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+	font-size: 13px;
+	font-weight: 600;
+	cursor: pointer;
+	/* The tip is the anchor; scale is set inline to undo canvas zoom */
+	transform-origin: 4px 100%;
+	pointer-events: auto;
+	user-select: none;
+}
+
+.critic-canvas-pin:hover {
+	filter: brightness(1.1);
+}
+
+.critic-canvas-pin.is-resolved {
+	opacity: 0.45;
+	filter: grayscale(0.6);
+}
+
+.critic-canvas-pin-count {
+	position: absolute;
+	top: -6px;
+	right: -6px;
+	min-width: 16px;
+	height: 16px;
+	padding: 0 4px;
+	border-radius: 8px;
+	background: var(--background-primary);
+	color: var(--text-normal);
+	border: 1px solid var(--background-modifier-border);
+	font-size: 10px;
+	line-height: 14px;
+	text-align: center;
+}
+
+.critic-canvas-placing,
+.critic-canvas-placing * {
+	cursor: crosshair !important;
+}
+
+/* Floating thread card, opened from a pin */
+.critic-canvas-card {
+	position: fixed;
+	z-index: 60;
+	padding: 10px 12px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 10px;
+	background: var(--background-primary);
+	color: var(--text-normal);
+	box-shadow: 0 8px 28px rgba(0, 0, 0, 0.3);
+	font-size: var(--font-ui-small);
+	user-select: text;
+}
+
+.critic-canvas-card-header {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin-bottom: 8px;
+}
+
+.critic-canvas-card-title {
+	font-weight: 600;
+	margin-right: auto;
+}
+
+.critic-canvas-card-comments {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	max-height: 40vh;
+	overflow-y: auto;
+}
+
+.critic-canvas-card-meta {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	margin-bottom: 2px;
+}
+
+.critic-canvas-card-text {
+	white-space: pre-wrap;
+}
+
+.critic-canvas-card-composer {
+	margin-top: 10px;
+}
+
+.critic-canvas-card-composer .critic-thread-textarea {
+	width: 100%;
+	resize: vertical;
+}
