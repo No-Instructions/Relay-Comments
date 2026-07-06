@@ -65,6 +65,9 @@ export class CanvasCommentPins {
 		el: HTMLElement;
 		listener: (event: MouseEvent) => void;
 	}> = [];
+	/** Last right-click on a canvas — the node menu event carries no mouse
+	    event, so "Add comment" on a node uses this to pin at the click. */
+	private lastRightClick: { x: number; y: number; time: number } | null = null;
 
 	constructor(private host: PinHost) {}
 
@@ -115,6 +118,11 @@ export class CanvasCommentPins {
 		if (!el || this.menuPatches.some((patch) => patch.el === el)) return;
 		const pins = this;
 		const listener = (event: MouseEvent) => {
+			this.lastRightClick = {
+				x: event.clientX,
+				y: event.clientY,
+				time: Date.now(),
+			};
 			const target = event.target as HTMLElement | null;
 			if (target?.closest(".canvas-node, .critic-canvas-pin")) return;
 			const proto = Menu.prototype as unknown as {
@@ -194,6 +202,7 @@ export class CanvasCommentPins {
 		if (!layer) return;
 
 		const zoom = this.canvasScale(canvas);
+		const identity = this.host.getIdentity();
 		const seen = new Set<string>();
 		for (const node of canvas.nodes.values()) {
 			const data = node.getData();
@@ -212,6 +221,16 @@ export class CanvasCommentPins {
 				// Constant screen size, Figma-style: undo the canvas zoom.
 				pin.style.transform = `translate(-4px, -100%) scale(${1 / zoom})`;
 				pin.classList.toggle("is-resolved", thread.resolved === true);
+				// Avatar convention: a known author's identity color fills
+				// the pin; unknown authors keep the amber comment ink.
+				const first = thread.comments[0];
+				const own =
+					first &&
+					((first.authorId && first.authorId === identity.id) ||
+						first.author === identity.name);
+				pin.classList.toggle("is-identity", Boolean(own && identity.color));
+				pin.style.backgroundColor =
+					own && identity.color ? identity.color : "";
 				const initial = pin.querySelector(".critic-canvas-pin-initial");
 				if (initial) initial.textContent = pinInitial(thread);
 				const count = thread.comments.length;
@@ -292,14 +311,27 @@ export class CanvasCommentPins {
 
 	// ── Entry points ─────────────────────────────────────────────────
 
-	/** "Add comment" from the canvas node menu: pin at the node's top-right. */
+	/** "Add comment" from the canvas node menu: pin where the user
+	    right-clicked (Figma-style); top-right corner as the fallback when
+	    no recent click is known (e.g. command palette on a selection). */
 	addThreadToNode(view: CanvasViewLike, nodeId: string): void {
 		const node = this.findNode(view, nodeId);
-		if (!node) return;
+		const canvas = view.canvas;
+		if (!node || !canvas) return;
+		let dx = node.width;
+		let dy = 0;
+		const click = this.lastRightClick;
+		if (click && Date.now() - click.time < 3000) {
+			const point = this.screenPointToCanvas(canvas, click.x, click.y);
+			if (point) {
+				dx = point.x - node.x;
+				dy = point.y - node.y;
+			}
+		}
 		const thread: CanvasCommentThread = {
 			id: newThreadId(),
-			dx: node.width,
-			dy: 0,
+			dx,
+			dy,
 			comments: [],
 		};
 		this.writeNode(view, createThread(node, thread), nodeId);

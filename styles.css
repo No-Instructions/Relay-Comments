@@ -871,8 +871,10 @@
 	height: 28px;
 	/* Teardrop: round except the tip corner, which points at the spot */
 	border-radius: 50% 50% 50% 4px;
-	background: var(--interactive-accent);
-	color: var(--text-on-accent);
+	/* Comment ink: the same amber family as highlight anchors and card
+	   rails, so a pin reads as "comment" at a glance */
+	background: color-mix(in srgb, var(--color-yellow) 85%, var(--background-primary));
+	color: rgba(0, 0, 0, 0.75);
 	border: 2px solid var(--background-primary);
 	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
 	font-size: 13px;
@@ -882,6 +884,11 @@
 	transform-origin: 4px 100%;
 	pointer-events: auto;
 	user-select: none;
+}
+
+/* A known author colors the pin like their avatar (background inline) */
+.critic-canvas-pin.is-identity {
+	color: #fff;
 }
 
 .critic-canvas-pin:hover {
