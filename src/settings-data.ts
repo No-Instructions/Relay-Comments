@@ -1,12 +1,11 @@
 export interface RelayCommentsSettings {
-	showAuthorChips: boolean;
+	/** The add-comment button in the editor margin on selection. */
 	showInlineActions: boolean;
 	openSidebarOnCommentSelect: boolean;
 	showHoverPreview: boolean;
 }
 
 export const DEFAULT_SETTINGS: RelayCommentsSettings = {
-	showAuthorChips: true,
 	showInlineActions: true,
 	openSidebarOnCommentSelect: true,
 	showHoverPreview: true,
@@ -23,8 +22,9 @@ export function resolveSettings(loaded: unknown): RelayCommentsSettings {
 			enableReviewSidebar: boolean;
 		}
 	>;
+	// Dropped keys from older versions (showAuthorChips) are ignored here
+	// and disappear on the next save.
 	return {
-		showAuthorChips: data.showAuthorChips ?? DEFAULT_SETTINGS.showAuthorChips,
 		showInlineActions:
 			data.showInlineActions ?? DEFAULT_SETTINGS.showInlineActions,
 		openSidebarOnCommentSelect:

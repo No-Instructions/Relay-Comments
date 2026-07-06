@@ -11,13 +11,11 @@ describe("resolveSettings", () => {
 	it("keeps explicit values", () => {
 		expect(
 			resolveSettings({
-				showAuthorChips: false,
 				showInlineActions: false,
 				openSidebarOnCommentSelect: false,
 				showHoverPreview: false,
 			}),
 		).toEqual({
-			showAuthorChips: false,
 			showInlineActions: false,
 			openSidebarOnCommentSelect: false,
 			showHoverPreview: false,
@@ -25,8 +23,14 @@ describe("resolveSettings", () => {
 	});
 
 	it("defaults the hover preview on for data saved before it existed", () => {
-		expect(resolveSettings({ showAuthorChips: true }).showHoverPreview).toBe(
-			true,
+		expect(
+			resolveSettings({ showInlineActions: true }).showHoverPreview,
+		).toBe(true);
+	});
+
+	it("ignores keys dropped from older versions", () => {
+		expect(resolveSettings({ showAuthorChips: false })).toEqual(
+			DEFAULT_SETTINGS,
 		);
 	});
 

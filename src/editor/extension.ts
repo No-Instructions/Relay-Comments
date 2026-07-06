@@ -20,7 +20,10 @@ import {
 	type ViewUpdate,
 } from "@codemirror/view";
 import { parseCriticMarkup } from "../critic/parse";
-import { findPrecedingWordRange } from "../critic/display";
+import {
+	findPrecedingWordRange,
+	isSuggestionMark,
+} from "../critic/display";
 import { collectAttachedComments } from "../critic/threading";
 import type { CriticMark, DisplayMode } from "../critic/types";
 
@@ -154,7 +157,7 @@ export function createReviewEditorExtension(
 			private handlePointerOver = (event: PointerEvent): void => {
 				const target = event.target as HTMLElement | null;
 				const anchor = target?.closest<HTMLElement>(
-					".cm-critic-thread-anchor",
+					".cm-critic-thread-anchor, .cm-critic-suggestion-anchor",
 				);
 				if (!anchor || !this.view.dom.contains(anchor)) return;
 				const from = Number(anchor.dataset.criticFrom);
@@ -166,7 +169,7 @@ export function createReviewEditorExtension(
 			private handlePointerOut = (event: PointerEvent): void => {
 				const target = event.target as HTMLElement | null;
 				const anchor = target?.closest<HTMLElement>(
-					".cm-critic-thread-anchor",
+					".cm-critic-thread-anchor, .cm-critic-suggestion-anchor",
 				);
 				if (!anchor || !this.view.dom.contains(anchor)) return;
 				const related = event.relatedTarget as Node | null;
@@ -427,10 +430,17 @@ function buildDecorationsInner(
 		} else if (mode === "clean") {
 			decorateClean(mark, ranges);
 		} else {
+			// Threads hover to a comment preview; plain suggestions hover to
+			// an accept/reject preview — both need range attributes. Bare
+			// highlights get neither (nothing to preview or act on).
+			const hoverable = attached.length > 0 || isSuggestionMark(mark);
 			decorateReview(
 				mark,
 				ranges,
-				attached.length > 0 ? threadAttributes(mark, attached) : undefined,
+				hoverable ? rangeAttributes(mark) : undefined,
+				attached.length > 0
+					? "cm-critic-thread-anchor"
+					: "cm-critic-suggestion-anchor",
 			);
 		}
 
@@ -454,6 +464,7 @@ function decorateReview(
 	mark: CriticMark,
 	ranges: Array<Range<Decoration>>,
 	threadAttrs?: Record<string, string>,
+	anchorClass = "cm-critic-thread-anchor",
 ): void {
 	hideDelimiters(mark, ranges);
 
@@ -463,7 +474,7 @@ function decorateReview(
 				ranges,
 				mark.contentFrom,
 				mark.contentTo,
-				attributeClass("cm-critic-addition", threadAttrs),
+				attributeClass("cm-critic-addition", threadAttrs, anchorClass),
 				undefined,
 				threadAttrs,
 			);
@@ -473,7 +484,7 @@ function decorateReview(
 				ranges,
 				mark.contentFrom,
 				mark.contentTo,
-				attributeClass("cm-critic-deletion", threadAttrs),
+				attributeClass("cm-critic-deletion", threadAttrs, anchorClass),
 				undefined,
 				threadAttrs,
 			);
@@ -487,7 +498,7 @@ function decorateReview(
 					ranges,
 					mark.ranges.oldText[0],
 					mark.ranges.oldText[1],
-					attributeClass("cm-critic-deletion", threadAttrs),
+					attributeClass("cm-critic-deletion", threadAttrs, anchorClass),
 					undefined,
 					threadAttrs,
 				);
@@ -497,7 +508,7 @@ function decorateReview(
 					ranges,
 					mark.ranges.newText[0],
 					mark.ranges.newText[1],
-					attributeClass("cm-critic-addition", threadAttrs),
+					attributeClass("cm-critic-addition", threadAttrs, anchorClass),
 					undefined,
 					threadAttrs,
 				);
@@ -508,7 +519,7 @@ function decorateReview(
 				ranges,
 				mark.contentFrom,
 				mark.contentTo,
-				attributeClass("cm-critic-highlight", threadAttrs),
+				attributeClass("cm-critic-highlight", threadAttrs, anchorClass),
 				undefined,
 				threadAttrs,
 			);
@@ -606,10 +617,7 @@ function hideDelimiters(
 // No native title here either: these anchors get the rich hover preview,
 // and a title would double it with the browser's own tooltip. (Reading
 // mode, which has no preview, keeps its title in critic/render.ts.)
-function threadAttributes(
-	mark: CriticMark,
-	comments: CriticMark[],
-): Record<string, string> {
+function rangeAttributes(mark: CriticMark): Record<string, string> {
 	return {
 		"data-critic-from": String(mark.from),
 		"data-critic-to": String(mark.to),
@@ -619,8 +627,9 @@ function threadAttributes(
 function attributeClass(
 	className: string,
 	attributes?: Record<string, string>,
+	anchorClass = "cm-critic-thread-anchor",
 ): string {
-	return attributes ? `${className} cm-critic-thread-anchor` : className;
+	return attributes ? `${className} ${anchorClass}` : className;
 }
 
 function addMark(

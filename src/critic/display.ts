@@ -13,6 +13,32 @@ export function isSuggestionMark(mark: CriticMark): boolean {
 	);
 }
 
+/**
+ * Label and body for a suggestion's hover popover. Null for mark types
+ * that are not suggestions (comments and highlights have their own
+ * preview path).
+ */
+export function getSuggestionPreviewParts(
+	mark: CriticMark,
+): { label: string; snippet: string } | null {
+	switch (mark.type) {
+		case "addition":
+			return { label: "Suggested addition", snippet: mark.content };
+		case "deletion":
+			return { label: "Suggested deletion", snippet: mark.content };
+		case "substitution":
+			return {
+				label: "Suggested replacement",
+				snippet: [mark.oldText, mark.newText]
+					.map((value) => normalizeWhitespace(value ?? ""))
+					.filter((value) => value.length > 0)
+					.join(" → "),
+			};
+		default:
+			return null;
+	}
+}
+
 /** Human date from a mark's metadata; raw string when unparseable. */
 export function formatMarkDate(mark: CriticMark): string | null {
 	const raw = mark.metadata?.date?.trim();

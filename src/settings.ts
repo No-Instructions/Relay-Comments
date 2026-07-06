@@ -52,7 +52,9 @@ export class RelayCommentsSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Inline action controls")
-			.setDesc("Show inline editor controls for comments and suggestions.")
+			.setDesc(
+				"Show the add comment button on selection, and accept, reject, and resolve actions in hover previews.",
+			)
 			.addToggle((toggle) => {
 				toggle
 					.setValue(this.plugin.settings.showInlineActions)

@@ -3,10 +3,43 @@ import {
 	clampPreviewSnippet,
 	findPrecedingWordRange,
 	formatMarkDate,
+	getSuggestionPreviewParts,
 	normalizeWhitespace,
 	rectDrifted,
 } from "src/critic/display";
 import { parseCriticMarkup } from "src/critic/parse";
+
+describe("getSuggestionPreviewParts", () => {
+	it("labels additions with their inserted text", () => {
+		const [mark] = parseCriticMarkup("Keep {++new words++} here.");
+		expect(getSuggestionPreviewParts(mark)).toEqual({
+			label: "Suggested addition",
+			snippet: "new words",
+		});
+	});
+
+	it("labels deletions with their removed text", () => {
+		const [mark] = parseCriticMarkup("Drop {--old words--} here.");
+		expect(getSuggestionPreviewParts(mark)).toEqual({
+			label: "Suggested deletion",
+			snippet: "old words",
+		});
+	});
+
+	it("renders substitutions as old → new", () => {
+		const [mark] = parseCriticMarkup("Use {~~alpha~>beta~~} here.");
+		expect(getSuggestionPreviewParts(mark)).toEqual({
+			label: "Suggested replacement",
+			snippet: "alpha → beta",
+		});
+	});
+
+	it("returns null for comments and highlights", () => {
+		const marks = parseCriticMarkup("A {==mark==} and {>>note<<} end.");
+		expect(getSuggestionPreviewParts(marks[0])).toBeNull();
+		expect(getSuggestionPreviewParts(marks[1])).toBeNull();
+	});
+});
 
 describe("clampPreviewSnippet", () => {
 	it("keeps short text intact", () => {

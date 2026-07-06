@@ -16,11 +16,15 @@ import {
 	CRITIC_SECTION_SEPARATOR,
 	collectAttachedComments,
 } from "./critic/threading";
-import type { CriticAction } from "./critic/transform";
+import {
+	replacementForMark,
+	type CriticAction,
+} from "./critic/transform";
 import type { CriticMark, DisplayMode } from "./critic/types";
 import {
 	clampPreviewSnippet,
 	formatMarkDate,
+	getSuggestionPreviewParts,
 	isSuggestionMark,
 	rectDrifted,
 } from "./critic/display";
@@ -87,6 +91,7 @@ interface CodeMirrorAdapter {
 }
 
 interface ThreadPreviewData {
+	kind: "thread" | "suggestion";
 	label: string;
 	countLabel: string;
 	snippet: string;
@@ -373,9 +378,17 @@ export default class RelayCommentsPlugin
 		if (!data) return false;
 		this.hideThreadPreview();
 
-		const element = this.renderThreadPreview(data, options.role, (opts) =>
-			this.activateCommentThread(filePath, from, to, opts),
-		);
+		const element = this.renderThreadPreview(data, options.role, {
+			open: (opts) => this.activateCommentThread(filePath, from, to, opts),
+			resolve: () => {
+				this.hideThreadPreview();
+				this.resolveThreadAtRange(filePath, from, to);
+			},
+			apply: (action) => {
+				this.hideThreadPreview();
+				this.applySuggestionActionAtRange(filePath, from, to, action);
+			},
+		});
 		document.body.appendChild(element);
 		this.positionThreadPreview(element, anchorRect);
 		const previousTitle = options.anchor?.getAttribute("title") ?? null;
@@ -473,23 +486,24 @@ export default class RelayCommentsPlugin
 	private renderThreadPreview(
 		data: ThreadPreviewData,
 		role: "tooltip" | "dialog",
-		onOpen: (opts?: { focusReply?: boolean }) => void,
+		handlers: {
+			open: (opts?: { focusReply?: boolean }) => void;
+			resolve: () => void;
+			apply: (action: CriticAction) => void;
+		},
 	): HTMLElement {
-		// The popover is for reading; everything else is a CTA into the
-		// sidebar — reply, or follow the breadcrumb to the full thread. The
-		// body stays plain (normal pointer, selectable text).
-		const wireOpenLink = (
-			link: HTMLElement,
-			opts?: { focusReply?: boolean },
-		) => {
+		// The popover is for reading; everything else is a CTA — reply,
+		// resolve, accept/reject, or follow the breadcrumb to the full
+		// thread. The body stays plain (normal pointer, selectable text).
+		const wireLink = (link: HTMLElement, act: () => void) => {
 			link.addClass("critic-thread-preview-link");
 			link.setAttribute("role", "button");
 			link.tabIndex = 0;
-			link.addEventListener("click", () => onOpen(opts));
+			link.addEventListener("click", act);
 			link.addEventListener("keydown", (event) => {
 				if (event.key !== "Enter" && event.key !== " ") return;
 				event.preventDefault();
-				onOpen(opts);
+				act();
 			});
 		};
 		const element = document.createElement("div");
@@ -509,12 +523,13 @@ export default class RelayCommentsPlugin
 		const header = element.createDiv({ cls: "critic-thread-preview-header" });
 		header.createSpan({ cls: "critic-thread-preview-label", text: data.label });
 		if (data.countLabel) {
-			wireOpenLink(
+			wireLink(
 				header.createSpan({
 					cls: "critic-thread-preview-count",
 					text: data.countLabel,
 					attr: { "aria-label": "Open thread in sidebar" },
 				}),
+				() => handlers.open(),
 			);
 		}
 		if (data.resolved) {
@@ -527,27 +542,67 @@ export default class RelayCommentsPlugin
 			cls: "critic-thread-preview-message",
 			text: data.snippet,
 		});
+
+		const links: Array<{ label: string; aria: string; act: () => void }> =
+			data.kind === "suggestion"
+				? this.settings.showInlineActions
+					? [
+							{
+								label: "Accept",
+								aria: "Accept suggestion",
+								act: () => handlers.apply("accept"),
+							},
+							{
+								label: "Reject",
+								aria: "Reject suggestion",
+								act: () => handlers.apply("reject"),
+							},
+						]
+					: []
+				: [
+						{
+							label: "Reply",
+							aria: "Reply in sidebar",
+							act: () => handlers.open({ focusReply: true }),
+						},
+						...(this.settings.showInlineActions && !data.resolved
+							? [
+									{
+										label: "Resolve",
+										aria: "Resolve thread",
+										act: handlers.resolve,
+									},
+								]
+							: []),
+						...(data.moreLabel
+							? [
+									{
+										label: data.moreLabel,
+										aria: "Open thread in sidebar",
+										act: () => handlers.open(),
+									},
+								]
+							: []),
+					];
+
 		const metaParts = [data.author, data.date].filter(
 			(part): part is string => Boolean(part),
 		);
-		const meta = element.createDiv({ cls: "critic-thread-preview-meta" });
-		meta.appendText(metaParts.join(" · "));
-		if (metaParts.length > 0) meta.appendText(" · ");
-		wireOpenLink(
-			meta.createSpan({
-				text: "Reply",
-				attr: { "aria-label": "Reply in sidebar" },
-			}),
-			{ focusReply: true },
-		);
-		if (data.moreLabel) {
-			meta.appendText(" · ");
-			wireOpenLink(
-				meta.createSpan({
-					text: data.moreLabel,
-					attr: { "aria-label": "Open thread in sidebar" },
-				}),
-			);
+		if (metaParts.length > 0 || links.length > 0) {
+			const meta = element.createDiv({ cls: "critic-thread-preview-meta" });
+			meta.appendText(metaParts.join(" · "));
+			let separatorNeeded = metaParts.length > 0;
+			for (const spec of links) {
+				if (separatorNeeded) meta.appendText(" · ");
+				separatorNeeded = true;
+				wireLink(
+					meta.createSpan({
+						text: spec.label,
+						attr: { "aria-label": spec.aria },
+					}),
+					spec.act,
+				);
+			}
 		}
 		return element;
 	}
@@ -628,11 +683,16 @@ export default class RelayCommentsPlugin
 		return relayIdentity ?? fallbackIdentity();
 	}
 
-	private buildThreadPreviewData(
+	private findMarkRunAtRange(
 		filePath: string,
 		from: number,
 		to: number,
-	): ThreadPreviewData | null {
+	): {
+		mark: CriticMark;
+		visibleComments: CriticMark[];
+		runFrom: number;
+		runTo: number;
+	} | null {
 		const view = this.getMarkdownViewByPath(filePath);
 		const editor = view?.editor;
 		if (!view?.file || view.file.path !== filePath || !editor) return null;
@@ -655,38 +715,107 @@ export default class RelayCommentsPlugin
 			if (mark.from !== from || mark.to !== to) continue;
 
 			const run = mark.type === "comment" ? [mark, ...attached] : attached;
-			const visibleComments = run.filter(
-				(comment) => comment.content.trim().length > 0,
-			);
-			if (visibleComments.length === 0) return null;
-			const firstComment = visibleComments[0];
-			const identity = this.getReviewerIdentityForMark(firstComment, filePath);
-			const resolved = [mark, ...visibleComments].some(
-				(candidate) => candidate.metadata?.resolved === "true",
-			);
+			const last = run[run.length - 1] ?? mark;
 			return {
-				label: resolved
-					? "Resolved comment"
-					: isSuggestionMark(mark)
-						? "Comment on suggestion"
-						: "Comment",
-				countLabel:
-					visibleComments.length > 1
-						? `${visibleComments.length} comments`
-						: "",
-				snippet: clampPreviewSnippet(firstComment.content),
-				moreLabel:
-					visibleComments.length > 1
-						? `+${visibleComments.length - 1} ${
-								visibleComments.length === 2 ? "reply" : "replies"
-							}`
-						: null,
-				author: identity.source === "fallback" ? null : identity.name,
-				date: formatMarkDate(firstComment),
-				resolved,
+				mark,
+				visibleComments: run.filter(
+					(comment) => comment.content.trim().length > 0,
+				),
+				runFrom: mark.from,
+				runTo: Math.max(mark.to, last.to),
 			};
 		}
 		return null;
+	}
+
+	private buildThreadPreviewData(
+		filePath: string,
+		from: number,
+		to: number,
+	): ThreadPreviewData | null {
+		const found = this.findMarkRunAtRange(filePath, from, to);
+		if (!found) return null;
+		const { mark, visibleComments } = found;
+
+		if (visibleComments.length === 0) {
+			const parts = getSuggestionPreviewParts(mark);
+			if (!parts) return null;
+			const identity = this.getReviewerIdentityForMark(mark, filePath);
+			return {
+				kind: "suggestion",
+				label: parts.label,
+				countLabel: "",
+				snippet: clampPreviewSnippet(parts.snippet),
+				moreLabel: null,
+				author: identity.source === "fallback" ? null : identity.name,
+				date: formatMarkDate(mark),
+				resolved: false,
+			};
+		}
+
+		const firstComment = visibleComments[0];
+		const identity = this.getReviewerIdentityForMark(firstComment, filePath);
+		const resolved = [mark, ...visibleComments].some(
+			(candidate) => candidate.metadata?.resolved === "true",
+		);
+		return {
+			kind: "thread",
+			label: resolved
+				? "Resolved comment"
+				: isSuggestionMark(mark)
+					? "Comment on suggestion"
+					: "Comment",
+			countLabel:
+				visibleComments.length > 1
+					? `${visibleComments.length} comments`
+					: "",
+			snippet: clampPreviewSnippet(firstComment.content),
+			moreLabel:
+				visibleComments.length > 1
+					? `+${visibleComments.length - 1} ${
+							visibleComments.length === 2 ? "reply" : "replies"
+						}`
+					: null,
+			author: identity.source === "fallback" ? null : identity.name,
+			date: formatMarkDate(firstComment),
+			resolved,
+		};
+	}
+
+	/** Resolve the thread at a range: same semantics as the sidebar's
+	    resolve control (comments removed; a suggestion anchor survives). */
+	resolveThreadAtRange(filePath: string, from: number, to: number): void {
+		const found = this.findMarkRunAtRange(filePath, from, to);
+		if (!found || found.visibleComments.length === 0) return;
+		const { mark, runFrom, runTo } = found;
+		if (mark.type === "comment") {
+			this.replaceReviewRangeFromSidebar(runFrom, runTo, "");
+		} else if (isSuggestionMark(mark)) {
+			this.replaceReviewRangeFromSidebar(mark.to, runTo, "");
+		} else {
+			this.replaceReviewRangeFromSidebar(runFrom, runTo, mark.content);
+		}
+		this.refreshReviewSidebars();
+	}
+
+	applySuggestionActionAtRange(
+		filePath: string,
+		from: number,
+		to: number,
+		action: CriticAction,
+	): void {
+		const found = this.findMarkRunAtRange(filePath, from, to);
+		if (!found || !isSuggestionMark(found.mark)) return;
+		if (found.visibleComments.length > 0) {
+			this.replaceReviewRangeFromSidebar(
+				found.runFrom,
+				found.runTo,
+				replacementForMark(found.mark, action),
+			);
+			this.refreshReviewSidebars();
+		} else {
+			this.applyMarkActionFromSidebar(found.mark, action);
+		}
 	}
 
 	private showCommentPreviewAtCursor(editor: Editor): void {
