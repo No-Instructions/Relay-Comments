@@ -3,7 +3,6 @@ import {
 	clampPreviewSnippet,
 	findPrecedingWordRange,
 	formatMarkDate,
-	getPreviewAnchorText,
 	normalizeWhitespace,
 	rectDrifted,
 } from "src/critic/display";
@@ -23,33 +22,6 @@ describe("clampPreviewSnippet", () => {
 		const result = clampPreviewSnippet(long);
 		expect(result.length).toBe(318);
 		expect(result.endsWith("…")).toBe(true);
-	});
-});
-
-describe("getPreviewAnchorText", () => {
-	it("renders substitutions as old → new", () => {
-		const [mark] = parseCriticMarkup("Use {~~alpha~>beta~~} here.");
-		expect(getPreviewAnchorText(mark, "", [])).toBe("alpha → beta");
-	});
-
-	it("anchors standalone comments to the preceding word", () => {
-		const text = "important word {>>note<<}";
-		const marks = parseCriticMarkup(text);
-		expect(getPreviewAnchorText(marks[0], text, marks)).toBe("word");
-	});
-
-	it("falls back to a label when a comment has no anchor word", () => {
-		const text = "{>>orphan<<} rest";
-		const marks = parseCriticMarkup(text);
-		expect(getPreviewAnchorText(marks[0], text, marks)).toBe("Comment");
-	});
-
-	it("uses the mark content for highlights", () => {
-		const text = "See {==the marked span==} now.";
-		const marks = parseCriticMarkup(text);
-		expect(getPreviewAnchorText(marks[0], text, marks)).toBe(
-			"the marked span",
-		);
 	});
 });
 

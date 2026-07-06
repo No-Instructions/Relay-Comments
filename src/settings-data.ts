@@ -2,12 +2,14 @@ export interface RelayCommentsSettings {
 	showAuthorChips: boolean;
 	showInlineActions: boolean;
 	openSidebarOnCommentSelect: boolean;
+	showHoverPreview: boolean;
 }
 
 export const DEFAULT_SETTINGS: RelayCommentsSettings = {
 	showAuthorChips: true,
 	showInlineActions: true,
 	openSidebarOnCommentSelect: true,
+	showHoverPreview: true,
 };
 
 /**
@@ -29,5 +31,7 @@ export function resolveSettings(loaded: unknown): RelayCommentsSettings {
 			data.openSidebarOnCommentSelect ??
 			data.enableReviewSidebar ??
 			DEFAULT_SETTINGS.openSidebarOnCommentSelect,
+		showHoverPreview:
+			data.showHoverPreview ?? DEFAULT_SETTINGS.showHoverPreview,
 	};
 }

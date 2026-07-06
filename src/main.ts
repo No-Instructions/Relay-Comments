@@ -20,11 +20,8 @@ import type { CriticAction } from "./critic/transform";
 import type { CriticMark, DisplayMode } from "./critic/types";
 import {
 	clampPreviewSnippet,
-	findPrecedingWordRange,
 	formatMarkDate,
-	getPreviewAnchorText,
 	isSuggestionMark,
-	normalizeWhitespace,
 	rectDrifted,
 } from "./critic/display";
 import {
@@ -92,7 +89,6 @@ interface CodeMirrorAdapter {
 interface ThreadPreviewData {
 	label: string;
 	countLabel: string;
-	anchorText: string;
 	snippet: string;
 	moreLabel: string | null;
 	author: string | null;
@@ -262,6 +258,9 @@ export default class RelayCommentsPlugin
 	}
 
 	activateCommentThread(path: string | null, from: number, to: number): void {
+		// The thread is opening where the preview points; keep both around
+		// and they compete for the same attention.
+		this.hideThreadPreview();
 		const filePath = path ?? this.app.workspace.getActiveFile()?.path ?? null;
 		if (filePath) {
 			this.lastMarkdownPath = filePath;
@@ -296,6 +295,7 @@ export default class RelayCommentsPlugin
 		to: number,
 		anchor: HTMLElement,
 	): void {
+		if (!this.settings.showHoverPreview) return;
 		const active = document.activeElement;
 		if (
 			active instanceof HTMLTextAreaElement &&
@@ -371,6 +371,11 @@ export default class RelayCommentsPlugin
 		const element = this.renderThreadPreview(data, options.role);
 		document.body.appendChild(element);
 		this.positionThreadPreview(element, anchorRect);
+		// The preview is a doorway, not a destination: clicking it opens the
+		// thread in the sidebar (which also dismisses the preview).
+		element.addEventListener("click", () => {
+			this.activateCommentThread(filePath, from, to);
+		});
 		const previousTitle = options.anchor?.getAttribute("title") ?? null;
 		const previousDescribedBy =
 			options.anchor?.getAttribute("aria-describedby") ?? null;
@@ -495,10 +500,6 @@ export default class RelayCommentsPlugin
 				text: "Resolved",
 			});
 		}
-		element.createDiv({
-			cls: "critic-thread-preview-anchor",
-			text: normalizeWhitespace(data.anchorText),
-		});
 		element.createDiv({
 			cls: "critic-thread-preview-message",
 			text: data.snippet,
@@ -629,7 +630,6 @@ export default class RelayCommentsPlugin
 					visibleComments.length > 1
 						? `${visibleComments.length} comments`
 						: "",
-				anchorText: getPreviewAnchorText(mark, text, marks),
 				snippet: clampPreviewSnippet(firstComment.content),
 				moreLabel:
 					visibleComments.length > 1

@@ -14,12 +14,20 @@ describe("resolveSettings", () => {
 				showAuthorChips: false,
 				showInlineActions: false,
 				openSidebarOnCommentSelect: false,
+				showHoverPreview: false,
 			}),
 		).toEqual({
 			showAuthorChips: false,
 			showInlineActions: false,
 			openSidebarOnCommentSelect: false,
+			showHoverPreview: false,
 		});
+	});
+
+	it("defaults the hover preview on for data saved before it existed", () => {
+		expect(resolveSettings({ showAuthorChips: true }).showHoverPreview).toBe(
+			true,
+		);
 	});
 
 	it("migrates the pre-0.2 enableReviewSidebar value", () => {

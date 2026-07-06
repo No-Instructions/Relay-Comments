@@ -37,6 +37,20 @@ export class RelayCommentsSettingTab extends PluginSettingTab {
 			});
 
 		new Setting(containerEl)
+			.setName("Comment preview on hover")
+			.setDesc(
+				"Show a floating preview when hovering commented text. Click the preview to open the thread in the sidebar.",
+			)
+			.addToggle((toggle) => {
+				toggle
+					.setValue(this.plugin.settings.showHoverPreview)
+					.onChange(async (value) => {
+						this.plugin.settings.showHoverPreview = value;
+						await this.plugin.saveSettingsAndRefresh();
+					});
+			});
+
+		new Setting(containerEl)
 			.setName("Inline action controls")
 			.setDesc("Show inline editor controls for comments and suggestions.")
 			.addToggle((toggle) => {

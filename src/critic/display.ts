@@ -94,22 +94,3 @@ export function rectDrifted(a: RectLike, b: RectLike, tolerance = 2): boolean {
 }
 
 /** The quoted text a preview shows for a thread's anchor mark. */
-export function getPreviewAnchorText(
-	mark: CriticMark,
-	text: string,
-	marks: CriticMark[],
-): string {
-	switch (mark.type) {
-		case "substitution":
-			return [mark.oldText, mark.newText]
-				.map((value) => normalizeWhitespace(value ?? ""))
-				.filter((value) => value.length > 0)
-				.join(" → ");
-		case "comment": {
-			const range = findPrecedingWordRange(text, mark.from, marks);
-			return range ? text.slice(range[0], range[1]) : "Comment";
-		}
-		default:
-			return mark.content;
-	}
-}

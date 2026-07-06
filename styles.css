@@ -113,6 +113,8 @@
 	box-shadow: 0 8px 28px rgba(0, 0, 0, 0.22);
 	font-size: var(--font-ui-small);
 	line-height: 1.35;
+	/* The preview is clickable: it opens the thread in the sidebar */
+	cursor: pointer;
 }
 
 .critic-thread-preview:focus {
@@ -148,14 +150,6 @@
 	font-size: var(--font-ui-smaller);
 }
 
-.critic-thread-preview-anchor {
-	margin-bottom: 8px;
-	padding-left: 8px;
-	/* Same amber quote ink as the sidebar cards */
-	border-left: 2px solid color-mix(in srgb, var(--color-yellow) 55%, transparent);
-	color: var(--text-muted);
-}
-
 .critic-thread-preview-message {
 	display: -webkit-box;
 	-webkit-line-clamp: 3;
@@ -171,10 +165,6 @@
 
 .critic-thread-preview.is-resolved {
 	opacity: 0.86;
-}
-
-.critic-thread-preview.is-resolved .critic-thread-preview-anchor {
-	border-left-color: var(--text-faint);
 }
 
 .cm-critic-comment-button svg {
