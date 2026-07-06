@@ -440,7 +440,8 @@
 	color: var(--text-faint);
 }
 
-.critic-sidebar .critic-icon-button {
+.critic-sidebar .critic-icon-button,
+.critic-canvas-card .critic-icon-button {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
@@ -455,16 +456,19 @@
 	cursor: pointer;
 }
 
-.critic-sidebar .critic-icon-button:hover {
+.critic-sidebar .critic-icon-button:hover,
+.critic-canvas-card .critic-icon-button:hover {
 	background: var(--background-modifier-hover);
 	color: var(--text-normal);
 }
 
-.critic-sidebar .critic-check-button:hover {
+.critic-sidebar .critic-check-button:hover,
+.critic-canvas-card .critic-check-button:hover {
 	color: var(--interactive-accent);
 }
 
-.critic-sidebar .critic-icon-button svg {
+.critic-sidebar .critic-icon-button svg,
+.critic-canvas-card .critic-icon-button svg {
 	width: 16px;
 	height: 16px;
 }
@@ -674,18 +678,22 @@
 	margin-left: auto;
 }
 
-.critic-sidebar .critic-composer-help-button {
+.critic-sidebar .critic-composer-help-button,
+.critic-canvas-card .critic-composer-help-button {
 	width: 24px;
 	height: 24px;
 	color: var(--text-faint);
 }
 
 .critic-sidebar .critic-composer-help-button:hover,
-.critic-sidebar .critic-composer-help-button:focus-visible {
+.critic-canvas-card .critic-composer-help-button:hover,
+.critic-sidebar .critic-composer-help-button:focus-visible,
+.critic-canvas-card .critic-composer-help-button:focus-visible {
 	color: var(--text-muted);
 }
 
-.critic-sidebar .critic-composer-help-button svg {
+.critic-sidebar .critic-composer-help-button svg,
+.critic-canvas-card .critic-composer-help-button svg {
 	width: 14px;
 	height: 14px;
 }
@@ -731,7 +739,8 @@
 
 /* ---------- Buttons ---------- */
 
-.critic-sidebar .critic-text-button {
+.critic-sidebar .critic-text-button,
+.critic-canvas-card .critic-text-button {
 	appearance: none;
 	border: none;
 	border-radius: 999px;
@@ -748,28 +757,35 @@
 }
 
 .critic-sidebar .critic-text-button:hover,
-.critic-sidebar .critic-text-button:focus-visible {
+.critic-canvas-card .critic-text-button:hover,
+.critic-sidebar .critic-text-button:focus-visible,
+.critic-canvas-card .critic-text-button:focus-visible {
 	background: var(--background-modifier-hover);
 	color: var(--text-normal);
 }
 
-.critic-sidebar .critic-button-primary {
+.critic-sidebar .critic-button-primary,
+.critic-canvas-card .critic-button-primary {
 	background: var(--interactive-accent);
 	color: var(--text-on-accent);
 }
 
 .critic-sidebar .critic-button-primary:hover,
-.critic-sidebar .critic-button-primary:focus-visible {
+.critic-canvas-card .critic-button-primary:hover,
+.critic-sidebar .critic-button-primary:focus-visible,
+.critic-canvas-card .critic-button-primary:focus-visible {
 	background: var(--interactive-accent-hover);
 	color: var(--text-on-accent);
 }
 
-.critic-sidebar .critic-button-primary:disabled {
+.critic-sidebar .critic-button-primary:disabled,
+.critic-canvas-card .critic-button-primary:disabled {
 	opacity: 0.45;
 	cursor: default;
 }
 
-.critic-sidebar .critic-button-primary:disabled:hover {
+.critic-sidebar .critic-button-primary:disabled:hover,
+.critic-canvas-card .critic-button-primary:disabled:hover {
 	background: var(--interactive-accent);
 }
 
@@ -870,18 +886,19 @@
 	width: 28px;
 	height: 28px;
 	/* Teardrop: round except the tip corner, which points at the spot */
-	border-radius: 50% 50% 50% 4px;
+	border-radius: 50% 50% 50% 0;
 	/* Comment ink: the same amber family as highlight anchors and card
 	   rails, so a pin reads as "comment" at a glance */
 	background: color-mix(in srgb, var(--color-yellow) 85%, var(--background-primary));
 	color: rgba(0, 0, 0, 0.75);
 	border: 2px solid var(--background-primary);
-	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+	/* Tight shadow: a soft blur under the tip corner smudges the pointer */
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
 	font-size: 13px;
 	font-weight: 600;
 	cursor: pointer;
 	/* The tip is the anchor; scale is set inline to undo canvas zoom */
-	transform-origin: 4px 100%;
+	transform-origin: 0 100%;
 	pointer-events: auto;
 	user-select: none;
 }

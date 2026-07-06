@@ -170,7 +170,10 @@ export class CanvasCommentPins {
 			const data = node.getData();
 			if (!node.nodeEl || !data.width) continue;
 			const rect = node.nodeEl.getBoundingClientRect();
-			if (rect.width > 0) return rect.width / data.width;
+			// offsetWidth, not data.width: the rect includes the node's
+			// borders, and dividing by the data width biases the scale.
+			const layout = node.nodeEl.offsetWidth;
+			if (rect.width > 0 && layout > 0) return rect.width / layout;
 		}
 		return 1;
 	}
@@ -185,8 +188,9 @@ export class CanvasCommentPins {
 			const data = node.getData();
 			if (!node.nodeEl || !data.width) continue;
 			const rect = node.nodeEl.getBoundingClientRect();
-			if (rect.width === 0) continue;
-			const scale = rect.width / data.width;
+			const layout = node.nodeEl.offsetWidth;
+			if (rect.width === 0 || layout === 0) continue;
+			const scale = rect.width / layout;
 			return {
 				x: data.x + (clientX - rect.x) / scale,
 				y: data.y + (clientY - rect.y) / scale,
@@ -219,7 +223,7 @@ export class CanvasCommentPins {
 				pin.style.left = `${pos.x}px`;
 				pin.style.top = `${pos.y}px`;
 				// Constant screen size, Figma-style: undo the canvas zoom.
-				pin.style.transform = `translate(-4px, -100%) scale(${1 / zoom})`;
+				pin.style.transform = `translate(0, -100%) scale(${1 / zoom})`;
 				pin.classList.toggle("is-resolved", thread.resolved === true);
 				// Avatar convention: a known author's identity color fills
 				// the pin; unknown authors keep the amber comment ink.
@@ -320,8 +324,11 @@ export class CanvasCommentPins {
 		if (!node || !canvas) return;
 		let dx = node.width;
 		let dy = 0;
+		// The node menu only ever opens from a right-click, so the last
+		// recorded one is always the relevant point — no staleness window
+		// (humans read menus for longer than any timeout we would pick).
 		const click = this.lastRightClick;
-		if (click && Date.now() - click.time < 3000) {
+		if (click) {
 			const point = this.screenPointToCanvas(canvas, click.x, click.y);
 			if (point) {
 				dx = point.x - node.x;
