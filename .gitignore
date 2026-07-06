@@ -20,3 +20,6 @@ tests/integration/
 tests/demos/
 demo-artifacts/
 wiki/
+
+# local development vault (Obsidian test bench)
+vault/
