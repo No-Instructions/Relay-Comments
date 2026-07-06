@@ -483,10 +483,12 @@ export default class RelayCommentsPlugin
 
 		const header = element.createDiv({ cls: "critic-thread-preview-header" });
 		header.createSpan({ cls: "critic-thread-preview-label", text: data.label });
-		header.createSpan({
-			cls: "critic-thread-preview-count",
-			text: data.countLabel,
-		});
+		if (data.countLabel) {
+			header.createSpan({
+				cls: "critic-thread-preview-count",
+				text: data.countLabel,
+			});
+		}
 		if (data.resolved) {
 			header.createSpan({
 				cls: "critic-thread-preview-badge",
@@ -623,9 +625,10 @@ export default class RelayCommentsPlugin
 					: isSuggestionMark(mark)
 						? "Comment on suggestion"
 						: "Comment",
-				countLabel: `${visibleComments.length} ${
-					visibleComments.length === 1 ? "comment" : "comments"
-				}`,
+				countLabel:
+					visibleComments.length > 1
+						? `${visibleComments.length} comments`
+						: "",
 				anchorText: getPreviewAnchorText(mark, text, marks),
 				snippet: clampPreviewSnippet(firstComment.content),
 				moreLabel:
