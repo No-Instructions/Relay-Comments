@@ -939,11 +939,14 @@
 }
 
 /* Floating thread card, opened from a pin. It reuses the sidebar's
-   .critic-card shell (border, radius, type spine) and composer; only the
-   floating placement and the caret toward the pin are canvas-specific. */
+   .critic-card shell (border, radius, type spine) and composer. It lives
+   in the canvas's transformed container (canvas coordinates) so pan and
+   zoom carry it on the compositor; the inline scale() counter-scales it
+   to constant screen size, like the pins. */
 .critic-canvas-card {
-	position: fixed;
+	position: absolute;
 	z-index: 60;
+	transform-origin: 0 0;
 	box-shadow: 0 8px 28px rgba(0, 0, 0, 0.3);
 	font-size: var(--font-ui-small);
 	user-select: text;
@@ -1014,6 +1017,12 @@
 	display: flex;
 }
 
-.critic-canvas-card-no-caret::after {
-	display: none;
+/* Card opens to the pin's left when the window edge is near: the caret
+   flips to the right edge. */
+.critic-canvas-card.is-flipped::after {
+	left: auto;
+	right: -6px;
+	border-right: none;
+	border-top: none;
+	transform: rotate(-135deg);
 }
