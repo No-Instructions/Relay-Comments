@@ -282,6 +282,11 @@ marked `relayCommentCarrier: true` — which is deleted when its last
 thread is removed. Unknown node *types* must never be used for storage:
 Obsidian deletes them on the next save.
 
+Known gap: pins are not draggable yet, so a pin placed over node
+content stays there until the thread is deleted and recreated. Pin
+dragging (updating `dx`/`dy`, or `x`/`y` on a carrier) is the planned
+fix.
+
 ## Relay Integration
 
 ### Dependency Model

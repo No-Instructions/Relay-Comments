@@ -24,8 +24,12 @@ readable in any editor.
   active note, in document order. Cards carry a colored spine and diff
   chips so you can scan what kind of change each one is.
 - **Read without opening** — hover a commented passage to preview the
-  thread in place: the quote, the comment, and the reply count. A command
+  thread in place, with links to reply or open the full thread. A command
   shows the same preview at the cursor for keyboard users.
+- **Canvas comments** — Figma-style pins on any canvas: right-click a
+  card or the empty board and the pin lands exactly where you clicked.
+  Pins carry the author's initial, hold their size at any zoom, and open
+  a floating thread card to read, reply, and resolve.
 - **Clean reading** — Live Preview and Reading mode render review marks and
   hide the raw delimiters; Source mode shows the plain text. Half-typed
   markup is never hidden, so nothing silently disappears while you type.
@@ -36,6 +40,8 @@ readable in any editor.
 
 ![The review sidebar next to a note with comments, suggestions, and highlights](docs/review-sidebar-dark.png)
 
+![A canvas card gets a comment from its right-click menu, then a freestanding pin lands between two cards](docs/canvas-comments.gif)
+
 ## Usage
 
 - Select text and click the comment button that appears in the margin, use
@@ -45,12 +51,14 @@ readable in any editor.
   to its place in the note.
 - Hover a card for **Resolve**; suggestions add **Accept** / **Reject**
   under the `⋯` menu.
+- On a canvas, right-click a card or empty space and choose
+  **Add comment**, or press the same shortcut for click-to-place.
 
 Commands (search "Relay Comments" in the command palette): open/close the
-review sidebar, add comment, show comment preview at cursor, highlight
-selection, mark selection as addition/deletion/substitution, accept/reject
-current, accept/reject all, and finalize for publish. The ribbon icon
-toggles the sidebar.
+review sidebar, add comment, add comment to canvas (click to place), show
+comment preview at cursor, highlight selection, mark selection as
+addition/deletion/substitution, accept/reject current, accept/reject all,
+and finalize for publish. The ribbon icon toggles the sidebar.
 
 ## The format
 
