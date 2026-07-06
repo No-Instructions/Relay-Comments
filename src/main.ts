@@ -1374,6 +1374,9 @@ export default class RelayCommentsPlugin
 		this.addCommand({
 			id: "add-canvas-comment",
 			name: "Add comment to canvas (click to place)",
+			// Same chord as the editor's add-comment: the check limits it
+			// to canvas views, so the two commands never collide.
+			hotkeys: ADD_COMMENT_HOTKEYS,
 			checkCallback: (checking) => {
 				const view = this.app.workspace.getActiveViewOfType(ItemView);
 				if (view?.getViewType() !== "canvas") return false;

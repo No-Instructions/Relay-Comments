@@ -1,6 +1,11 @@
-import { Menu, setIcon, setTooltip, type WorkspaceLeaf } from "obsidian";
+import { Menu, Platform, setIcon, setTooltip, type WorkspaceLeaf } from "obsidian";
+import {
+	formatComposerSubmitHint,
+	isComposerSubmitKey,
+} from "../ui/composer-keys";
 import {
 	addReply,
+	authorInitials,
 	createThread,
 	formatCommentDate,
 	isEmptyCarrier,
@@ -56,6 +61,10 @@ export class CanvasCommentPins {
 	private card: HTMLElement | null = null;
 	private cardKey: string | null = null;
 	private placement: (() => void) | null = null;
+	private menuPatches: Array<{
+		el: HTMLElement;
+		listener: (event: MouseEvent) => void;
+	}> = [];
 
 	constructor(private host: PinHost) {}
 
@@ -68,6 +77,10 @@ export class CanvasCommentPins {
 	stop(): void {
 		this.closeCard();
 		this.cancelPlacement();
+		for (const { el, listener } of this.menuPatches) {
+			el.removeEventListener("contextmenu", listener, { capture: true });
+		}
+		this.menuPatches = [];
 		for (const leaf of this.host.getCanvasLeaves()) {
 			const view = leaf.view as unknown as CanvasViewLike;
 			view.containerEl
@@ -81,8 +94,62 @@ export class CanvasCommentPins {
 	renderAll(): void {
 		for (const leaf of this.host.getCanvasLeaves()) {
 			const view = leaf.view as unknown as CanvasViewLike;
-			if (view.canvas) this.renderCanvas(view);
+			if (view.canvas) {
+				this.patchBackgroundMenu(view, view.canvas);
+				this.renderCanvas(view);
+			}
 		}
+	}
+
+	/**
+	 * Obsidian offers no event for the canvas background context menu, and
+	 * its internal handler is bound at construction, so wrapping it never
+	 * takes effect. Instead: a capture-phase contextmenu listener arms a
+	 * one-shot intercept of Menu.showAtPosition that appends "Add comment"
+	 * to whichever menu the same right-click opens. Node clicks are
+	 * excluded (the canvas:node-menu event covers those) and the intercept
+	 * disarms itself after one show or one tick, whichever comes first.
+	 */
+	private patchBackgroundMenu(view: CanvasViewLike, canvas: CanvasLike): void {
+		const el = canvas.wrapperEl;
+		if (!el || this.menuPatches.some((patch) => patch.el === el)) return;
+		const pins = this;
+		const listener = (event: MouseEvent) => {
+			const target = event.target as HTMLElement | null;
+			if (target?.closest(".canvas-node, .critic-canvas-pin")) return;
+			const proto = Menu.prototype as unknown as {
+				showAtPosition: (...args: unknown[]) => unknown;
+			};
+			const originalShow = proto.showAtPosition;
+			let restored = false;
+			const restore = () => {
+				if (restored) return;
+				restored = true;
+				proto.showAtPosition = originalShow;
+			};
+			proto.showAtPosition = function (...args: unknown[]) {
+				restore();
+				const menu = this as unknown as Menu;
+				menu.addSeparator();
+				menu.addItem((item) => {
+					item
+						.setTitle("Add comment")
+						.setIcon("message-square-plus")
+						.onClick(() => {
+							pins.placeThreadAtScreenPoint(
+								view,
+								canvas,
+								event.clientX,
+								event.clientY,
+							);
+						});
+				});
+				return originalShow.apply(this, args);
+			};
+			window.setTimeout(restore, 0);
+		};
+		el.addEventListener("contextmenu", listener, { capture: true });
+		this.menuPatches.push({ el, listener });
 	}
 
 	/**
@@ -251,40 +318,11 @@ export class CanvasCommentPins {
 			event.stopPropagation();
 			event.preventDefault();
 			cleanup();
-			// Prefer the reference-node mapping (exact at any zoom); an
-			// empty canvas falls back to the raw transform fields.
-			const rect = target.getBoundingClientRect();
-			const point =
-				this.screenPointToCanvas(canvas, event.clientX, event.clientY) ??
-				screenToCanvas(
-					event.clientX - rect.left,
-					event.clientY - rect.top,
-					canvas.tx,
-					canvas.ty,
-					canvas.tZoom || 1,
-				);
-			const carrier = makeCarrierNode(newThreadId(), point.x, point.y);
-			const thread: CanvasCommentThread = {
-				id: newThreadId(),
-				dx: 0,
-				dy: 0,
-				comments: [],
-			};
-			const data = canvas.getData();
-			canvas.importData(
-				{
-					...data,
-					nodes: [...data.nodes, createThread(carrier, thread)],
-				},
-				true,
-			);
-			canvas.requestSave();
-			this.renderAll();
-			this.openCard(
+			this.placeThreadAtScreenPoint(
 				view,
-				carrier.id,
-				thread.id,
-				this.pinEl(view, `${carrier.id}:${thread.id}`),
+				canvas,
+				event.clientX,
+				event.clientY,
 			);
 		};
 		const onKey = (event: KeyboardEvent) => {
@@ -303,6 +341,49 @@ export class CanvasCommentPins {
 
 	cancelPlacement(): void {
 		this.placement?.();
+	}
+
+	/** Freestanding pin at a screen point: shared by placement mode and
+	    the canvas background context menu. */
+	private placeThreadAtScreenPoint(
+		view: CanvasViewLike,
+		canvas: CanvasLike,
+		clientX: number,
+		clientY: number,
+	): void {
+		// Prefer the reference-node mapping (exact at any zoom); an empty
+		// canvas falls back to the raw transform fields.
+		const host = canvas.wrapperEl ?? view.containerEl;
+		const rect = host.getBoundingClientRect();
+		const point =
+			this.screenPointToCanvas(canvas, clientX, clientY) ??
+			screenToCanvas(
+				clientX - rect.left,
+				clientY - rect.top,
+				canvas.tx,
+				canvas.ty,
+				canvas.tZoom || 1,
+			);
+		const carrier = makeCarrierNode(newThreadId(), point.x, point.y);
+		const thread: CanvasCommentThread = {
+			id: newThreadId(),
+			dx: 0,
+			dy: 0,
+			comments: [],
+		};
+		const data = canvas.getData();
+		canvas.importData(
+			{ ...data, nodes: [...data.nodes, createThread(carrier, thread)] },
+			true,
+		);
+		canvas.requestSave();
+		this.renderAll();
+		this.openCard(
+			view,
+			carrier.id,
+			thread.id,
+			this.pinEl(view, `${carrier.id}:${thread.id}`),
+		);
 	}
 
 	private pinEl(view: CanvasViewLike, key: string): HTMLElement | null {
@@ -327,18 +408,36 @@ export class CanvasCommentPins {
 			: null;
 		if (!node || !thread) return;
 
-		const card = document.body.createDiv({ cls: "critic-canvas-card" });
+		// The card speaks the sidebar's component language: same card
+		// shell and type spine, same avatar headers, same composer with
+		// primary/cancel actions and the keyboard hint on the right.
+		const card = document.body.createDiv({
+			cls: "critic-card critic-canvas-card",
+			attr: { "data-critic-type": "comment" },
+		});
 		this.card = card;
 		this.cardKey = key;
 
 		const header = card.createDiv({ cls: "critic-canvas-card-header" });
 		header.createSpan({
-			cls: "critic-canvas-card-title",
-			text: thread.resolved ? "Resolved comment" : "Comment",
+			cls: "critic-thread-preview-label",
+			text: "Comment",
 		});
-		const resolveButton = header.createEl("button", {
+		if (thread.resolved) {
+			header.createSpan({
+				cls: "critic-thread-preview-badge",
+				text: "Resolved",
+			});
+		}
+		const headerActions = header.createDiv({
+			cls: "critic-canvas-card-actions",
+		});
+		const resolveButton = headerActions.createEl("button", {
 			cls: "critic-icon-button critic-check-button",
-			attr: { "aria-label": thread.resolved ? "Reopen" : "Resolve" },
+			attr: {
+				type: "button",
+				"aria-label": thread.resolved ? "Reopen" : "Resolve",
+			},
 		});
 		setTooltip(resolveButton, thread.resolved ? "Reopen" : "Resolve");
 		setIcon(resolveButton, thread.resolved ? "rotate-ccw" : "check");
@@ -352,9 +451,9 @@ export class CanvasCommentPins {
 			);
 			this.openCard(view, nodeId, threadId, pin);
 		});
-		const moreButton = header.createEl("button", {
+		const moreButton = headerActions.createEl("button", {
 			cls: "critic-icon-button",
-			attr: { "aria-label": "More actions" },
+			attr: { type: "button", "aria-label": "More actions" },
 		});
 		setTooltip(moreButton, "More actions");
 		setIcon(moreButton, "more-horizontal");
@@ -374,33 +473,82 @@ export class CanvasCommentPins {
 			menu.showAtMouseEvent(event);
 		});
 
+		const identity = this.host.getIdentity();
 		const list = card.createDiv({ cls: "critic-canvas-card-comments" });
 		for (const comment of thread.comments) {
 			const item = list.createDiv({ cls: "critic-canvas-card-comment" });
-			item.createDiv({
-				cls: "critic-canvas-card-meta",
-				text: `${comment.author} · ${formatCommentDate(comment.date)}`,
+			const commentHeader = item.createDiv({ cls: "critic-comment-header" });
+			const commentIdentity = commentHeader.createDiv({
+				cls: "critic-comment-identity",
+			});
+			const avatar = commentIdentity.createDiv({
+				cls: "critic-avatar",
+				text: authorInitials(comment.author),
+			});
+			const own =
+				(comment.authorId && comment.authorId === identity.id) ||
+				comment.author === identity.name;
+			if (own && identity.color) {
+				avatar.style.backgroundColor = identity.color;
+			}
+			const byline = commentIdentity.createDiv({
+				cls: "critic-comment-byline",
+			});
+			byline.createDiv({
+				cls: "critic-comment-author",
+				text: comment.author,
+			});
+			byline.createDiv({
+				cls: "critic-comment-date",
+				text: formatCommentDate(comment.date),
 			});
 			item.createDiv({ cls: "critic-canvas-card-text", text: comment.text });
 		}
 
-		const composer = card.createDiv({ cls: "critic-canvas-card-composer" });
+		const composer = card.createDiv({
+			cls: "critic-thread-composer critic-composer-shell",
+		});
 		const textarea = composer.createEl("textarea", {
 			cls: "critic-thread-textarea",
 			attr: {
-				placeholder: thread.comments.length ? "Reply..." : "Comment...",
-				rows: "2",
+				placeholder: thread.comments.length ? "Reply…" : "Comment…",
 			},
 		});
 		const actions = composer.createDiv({ cls: "critic-composer-actions" });
 		const submit = actions.createEl("button", {
-			cls: "critic-button-primary",
+			cls: "critic-text-button critic-button-primary",
 			text: thread.comments.length ? "Reply" : "Comment",
+			attr: { type: "button" },
 		});
+		const cancel = actions.createEl("button", {
+			cls: "critic-text-button",
+			text: "Cancel",
+			attr: { type: "button" },
+		});
+		cancel.addEventListener("click", () => this.closeCard());
+		const help = actions.createSpan({ cls: "critic-composer-help" });
+		const helpButton = help.createEl("button", {
+			cls: "critic-icon-button critic-composer-help-button",
+			attr: { type: "button", "aria-label": "Show composer shortcuts" },
+		});
+		setIcon(helpButton, "keyboard");
+		help.createDiv({
+			cls: "critic-composer-help-tooltip",
+			text: formatComposerSubmitHint(Platform.isMacOS),
+			attr: { role: "tooltip" },
+		});
+
+		const syncSubmit = () => {
+			submit.disabled = textarea.value.trim().length === 0;
+			composer.classList.toggle(
+				"has-content",
+				textarea.value.trim().length > 0,
+			);
+		};
+		syncSubmit();
 		const post = () => {
 			const text = textarea.value.trim();
 			if (!text) return;
-			const identity = this.host.getIdentity();
 			const current = this.findNode(view, nodeId);
 			if (!current) return;
 			this.writeNode(
@@ -419,11 +567,17 @@ export class CanvasCommentPins {
 				?.focus();
 		};
 		submit.addEventListener("click", post);
+		textarea.addEventListener("input", syncSubmit);
 		textarea.addEventListener("keydown", (event) => {
-			if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+			event.stopPropagation();
+			if (event.key === "Escape") {
 				event.preventDefault();
-				post();
+				this.closeCard();
+				return;
 			}
+			if (!isComposerSubmitKey(event)) return;
+			event.preventDefault();
+			if (!submit.disabled) post();
 		});
 
 		this.positionCard(card, pin);
@@ -459,6 +613,16 @@ export class CanvasCommentPins {
 		top = Math.min(window.innerHeight - height - margin, Math.max(margin, top));
 		card.style.left = `${Math.round(left)}px`;
 		card.style.top = `${Math.round(top)}px`;
+		// Aim the caret at the pin's vertical center, clear of the corners.
+		if (anchor) {
+			const caretY = Math.min(
+				height - 18,
+				Math.max(14, anchor.top + anchor.height / 2 - top),
+			);
+			card.style.setProperty("--critic-canvas-caret-y", `${Math.round(caretY)}px`);
+		} else {
+			card.classList.add("critic-canvas-card-no-caret");
+		}
 	}
 
 	closeCard(): void {

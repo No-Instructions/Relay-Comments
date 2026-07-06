@@ -247,9 +247,11 @@ For unsupported marks, the renderer should avoid destructive DOM mutations and l
 Canvas comments are Figma-style pins: one pin per thread, placed on a
 node or floating at a canvas position. The pin renders at constant
 screen size regardless of zoom; clicking it opens a floating thread
-card with a composer. Adding: "Add comment" in the canvas node menu, or
-the "Add comment to canvas (click to place)" command (crosshair, Escape
-cancels).
+card — same card shell, avatars, and composer as the review sidebar.
+Adding: "Add comment" in the canvas node menu or the canvas background
+right-click menu (pin lands at the click point), or the "Add comment to
+canvas (click to place)" command — same default chord as the editor's
+add-comment (Ctrl/Cmd+Alt+M), crosshair cursor, Escape cancels.
 
 ### Storage format
 

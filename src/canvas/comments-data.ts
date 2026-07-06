@@ -149,3 +149,13 @@ export function pinInitial(thread: CanvasCommentThread): string {
 	const author = thread.comments[0]?.author?.trim() ?? "";
 	return author ? author[0].toUpperCase() : "?";
 }
+
+/** Two-letter initials, same rule as the sidebar's avatars. */
+export function authorInitials(name: string): string {
+	const words = name.trim().split(/\s+/).filter(Boolean);
+	if (words.length === 0) return "?";
+	return words
+		.slice(0, 2)
+		.map((word) => word[0]?.toUpperCase() ?? "")
+		.join("");
+}

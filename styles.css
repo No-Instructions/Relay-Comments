@@ -914,18 +914,31 @@
 	cursor: crosshair !important;
 }
 
-/* Floating thread card, opened from a pin */
+/* Floating thread card, opened from a pin. It reuses the sidebar's
+   .critic-card shell (border, radius, type spine) and composer; only the
+   floating placement and the caret toward the pin are canvas-specific. */
 .critic-canvas-card {
 	position: fixed;
 	z-index: 60;
-	padding: 10px 12px;
-	border: 1px solid var(--background-modifier-border);
-	border-radius: 10px;
-	background: var(--background-primary);
-	color: var(--text-normal);
 	box-shadow: 0 8px 28px rgba(0, 0, 0, 0.3);
 	font-size: var(--font-ui-small);
 	user-select: text;
+}
+
+/* Caret pointing at the pin; ::before is taken by the card's type spine.
+   --critic-canvas-caret-y is set by the positioning code. */
+.critic-canvas-card::after {
+	content: "";
+	position: absolute;
+	left: -6px;
+	top: var(--critic-canvas-caret-y, 20px);
+	width: 10px;
+	height: 10px;
+	margin-top: -5px;
+	background: var(--background-primary);
+	border-left: 1px solid var(--background-modifier-border);
+	border-bottom: 1px solid var(--background-modifier-border);
+	transform: rotate(45deg);
 }
 
 .critic-canvas-card-header {
@@ -933,11 +946,19 @@
 	align-items: center;
 	gap: 6px;
 	margin-bottom: 8px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
 }
 
-.critic-canvas-card-title {
-	font-weight: 600;
-	margin-right: auto;
+.critic-canvas-card-header .critic-thread-preview-badge {
+	margin-left: 0;
+}
+
+.critic-canvas-card-actions {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	margin-left: auto;
 }
 
 .critic-canvas-card-comments {
@@ -948,21 +969,27 @@
 	overflow-y: auto;
 }
 
-.critic-canvas-card-meta {
-	color: var(--text-muted);
-	font-size: var(--font-ui-smaller);
-	margin-bottom: 2px;
-}
-
 .critic-canvas-card-text {
 	white-space: pre-wrap;
+	margin: 2px 0 0 2px;
 }
 
-.critic-canvas-card-composer {
+.critic-canvas-card .critic-thread-composer {
 	margin-top: 10px;
 }
 
-.critic-canvas-card-composer .critic-thread-textarea {
+.critic-canvas-card .critic-thread-textarea {
 	width: 100%;
 	resize: vertical;
+}
+
+/* Unlike the sidebar (where an idle composer collapses to a single
+   line), an open thread card is already an intentional surface — keep
+   its actions visible. */
+.critic-canvas-card .critic-composer-actions {
+	display: flex;
+}
+
+.critic-canvas-card-no-caret::after {
+	display: none;
 }

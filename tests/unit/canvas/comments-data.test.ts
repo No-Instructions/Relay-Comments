@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@jest/globals";
 import {
 	addReply,
+	authorInitials,
 	createThread,
 	isEmptyCarrier,
 	makeCarrierNode,
@@ -99,5 +100,11 @@ describe("canvas comment threads", () => {
 	it("uses the first author's initial for the pin", () => {
 		expect(pinInitial(thread())).toBe("M");
 		expect(pinInitial(thread({ comments: [] }))).toBe("?");
+	});
+
+	it("builds two-letter avatar initials like the sidebar", () => {
+		expect(authorInitials("Daniel Kavanagh")).toBe("DK");
+		expect(authorInitials("Matt")).toBe("M");
+		expect(authorInitials("  ")).toBe("?");
 	});
 });
