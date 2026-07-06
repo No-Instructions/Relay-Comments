@@ -301,9 +301,6 @@ export default class RelayCommentsPlugin
 		anchor: HTMLElement,
 	): void {
 		if (!this.settings.showHoverPreview) return;
-		// A visible sidebar already shows the thread; a preview on top of
-		// that is noise. (A closed or covered sidebar doesn't count.)
-		if (this.isReviewSidebarVisible()) return;
 		const active = document.activeElement;
 		if (
 			active instanceof HTMLTextAreaElement &&
@@ -324,16 +321,6 @@ export default class RelayCommentsPlugin
 				role: "tooltip",
 			});
 		}, 300);
-	}
-
-	private isReviewSidebarVisible(): boolean {
-		return this.app.workspace
-			.getLeavesOfType(VIEW_TYPE_CRITIC_REVIEW)
-			.some(
-				(leaf) =>
-					leaf.view instanceof ReviewSidebarView &&
-					leaf.view.containerEl.isShown(),
-			);
 	}
 
 	scheduleThreadPreviewDismiss(): void {
