@@ -264,12 +264,12 @@ export class ReviewSidebarView extends ItemView {
 		}
 
 		this.syncDraftFocus(state.commentDraft);
-		if (state.commentDraft) {
-			this.renderDraft(root, state.commentDraft);
-		}
+		const draft = state.commentDraft;
 
 		if (items.length === 0) {
-			if (!state.commentDraft) {
+			if (draft) {
+				this.renderDraft(root, draft);
+			} else {
 				this.renderEmptyState(
 					root,
 					"No comments or suggestions in this note yet. Select text and choose “Add comment” to start a discussion.",
@@ -280,7 +280,15 @@ export class ReviewSidebarView extends ItemView {
 
 		const list = root.createDiv({ cls: "critic-sidebar-list" });
 		let visiblySelectedId: string | null = null;
+		// The draft renders at the list position its comment will occupy
+		// once saved (document order), so saving never reorders the card
+		// out from under the author.
+		let draftRendered = false;
 		for (const item of items) {
+			if (draft && !draftRendered && draft.from <= item.from) {
+				this.renderDraft(list, draft);
+				draftRendered = true;
+			}
 			const selected = this.renderItem(
 				list,
 				item,
@@ -290,6 +298,9 @@ export class ReviewSidebarView extends ItemView {
 			if (selected && !visiblySelectedId) {
 				visiblySelectedId = item.id;
 			}
+		}
+		if (draft && !draftRendered) {
+			this.renderDraft(list, draft);
 		}
 		this.scrollSelectedIntoView(list, visiblySelectedId);
 	}
