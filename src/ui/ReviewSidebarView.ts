@@ -15,6 +15,7 @@ import {
 	formatMarkDate,
 	isSuggestionMark,
 	normalizeWhitespace,
+	normalizeQuoteText,
 } from "../critic/display";
 import {
 	formatComposerSubmitHint,
@@ -386,10 +387,13 @@ export class ReviewSidebarView extends ItemView {
 			identity: this.plugin.getCurrentReviewerIdentity(),
 		});
 
-		if (draft.selectedText.length > 0) {
+		// Gate on the normalized text: a marker-only selection normalizes
+		// to nothing, and an empty quote block is just a stray rail.
+		const draftQuote = normalizeQuoteText(draft.selectedText);
+		if (draftQuote.length > 0) {
 			card.createDiv({
 				cls: "critic-card-quote",
-				text: normalizeWhitespace(draft.selectedText),
+				text: draftQuote,
 			});
 		}
 		const textarea = card.createEl("textarea", {
@@ -515,10 +519,10 @@ export class ReviewSidebarView extends ItemView {
 		this.addCardActions(toolbar, item);
 
 		if (item.anchor.type === "highlight") {
-			card.createDiv({
-				cls: "critic-card-quote",
-				text: normalizeWhitespace(item.anchor.content),
-			});
+			const quote = normalizeQuoteText(item.anchor.content);
+			if (quote.length > 0) {
+				card.createDiv({ cls: "critic-card-quote", text: quote });
+			}
 		} else if (isSuggestionMark(item.anchor)) {
 			this.renderTypeEyebrow(card, item.anchor.type);
 			const identity = this.plugin.getReviewerIdentityForMark(
@@ -623,10 +627,10 @@ export class ReviewSidebarView extends ItemView {
 
 	private renderMarkBody(card: HTMLElement, mark: CriticMark): void {
 		if (mark.type === "highlight") {
-			card.createDiv({
-				cls: "critic-card-quote",
-				text: normalizeWhitespace(mark.content),
-			});
+			const quote = normalizeQuoteText(mark.content);
+			if (quote.length > 0) {
+				card.createDiv({ cls: "critic-card-quote", text: quote });
+			}
 			return;
 		}
 

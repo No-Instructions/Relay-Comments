@@ -16,6 +16,7 @@ import {
 	Decoration,
 	EditorView,
 	ViewPlugin,
+	WidgetType,
 	type DecorationSet,
 	type ViewUpdate,
 } from "@codemirror/view";
@@ -26,6 +27,7 @@ import {
 } from "../critic/display";
 import { collectAttachedComments } from "../critic/threading";
 import type { CriticMark, DisplayMode } from "../critic/types";
+import { findCriticTaskPrefixes, type CriticTaskPrefix } from "./task-prefix";
 
 export interface ReviewEditorController {
 	getDisplayMode(path?: string | null): DisplayMode;
@@ -428,13 +430,14 @@ function buildDecorationsInner(
 			addReplace(ranges, mark.from, mark.to, mark.raw.includes("\n"));
 			addAtom(atomRanges, mark.from, mark.to);
 		} else if (mode === "clean") {
-			decorateClean(mark, ranges);
+			decorateClean(text, mark, ranges);
 		} else {
 			// Threads hover to a comment preview; plain suggestions hover to
 			// an accept/reject preview — both need range attributes. Bare
 			// highlights get neither (nothing to preview or act on).
 			const hoverable = attached.length > 0 || isSuggestionMark(mark);
 			decorateReview(
+				text,
 				mark,
 				ranges,
 				hoverable ? rangeAttributes(mark) : undefined,
@@ -461,32 +464,34 @@ function buildDecorationsInner(
 }
 
 function decorateReview(
+	text: string,
 	mark: CriticMark,
 	ranges: Array<Range<Decoration>>,
 	threadAttrs?: Record<string, string>,
 	anchorClass = "cm-critic-thread-anchor",
 ): void {
 	hideDelimiters(mark, ranges);
+	const taskPrefixes = addCriticTaskPrefixDecorations(text, mark, ranges);
 
 	switch (mark.type) {
 		case "addition":
-			addMark(
+			addContentMarks(
 				ranges,
 				mark.contentFrom,
 				mark.contentTo,
 				attributeClass("cm-critic-addition", threadAttrs, anchorClass),
-				undefined,
 				threadAttrs,
+				taskPrefixes,
 			);
 			break;
 		case "deletion":
-			addMark(
+			addContentMarks(
 				ranges,
 				mark.contentFrom,
 				mark.contentTo,
 				attributeClass("cm-critic-deletion", threadAttrs, anchorClass),
-				undefined,
 				threadAttrs,
+				taskPrefixes,
 			);
 			break;
 		case "substitution":
@@ -515,13 +520,13 @@ function decorateReview(
 			}
 			break;
 		case "highlight":
-			addMark(
+			addContentMarks(
 				ranges,
 				mark.contentFrom,
 				mark.contentTo,
 				attributeClass("cm-critic-highlight", threadAttrs, anchorClass),
-				undefined,
 				threadAttrs,
+				taskPrefixes,
 			);
 			break;
 		case "comment":
@@ -531,6 +536,7 @@ function decorateReview(
 }
 
 function decorateClean(
+	text: string,
 	mark: CriticMark,
 	ranges: Array<Range<Decoration>>,
 ): void {
@@ -538,6 +544,7 @@ function decorateClean(
 		case "addition":
 		case "highlight":
 			hideDelimiters(mark, ranges);
+			addCriticTaskPrefixDecorations(text, mark, ranges);
 			break;
 		case "deletion":
 		case "comment":
@@ -614,6 +621,107 @@ function hideDelimiters(
 	}
 }
 
+/**
+ * Obsidian counts a tab or a two-space run as one nesting level
+ * (measured against native task lines: `- [ ]` → 1, `\t- [ ]` → 2,
+ * `  - [ ]` → 2).
+ */
+function taskListLevel(indent: string): number {
+	let level = 1;
+	let spaces = 0;
+	for (const ch of indent) {
+		if (ch === "\t") {
+			level += 1;
+			spaces = 0;
+		} else if (ch === " " && ++spaces === 2) {
+			level += 1;
+			spaces = 0;
+		}
+	}
+	return level;
+}
+
+function addCriticTaskPrefixDecorations(
+	text: string,
+	mark: CriticMark,
+	ranges: Array<Range<Decoration>>,
+): CriticTaskPrefix[] {
+	const taskPrefixes = findCriticTaskPrefixes(text, mark);
+	for (const taskPrefix of taskPrefixes) {
+		// Mirror the full class set Obsidian puts on a native task line —
+		// HyperMD-list-line-N carries the list indent, and without it the
+		// row renders out of column with its sibling tasks (a blind demo
+		// review caught the ~7px out-dent on film).
+		const level = taskListLevel(taskPrefix.indent);
+		ranges.push(
+			Decoration.line({
+				class: `HyperMD-list-line HyperMD-list-line-${level} HyperMD-task-line cm-critic-task-line`,
+				attributes: { "data-task": taskPrefix.task },
+			}).range(taskPrefix.lineFrom),
+		);
+		ranges.push(
+			Decoration.replace({
+				inclusive: false,
+				widget: new CriticTaskCheckboxWidget(taskPrefix),
+			}).range(taskPrefix.markerFrom, taskPrefix.markerTo),
+		);
+	}
+	return taskPrefixes;
+}
+
+class CriticTaskCheckboxWidget extends WidgetType {
+	constructor(private taskPrefix: CriticTaskPrefix) {
+		super();
+	}
+
+	eq(widget: WidgetType): boolean {
+		return (
+			widget instanceof CriticTaskCheckboxWidget &&
+			widget.taskPrefix.checked === this.taskPrefix.checked &&
+			widget.taskPrefix.checkboxFrom === this.taskPrefix.checkboxFrom &&
+			widget.taskPrefix.checkboxTo === this.taskPrefix.checkboxTo
+		);
+	}
+
+	toDOM(view: EditorView): HTMLElement {
+		// Same DOM shape as a native task line's widget — a
+		// label.task-list-label wrapping the input — so theme rules for
+		// task checkboxes apply unchanged.
+		const doc = view.dom.ownerDocument;
+		const label = doc.createElement("label");
+		label.className = "task-list-label";
+		label.contentEditable = "false";
+		const checkbox = doc.createElement("input");
+		checkbox.type = "checkbox";
+		checkbox.className = "task-list-item-checkbox cm-critic-task-checkbox";
+		checkbox.checked = this.taskPrefix.checked;
+		checkbox.setAttribute("data-task", this.taskPrefix.task);
+		checkbox.setAttribute("aria-label", "Task complete");
+		label.addEventListener("mousedown", (event) => {
+			event.preventDefault();
+			event.stopPropagation();
+		});
+		checkbox.addEventListener("click", (event) => {
+			event.preventDefault();
+			event.stopPropagation();
+			view.dispatch({
+				changes: {
+					from: this.taskPrefix.checkboxFrom,
+					to: this.taskPrefix.checkboxTo,
+					insert: this.taskPrefix.checked ? " " : "x",
+				},
+				userEvent: "input",
+			});
+		});
+		label.appendChild(checkbox);
+		return label;
+	}
+
+	ignoreEvent(): boolean {
+		return true;
+	}
+}
+
 // No native title here either: these anchors get the rich hover preview,
 // and a title would double it with the browser's own tooltip. (Reading
 // mode, which has no preview, keeps its title in critic/render.ts.)
@@ -630,6 +738,25 @@ function attributeClass(
 	anchorClass = "cm-critic-thread-anchor",
 ): string {
 	return attributes ? `${className} ${anchorClass}` : className;
+}
+
+function addContentMarks(
+	ranges: Array<Range<Decoration>>,
+	from: number,
+	to: number,
+	className: string,
+	attributes?: Record<string, string>,
+	excluded: CriticTaskPrefix[] = [],
+): void {
+	let cursor = from;
+	for (const taskPrefix of excluded) {
+		const excludeFrom = Math.max(taskPrefix.markerFrom, from);
+		const excludeTo = Math.min(taskPrefix.markerTo, to);
+		if (excludeTo <= excludeFrom) continue;
+		addMark(ranges, cursor, excludeFrom, className, undefined, attributes);
+		cursor = Math.max(cursor, excludeTo);
+	}
+	addMark(ranges, cursor, to, className, undefined, attributes);
 }
 
 function addMark(

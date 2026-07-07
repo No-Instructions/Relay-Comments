@@ -52,6 +52,13 @@
 	transition: background-color 120ms ease;
 }
 
+/* Obsidian parses the CriticMarkup `{==...==}` delimiters as native
+   Markdown highlight syntax before our decorations hide those delimiters.
+   Keep only the Relay Comments highlight layer visible. */
+.markdown-source-view .cm-highlight:has(.cm-critic-highlight) {
+	background-color: transparent;
+}
+
 /* A done task's strikethrough is painted by the line element and ends up
    beneath this span's background; re-declare it locally so it draws on
    top. (Reading mode already computes line-through on the mark itself.) */
@@ -70,6 +77,11 @@
 .cm-critic-invalid {
 	text-decoration: underline wavy var(--color-red);
 	text-decoration-skip-ink: none;
+}
+
+.cm-critic-task-checkbox {
+	margin-inline-end: 0.25em;
+	vertical-align: text-bottom;
 }
 
 /* Floating "add comment" button next to the selection */
@@ -476,17 +488,16 @@
 /* ---------- Card content ---------- */
 
 .critic-card-quote {
-	display: -webkit-box;
-	-webkit-line-clamp: 2;
-	-webkit-box-orient: vertical;
+	display: block;
 	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 	margin: 2px 0 10px;
 	padding: 1px 0 1px 9px;
 	border-left: 2px solid color-mix(in srgb, var(--color-yellow) 55%, transparent);
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
 	line-height: 1.4;
-	overflow-wrap: anywhere;
 }
 
 .critic-card-body {

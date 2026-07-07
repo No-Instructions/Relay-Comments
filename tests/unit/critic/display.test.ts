@@ -4,6 +4,7 @@ import {
 	findPrecedingWordRange,
 	formatMarkDate,
 	getSuggestionPreviewParts,
+	normalizeQuoteText,
 	normalizeWhitespace,
 	rectDrifted,
 } from "src/critic/display";
@@ -103,6 +104,27 @@ describe("formatMarkDate", () => {
 describe("normalizeWhitespace", () => {
 	it("collapses runs and trims", () => {
 		expect(normalizeWhitespace("  a\n\tb   c ")).toBe("a b c");
+	});
+});
+
+describe("normalizeQuoteText", () => {
+	it("removes task markers from quoted checkbox text", () => {
+		expect(normalizeQuoteText("- [x] Release server")).toBe("Release server");
+		expect(normalizeQuoteText("  - [ ] nested item")).toBe("nested item");
+	});
+
+	it("flattens nested task quotes without raw checkbox markers", () => {
+		expect(normalizeQuoteText("- [x] Parent\n  - [ ] child")).toBe(
+			"Parent child",
+		);
+	});
+
+	it("strips a bare marker on an interior line", () => {
+		expect(normalizeQuoteText("- [ ]\n- [x] done")).toBe("done");
+	});
+
+	it("reduces a marker-only quote to the empty string", () => {
+		expect(normalizeQuoteText("- [x] ")).toBe("");
 	});
 });
 

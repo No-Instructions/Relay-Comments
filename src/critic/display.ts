@@ -5,6 +5,18 @@ export function normalizeWhitespace(value: string): string {
 	return value.replace(/\s+/g, " ").trim();
 }
 
+export function normalizeQuoteText(value: string): string {
+	// One pattern for every position a marker can end at: trailing
+	// whitespace, a newline (bare marker on an interior line), or the
+	// end of the quote.
+	return normalizeWhitespace(
+		value.replace(
+			/(^|\n)([\t ]*)(?:[-*+]|\d+[.)])[\t ]+\[[ xX]\](?:[\t ]+|(?=\n)|$)/g,
+			"$1$2",
+		),
+	);
+}
+
 export function isSuggestionMark(mark: CriticMark): boolean {
 	return (
 		mark.type === "addition" ||
@@ -118,5 +130,3 @@ export function rectDrifted(a: RectLike, b: RectLike, tolerance = 2): boolean {
 		Math.abs(a.height - b.height) > tolerance
 	);
 }
-
-/** The quoted text a preview shows for a thread's anchor mark. */
