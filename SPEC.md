@@ -249,9 +249,19 @@ node or floating at a canvas position. The pin renders at constant
 screen size regardless of zoom; clicking it opens a floating thread
 card — same card shell, avatars, and composer as the review sidebar.
 Adding: "Add comment" in the canvas node menu or the canvas background
-right-click menu (pin lands at the click point), or the "Add comment to
-canvas (click to place)" command — same default chord as the editor's
-add-comment (Ctrl/Cmd+Alt+M), crosshair cursor, Escape cancels.
+right-click menu, or the "Add comment to canvas (click to place)"
+command — same default chord as the editor's add-comment
+(Ctrl/Cmd+Alt+M), crosshair cursor, Escape cancels. A comment on a node
+always anchors at the node's top-right corner (`dx = width`, `dy = 0`),
+independent of where the click landed; in click-to-place mode a click
+over a node attaches to that node, a click on an existing pin or open
+thread card exits the mode and lets that pin or card handle the click,
+and only a click on empty canvas creates a freestanding carrier pin at
+the click point. A node pin hangs from its top edge at `dx`/`dy` and
+threads sharing an anchor stack downward at constant screen spacing so
+no pin hides another; a freestanding pin is tip-anchored, its teardrop
+tip on the clicked canvas point. The thread card opens top-aligned with
+its pin.
 
 ### Storage format
 

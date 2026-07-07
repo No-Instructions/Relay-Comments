@@ -47,6 +47,9 @@ export interface PinHost {
 	getCanvasLeaves(): WorkspaceLeaf[];
 }
 
+/** Screen-pixel gap between stacked same-anchor pins (pin height + 6). */
+const PIN_STACK_GAP = 34;
+
 /**
  * Figma-style comment pins for canvases: one pin per thread, mounted
  * INSIDE its node's own element at the thread's dx/dy so the node's
@@ -70,9 +73,6 @@ export class CanvasCommentPins {
 		el: HTMLElement;
 		observer: MutationObserver;
 	}> = [];
-	/** Last right-click on a canvas — the node menu event carries no mouse
-	    event, so "Add comment" on a node uses this to pin at the click. */
-	private lastRightClick: { x: number; y: number; time: number } | null = null;
 
 	constructor(private host: PinHost) {}
 
@@ -127,11 +127,6 @@ export class CanvasCommentPins {
 		if (!el || this.menuPatches.some((patch) => patch.el === el)) return;
 		const pins = this;
 		const listener = (event: MouseEvent) => {
-			this.lastRightClick = {
-				x: event.clientX,
-				y: event.clientY,
-				time: Date.now(),
-			};
 			const target = event.target as HTMLElement | null;
 			if (target?.closest(".canvas-node, .critic-canvas-pin")) return;
 			const proto = Menu.prototype as unknown as {
@@ -222,6 +217,7 @@ export class CanvasCommentPins {
 			// comes back; a pin can't outlive the element it rode on.
 			if (!nodeEl || !nodeEl.isConnected) continue;
 			const data = node.getData();
+			const anchorCounts = new Map<string, number>();
 			for (const thread of threadsOf(data)) {
 				const key = `${data.id}:${thread.id}`;
 				seen.add(key);
@@ -231,12 +227,32 @@ export class CanvasCommentPins {
 				if (!pin) {
 					pin = this.createPin(nodeEl, key, view, data.id, thread.id);
 				}
+				// Threads sharing an anchor (every node thread uses the same
+				// top-right corner) stack downward at constant screen spacing,
+				// so a node's second pin never hides its first. The transform
+				// watcher re-derives this from the data attributes mid-gesture.
+				const anchorKey = `${thread.dx},${thread.dy}`;
+				const stack = anchorCounts.get(anchorKey) ?? 0;
+				anchorCounts.set(anchorKey, stack + 1);
+				pin.dataset.criticDy = String(thread.dy);
+				pin.dataset.criticStack = String(stack);
 				// Node-local coordinates: the node's own transform places the
 				// pin on screen, so drags carry it with zero lag.
 				pin.style.left = `${thread.dx}px`;
-				pin.style.top = `${thread.dy}px`;
-				// Constant screen size, Figma-style: undo the canvas zoom.
-				pin.style.transform = `translate(0, -100%) scale(${1 / zoom})`;
+				pin.style.top = `${thread.dy + (stack * PIN_STACK_GAP) / zoom}px`;
+				// Constant screen size, Figma-style: undo the canvas zoom. A
+				// node pin hangs from its top edge at the anchor; a carrier
+				// pin has no node edge to dock to, so its teardrop tip sits
+				// exactly on the clicked canvas point instead.
+				if (data.relayCommentCarrier === true) {
+					pin.dataset.criticCarrier = "1";
+					pin.style.transform = `translate(0, -100%) scale(${1 / zoom})`;
+					pin.style.transformOrigin = "0 100%";
+				} else {
+					delete pin.dataset.criticCarrier;
+					pin.style.transform = `scale(${1 / zoom})`;
+					pin.style.transformOrigin = "";
+				}
 				pin.classList.toggle("is-resolved", thread.resolved === true);
 				// Avatar convention: a known author's identity color fills
 				// the pin; unknown authors keep the amber comment ink.
@@ -319,7 +335,16 @@ export class CanvasCommentPins {
 			view.containerEl
 				.querySelectorAll<HTMLElement>("[data-critic-pin]")
 				.forEach((pin) => {
-					pin.style.transform = `translate(0, -100%) scale(${1 / zoom})`;
+					pin.style.transform = pin.dataset.criticCarrier
+						? `translate(0, -100%) scale(${1 / zoom})`
+						: `scale(${1 / zoom})`;
+					// Stack gaps are screen-constant, so zoom changes move
+					// every stacked pin's node-local top.
+					const stack = Number(pin.dataset.criticStack ?? "0");
+					if (stack > 0) {
+						const dy = Number(pin.dataset.criticDy ?? "0");
+						pin.style.top = `${dy + (stack * PIN_STACK_GAP) / zoom}px`;
+					}
 				});
 			if (this.cardOwner === view) this.syncCard(view, zoom);
 		});
@@ -388,30 +413,16 @@ export class CanvasCommentPins {
 
 	// ── Entry points ─────────────────────────────────────────────────
 
-	/** "Add comment" from the canvas node menu: pin where the user
-	    right-clicked (Figma-style); top-right corner as the fallback when
-	    no recent click is known (e.g. command palette on a selection). */
+	/** Add a thread to a node: every node thread anchors at the standard
+	    top-right corner, independent of click position (same-anchor pins
+	    stack downward at render time so none hides another). */
 	addThreadToNode(view: CanvasViewLike, nodeId: string): void {
 		const node = this.findNode(view, nodeId);
-		const canvas = view.canvas;
-		if (!node || !canvas) return;
-		let dx = node.width;
-		let dy = 0;
-		// The node menu only ever opens from a right-click, so the last
-		// recorded one is always the relevant point — no staleness window
-		// (humans read menus for longer than any timeout we would pick).
-		const click = this.lastRightClick;
-		if (click) {
-			const point = this.screenPointToCanvas(canvas, click.x, click.y);
-			if (point) {
-				dx = point.x - node.x;
-				dy = point.y - node.y;
-			}
-		}
+		if (!node) return;
 		const thread: CanvasCommentThread = {
 			id: newThreadId(),
-			dx,
-			dy,
+			dx: node.width,
+			dy: 0,
 			comments: [],
 		};
 		this.writeNode(view, createThread(node, thread), nodeId);
@@ -419,7 +430,8 @@ export class CanvasCommentPins {
 		this.openCard(view, nodeId, thread.id, pin);
 	}
 
-	/** Comment mode: the next canvas click places a freestanding pin. */
+	/** Comment mode: a node click attaches to that node; an empty-canvas
+	    click creates a freestanding carrier. */
 	beginPlacement(view: CanvasViewLike): void {
 		this.cancelPlacement();
 		const canvas = view.canvas;
@@ -427,9 +439,25 @@ export class CanvasCommentPins {
 		if (!canvas || !target) return;
 		target.addClass("critic-canvas-placing");
 		const onClick = (event: MouseEvent) => {
+			// Pins and open thread cards live inside node elements: a click
+			// on one is never a placement. Leave the event alone so the pin
+			// or card handles its own click; just exit the mode.
+			const el = event.target instanceof Element ? event.target : null;
+			if (el?.closest(".critic-canvas-pin, .critic-canvas-card")) {
+				cleanup();
+				return;
+			}
 			event.stopPropagation();
 			event.preventDefault();
 			cleanup();
+			const nodeId = this.findNodeIdFromEventTarget(
+				view,
+				event.target as Node | null,
+			);
+			if (nodeId) {
+				this.addThreadToNode(view, nodeId);
+				return;
+			}
 			this.placeThreadAtScreenPoint(
 				view,
 				canvas,
@@ -449,6 +477,19 @@ export class CanvasCommentPins {
 		target.addEventListener("click", onClick, true);
 		document.addEventListener("keydown", onKey, true);
 		this.placement = cleanup;
+	}
+
+	private findNodeIdFromEventTarget(
+		view: CanvasViewLike,
+		target: Node | null,
+	): string | null {
+		if (!target) return null;
+		for (const node of view.canvas?.nodes.values() ?? []) {
+			const data = node.getData();
+			if (data.relayCommentCarrier) continue;
+			if (node.nodeEl?.contains(target)) return data.id;
+		}
+		return null;
 	}
 
 	cancelPlacement(): void {
@@ -481,19 +522,7 @@ export class CanvasCommentPins {
 		const data = canvas.getData();
 		const hit = nodeAtPoint(data.nodes, point);
 		if (hit) {
-			const thread: CanvasCommentThread = {
-				id: newThreadId(),
-				dx: point.x - hit.x,
-				dy: point.y - hit.y,
-				comments: [],
-			};
-			this.writeNode(view, createThread(hit, thread), hit.id);
-			this.openCard(
-				view,
-				hit.id,
-				thread.id,
-				this.pinEl(view, `${hit.id}:${thread.id}`),
-			);
+			this.addThreadToNode(view, hit.id);
 			return;
 		}
 		const carrier = makeCarrierNode(newThreadId(), point.x, point.y);
@@ -569,6 +598,28 @@ export class CanvasCommentPins {
 			cls: "critic-card critic-canvas-card",
 			attr: { "data-critic-type": "comment" },
 		});
+		// Fence pointer events at the card boundary: the card floats over
+		// live canvas, and without this the canvas treats card interactions
+		// as node interactions — selecting the invisible carrier while the
+		// user types, selecting whatever node sits under the composer, and
+		// swallowing the submit click as the tail of a node drag (which
+		// silently lost the comment). Move events are fenced too: hover
+		// leaking through the card arms the canvas's edge-connector
+		// affordance on the node beneath, and that interaction intercepts
+		// the next pointerdown wherever it lands. The pin fences mousedown
+		// the same way.
+		for (const type of [
+			"pointerdown",
+			"pointermove",
+			"mousedown",
+			"mousemove",
+			"mouseup",
+			"click",
+			"dblclick",
+			"contextmenu",
+		] as const) {
+			card.addEventListener(type, (event) => event.stopPropagation());
+		}
 		this.card = card;
 		this.cardKey = key;
 		this.cardOwner = view;
@@ -735,7 +786,20 @@ export class CanvasCommentPins {
 			if (!submit.disabled) post();
 		});
 
+		// A card opened right after an importData can measure its pin
+		// before the canvas has laid the node back out, which briefly
+		// painted the card unflipped and clipped at the pane edge. Hold it
+		// invisible for the first frame and show it after the re-measure,
+		// so it appears once, on the correct side.
+		card.style.visibility = "hidden";
 		this.positionCard(view, card, thread, this.canvasScale(view.canvas!));
+		requestAnimationFrame(() => {
+			if (this.card !== card) return;
+			if (view.canvas) {
+				this.positionCard(view, card, thread, this.canvasScale(view.canvas));
+			}
+			card.style.visibility = "";
+		});
 		const onDocumentMouseDown = (event: MouseEvent) => {
 			const target = event.target as Node | null;
 			if (target && (card.contains(target) || pin?.contains(target))) return;
@@ -769,24 +833,33 @@ export class CanvasCommentPins {
 		thread: CanvasCommentThread,
 		zoom: number,
 	): void {
-		// Pin geometry: the pin is 32 screen px tall with its tip at dx/dy;
-		// open the card top-aligned with the pin's bubble, a constant 38
-		// screen px to the right of the tip. Flip against the canvas pane's
-		// edge, not the window's: the pane clips its content, so with a
-		// sidebar open a window-based check leaves the card cut off.
+		// Open the card top-aligned with its pin, a constant 38 screen px
+		// to the pin's right. The pin element is the position source: its
+		// rendered top already carries any stack offset, and a carrier pin
+		// is tip-anchored so the card aligns with its bubble instead.
+		// Flip against the canvas pane's edge, not the window's: the pane
+		// clips its content, so with a sidebar open a window-based check
+		// leaves the card cut off.
+		const pin = card.parentElement?.querySelector<HTMLElement>(
+			`:scope > [data-critic-pin="${CSS.escape(this.cardKey ?? "")}"]`,
+		);
 		const flip = (() => {
-			const rect = card.parentElement
-				?.querySelector<HTMLElement>(
-					`:scope > [data-critic-pin="${CSS.escape(this.cardKey ?? "")}"]`,
-				)
-				?.getBoundingClientRect();
+			const rect = pin?.getBoundingClientRect();
 			const pane = view.canvas?.wrapperEl?.getBoundingClientRect();
 			const edge = pane ? pane.right : window.innerWidth;
-			return rect ? rect.right + 340 > edge : false;
+			// The flip is sticky while the card is open: zoom gestures
+			// wiggle these rects, and a card that swaps sides mid-gesture
+			// reads as thrash. A left-side card can never clip the right
+			// edge, so once flipped it stays flipped.
+			const wasFlipped = card.classList.contains("is-flipped");
+			if (!rect) return wasFlipped;
+			return wasFlipped || rect.right + 340 > edge;
 		})();
+		const pinTop = pin ? parseFloat(pin.style.top) : thread.dy;
+		const top = pin?.dataset.criticCarrier ? pinTop - 32 / zoom : pinTop;
 		card.style.width = "320px";
 		card.style.left = `${thread.dx + (flip ? -352 / zoom : 38 / zoom)}px`;
-		card.style.top = `${thread.dy - 32 / zoom}px`;
+		card.style.top = `${top}px`;
 		card.style.transform = `scale(${1 / zoom})`;
 		card.classList.toggle("is-flipped", flip);
 		card.style.setProperty("--critic-canvas-caret-y", "16px");

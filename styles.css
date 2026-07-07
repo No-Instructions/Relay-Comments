@@ -890,7 +890,8 @@
 	justify-content: center;
 	width: 28px;
 	height: 28px;
-	/* Teardrop: round except the tip corner, which points at the spot */
+	/* Teardrop: round except one corner — it ties a node pin to the
+	   node's edge, and points a freestanding pin at its canvas spot */
 	border-radius: 50% 50% 50% 0;
 	/* Comment ink: the same amber family as highlight anchors and card
 	   rails, so a pin reads as "comment" at a glance */
@@ -902,8 +903,9 @@
 	font-size: 13px;
 	font-weight: 600;
 	cursor: pointer;
-	/* The tip is the anchor; scale is set inline to undo canvas zoom */
-	transform-origin: 0 100%;
+	/* Node pins anchor by their top edge; freestanding pins override
+	   inline to tip-anchor. Scale is set inline to undo canvas zoom. */
+	transform-origin: 0 0;
 	pointer-events: auto;
 	user-select: none;
 }
