@@ -691,6 +691,12 @@ class CriticTaskCheckboxWidget extends WidgetType {
 		const label = doc.createElement("label");
 		label.className = "task-list-label";
 		label.contentEditable = "false";
+		// The replace swallows the marker's trailing space, so the body
+		// text starts one space-width left of native task rows (the olive
+		// highlight then abuts the checkbox — a blind demo review measured
+		// the ~3px). Give that width back here; a stylesheet rule loses
+		// the cascade to Obsidian's own checkbox margins.
+		label.style.marginInlineEnd = "0.14em";
 		const checkbox = doc.createElement("input");
 		checkbox.type = "checkbox";
 		checkbox.className = "task-list-item-checkbox cm-critic-task-checkbox";

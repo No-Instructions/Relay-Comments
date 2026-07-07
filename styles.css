@@ -79,11 +79,6 @@
 	text-decoration-skip-ink: none;
 }
 
-.cm-critic-task-checkbox {
-	margin-inline-end: 0.25em;
-	vertical-align: text-bottom;
-}
-
 /* Floating "add comment" button next to the selection */
 .cm-critic-comment-button {
 	position: absolute;
