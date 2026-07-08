@@ -294,15 +294,23 @@ Obsidian deletes them on the next save.
 
 ### Rendering invariant
 
-Pins and the open thread card are DOM children of their node's element,
-positioned at `dx`/`dy` in node-local coordinates, so the node's own
-transform carries them through drags, pans, and zooms on the compositor
-with zero lag. Any rendering that re-derives pin positions from data on
-a timer or rAF loop visibly detaches pins during a drag and must not
-come back. Counter-scaling (constant screen size) tracks zoom gestures
-via a mutation observer on the canvas transform, not just the data
-poll. The thread card flips to the pin's left when the canvas pane's
-right edge (not the window's — panes clip) would cut it off.
+Pins and the open thread card are screen-space UI, not canvas content:
+they live on an overlay above the zoomed `.canvas` layer (the same
+approach as Obsidian's own node toolbar in `.canvas-menu-container`)
+and never scale — there is no counter-scaling anywhere. Node elements
+must not host them: Obsidian destroys and rebuilds node elements freely
+(level-of-detail swaps mid-zoom), and anything inside the zoom
+transform visibly scales during eased gestures because `tZoom` snaps to
+the gesture target while the transform is still easing. Positions are
+recomputed from the canvas element's rendered rect and node positions —
+Obsidian writes those styles every animation frame of a pan, zoom, or
+drag, and a style-attribute mutation observer (canvas subtree)
+repositions the overlay before the following paint, so pins track with
+zero lag and pixel-exact gaps mid-ease (verified frame-by-frame). Any
+rendering that re-derives positions only from a timer or rAF loop lags
+gestures and must not come back. The thread card flips to the pin's
+left when the canvas pane's right edge (not the window's — panes clip)
+would cut it off; the side is decided once per open and sticky.
 
 Known gap: pins are not draggable yet, so a pin placed over node
 content stays there until the thread is deleted and recreated. Pin

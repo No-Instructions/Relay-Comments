@@ -110,6 +110,10 @@
 .critic-thread-preview {
 	position: fixed;
 	z-index: 40;
+	/* Own compositor layer: without it, Chromium's partial repaint has
+	   intermittently left stale editor-text pixels visible inside the
+	   opaque panel (seen on Linux; caught by a blind demo review). */
+	will-change: transform;
 	/* No overflow clipping: the caret renders outside the border box, and
 	   the body is height-bounded by its own line clamp */
 	padding: 10px 12px;
@@ -874,10 +878,21 @@
    Canvas comment pins (Figma-style)
    ============================================================ */
 
-/* Pins are children of their canvas node (node-local dx/dy), so the
-   node's transform carries them through drags, pans, and zooms on the
-   compositor. The z-index lifts them over the node's own content. */
+/* Pins and cards live on a screen-space overlay above the zoomed
+   canvas, like Obsidian's own node toolbar: they hold native screen
+   size with no counter-scaling, and node element recreation (drags,
+   LOD swaps) can't tear them down. Positions are set inline by the
+   plugin from the canvas transform. */
+.critic-canvas-overlay {
+	position: absolute;
+	inset: 0;
+	overflow: hidden;
+	pointer-events: none;
+	z-index: 10;
+}
+
 .critic-canvas-pin {
+	pointer-events: auto;
 	position: absolute;
 	z-index: 50;
 	display: flex;
@@ -898,9 +913,6 @@
 	font-size: 13px;
 	font-weight: 600;
 	cursor: pointer;
-	/* Node pins anchor by their top edge; freestanding pins override
-	   inline to tip-anchor. Scale is set inline to undo canvas zoom. */
-	transform-origin: 0 0;
 	pointer-events: auto;
 	user-select: none;
 }
@@ -940,15 +952,12 @@
 	cursor: crosshair !important;
 }
 
-/* Floating thread card, opened from a pin. It reuses the sidebar's
-   .critic-card shell (border, radius, type spine) and composer. It lives
-   in the canvas's transformed container (canvas coordinates) so pan and
-   zoom carry it on the compositor; the inline scale() counter-scales it
-   to constant screen size, like the pins. */
+/* The floating thread card, on the same screen-space overlay as the
+   pins: constant size, no transforms. */
 .critic-canvas-card {
+	pointer-events: auto;
 	position: absolute;
 	z-index: 60;
-	transform-origin: 0 0;
 	box-shadow: 0 8px 28px rgba(0, 0, 0, 0.3);
 	font-size: var(--font-ui-small);
 	user-select: text;

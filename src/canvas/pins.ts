@@ -47,19 +47,31 @@ export interface PinHost {
 	getCanvasLeaves(): WorkspaceLeaf[];
 }
 
+/** Rendered pin box size in screen pixels (styles.css width/height). */
+const PIN_SIZE = 28;
 /** Screen-pixel gap between stacked same-anchor pins (pin height + 6). */
 const PIN_STACK_GAP = 34;
+/** Screen-pixel gap from a pin's anchor to its card's near edge. */
+const CARD_GAP = 38;
+/** Card width plus the flipped-side gap, in screen pixels. */
+const CARD_FLIP_OFFSET = 352;
 
 /**
- * Figma-style comment pins for canvases: one pin per thread, mounted
- * INSIDE its node's own element at the thread's dx/dy so the node's
- * transform carries the pin through drags, pans, and zooms on the
- * compositor — a sibling layer re-synced from data lags every gesture
- * and reads as "not attached". Pins counter-scale by 1/zoom to keep
- * constant screen size like Figma's. Click opens a floating thread card
- * with a composer; placement mode over empty canvas adds freestanding
- * pins on invisible carrier nodes (which are nodes too, so the same
- * mounting applies).
+ * Figma-style comment pins for canvases: one pin per thread, mounted on
+ * a screen-space OVERLAY above the canvas (like Obsidian's own node
+ * toolbar in .canvas-menu-container) — never inside the zoomed .canvas
+ * layer. Node elements are the wrong host twice over: Obsidian destroys
+ * and rebuilds them freely (level-of-detail swaps mid-zoom killed pins
+ * and cards on film and live), and anything inside the zoom transform
+ * has to counter-scale per frame to hold screen size, which reads as
+ * comments zooming with the content. The overlay holds native screen
+ * size with no transform at all; positions are pure math from the
+ * canvas transform matrix and node positions, recomputed pre-paint by a
+ * style-attribute observer covering the canvas and its nodes — Obsidian
+ * writes those styles every animation frame, so pins and cards track
+ * pans, zooms, and drags with zero lag and zero layout reads. Click
+ * opens a floating thread card with a composer; placement mode over
+ * empty canvas adds freestanding pins on invisible carrier nodes.
  */
 export class CanvasCommentPins {
 	private card: HTMLElement | null = null;
@@ -69,7 +81,7 @@ export class CanvasCommentPins {
 		el: HTMLElement;
 		listener: (event: MouseEvent) => void;
 	}> = [];
-	private transformWatchers: Array<{
+	private viewportWatchers: Array<{
 		el: HTMLElement;
 		observer: MutationObserver;
 	}> = [];
@@ -89,14 +101,16 @@ export class CanvasCommentPins {
 			el.removeEventListener("contextmenu", listener, { capture: true });
 		}
 		this.menuPatches = [];
-		for (const { observer } of this.transformWatchers) {
+		for (const { observer } of this.viewportWatchers) {
 			observer.disconnect();
 		}
-		this.transformWatchers = [];
+		this.viewportWatchers = [];
 		for (const leaf of this.host.getCanvasLeaves()) {
 			const view = leaf.view as unknown as CanvasViewLike;
 			view.containerEl
-				.querySelectorAll("[data-critic-pin], .critic-canvas-card")
+				.querySelectorAll(
+					"[data-critic-pin], .critic-canvas-card, .critic-canvas-overlay",
+				)
 				.forEach((el) => el.remove());
 		}
 	}
@@ -165,21 +179,66 @@ export class CanvasCommentPins {
 	}
 
 	/**
-	 * The rendered scale, derived from a reference node's screen rect vs
-	 * its data — Obsidian's tZoom is not the linear scale factor, and this
-	 * needs no assumptions about the internal zoom representation.
+	 * The mapping from canvas coordinates to overlay-local pixels,
+	 * derived from the canvas element's rendered rect against the
+	 * overlay's — per-frame accurate mid-ease (rects reflect the style
+	 * Obsidian writes every animation frame, unlike tZoom, which snaps
+	 * to the gesture's target immediately), and immune to the transform
+	 * details: transform-origin, and any ancestor transform above the
+	 * wrapper, cancel out of the ratios. Two rect reads per call, then
+	 * every pin is pure arithmetic.
 	 */
-	private canvasScale(canvas: CanvasLike): number {
-		for (const node of canvas.nodes.values()) {
-			const data = node.getData();
-			if (!node.nodeEl || !data.width) continue;
-			const rect = node.nodeEl.getBoundingClientRect();
-			// offsetWidth, not data.width: the rect includes the node's
-			// borders, and dividing by the data width biases the scale.
-			const layout = node.nodeEl.offsetWidth;
-			if (rect.width > 0 && layout > 0) return rect.width / layout;
+	private overlayMapping(
+		canvas: CanvasLike,
+		overlay: HTMLElement,
+	): { originX: number; originY: number; zoom: number } | null {
+		const canvasEl = canvas.canvasEl;
+		if (!canvasEl) return null;
+		const overlayRect = overlay.getBoundingClientRect();
+		const canvasRect = canvasEl.getBoundingClientRect();
+		const overlayLayout = overlay.offsetWidth;
+		const canvasLayout = canvasEl.offsetWidth;
+		if (!overlayRect.width || !overlayLayout || !canvasLayout) return null;
+		const outerScale = overlayRect.width / overlayLayout;
+		return {
+			originX: (canvasRect.left - overlayRect.left) / outerScale,
+			originY: (canvasRect.top - overlayRect.top) / outerScale,
+			zoom: canvasRect.width / canvasLayout / outerScale,
+		};
+	}
+
+	/**
+	 * A node's current position in canvas coordinates. The element's own
+	 * translate is authoritative during drags (Obsidian writes it every
+	 * frame); data is the fallback for virtualized nodes.
+	 */
+	private nodeCanvasPoint(node: {
+		getData(): CommentableNodeData;
+		nodeEl?: HTMLElement;
+	}): { x: number; y: number } {
+		const transform = node.nodeEl?.style.transform;
+		if (transform) {
+			try {
+				const m = new DOMMatrix(transform);
+				return { x: m.e, y: m.f };
+			} catch {
+				// fall through to data
+			}
 		}
-		return 1;
+		const data = node.getData();
+		return { x: data.x, y: data.y };
+	}
+
+	/** The screen-space layer pins and cards live on, above the zoomed
+	    canvas — created on demand, once per canvas wrapper. */
+	private overlayFor(canvas: CanvasLike): HTMLElement | null {
+		const wrapper = canvas.wrapperEl;
+		if (!wrapper) return null;
+		const existing = wrapper.querySelector<HTMLElement>(
+			":scope > .critic-canvas-overlay",
+		);
+		if (existing) return existing;
+		return wrapper.createDiv({ cls: "critic-canvas-overlay" });
 	}
 
 	/** Map a screen point to canvas coordinates via a reference node. */
@@ -206,52 +265,40 @@ export class CanvasCommentPins {
 	private renderCanvas(view: CanvasViewLike): void {
 		const canvas = view.canvas;
 		if (!canvas) return;
-		this.watchTransform(view, canvas);
+		this.watchViewport(view, canvas);
+		const overlay = this.overlayFor(canvas);
+		if (!overlay) return;
 
-		const zoom = this.canvasScale(canvas);
 		const identity = this.host.getIdentity();
 		const seen = new Set<string>();
 		for (const node of canvas.nodes.values()) {
-			const nodeEl = node.nodeEl;
-			// Unmounted (virtualized) nodes get their pins when their element
-			// comes back; a pin can't outlive the element it rode on.
-			if (!nodeEl || !nodeEl.isConnected) continue;
 			const data = node.getData();
 			const anchorCounts = new Map<string, number>();
 			for (const thread of threadsOf(data)) {
 				const key = `${data.id}:${thread.id}`;
 				seen.add(key);
-				let pin = nodeEl.querySelector<HTMLElement>(
+				let pin = overlay.querySelector<HTMLElement>(
 					`:scope > [data-critic-pin="${CSS.escape(key)}"]`,
 				);
 				if (!pin) {
-					pin = this.createPin(nodeEl, key, view, data.id, thread.id);
+					pin = this.createPin(overlay, key, view, data.id, thread.id);
 				}
 				// Threads sharing an anchor (every node thread uses the same
 				// top-right corner) stack downward at constant screen spacing,
-				// so a node's second pin never hides its first. The transform
-				// watcher re-derives this from the data attributes mid-gesture.
+				// so a node's second pin never hides its first.
 				const anchorKey = `${thread.dx},${thread.dy}`;
 				const stack = anchorCounts.get(anchorKey) ?? 0;
 				anchorCounts.set(anchorKey, stack + 1);
+				// Everything positionPins needs to place this pin from the
+				// canvas matrix alone, with no DOM or data lookups.
+				pin.dataset.criticNode = data.id;
+				pin.dataset.criticDx = String(thread.dx);
 				pin.dataset.criticDy = String(thread.dy);
 				pin.dataset.criticStack = String(stack);
-				// Node-local coordinates: the node's own transform places the
-				// pin on screen, so drags carry it with zero lag.
-				pin.style.left = `${thread.dx}px`;
-				pin.style.top = `${thread.dy + (stack * PIN_STACK_GAP) / zoom}px`;
-				// Constant screen size, Figma-style: undo the canvas zoom. A
-				// node pin hangs from its top edge at the anchor; a carrier
-				// pin has no node edge to dock to, so its teardrop tip sits
-				// exactly on the clicked canvas point instead.
 				if (data.relayCommentCarrier === true) {
 					pin.dataset.criticCarrier = "1";
-					pin.style.transform = `translate(0, -100%) scale(${1 / zoom})`;
-					pin.style.transformOrigin = "0 100%";
 				} else {
 					delete pin.dataset.criticCarrier;
-					pin.style.transform = `scale(${1 / zoom})`;
-					pin.style.transformOrigin = "";
 				}
 				pin.classList.toggle("is-resolved", thread.resolved === true);
 				// Avatar convention: a known author's identity color fills
@@ -282,74 +329,101 @@ export class CanvasCommentPins {
 				if (!seen.has(el.dataset.criticPin ?? "")) el.remove();
 			});
 
-		if (this.cardOwner === view) this.syncCard(view, zoom);
+		this.positionPins(view, canvas, overlay);
+		if (this.cardOwner === view) this.syncCard(view);
 	}
 
 	/**
-	 * Keep the open card with its thread: re-parent if Obsidian recreated
-	 * the node's element, re-anchor for zoom changes, close it if the
-	 * thread disappeared under us.
+	 * Place every pin (and the open card) in overlay screen space from
+	 * the canvas transform and node positions — pure math, no layout
+	 * reads. Runs from the render poll and, pre-paint, from the viewport
+	 * observer on every frame Obsidian writes during pans, zooms, and
+	 * drags. Pins never scale: they are screen-space UI, not content.
 	 */
-	private syncCard(view: CanvasViewLike, zoom: number): void {
+	private positionPins(
+		view: CanvasViewLike,
+		canvas: CanvasLike,
+		overlay: HTMLElement,
+	): void {
+		const map = this.overlayMapping(canvas, overlay);
+		if (!map) return;
+		overlay
+			.querySelectorAll<HTMLElement>("[data-critic-pin]")
+			.forEach((pin) => {
+				const node = canvas.nodes.get(pin.dataset.criticNode ?? "");
+				if (!node) return;
+				const base = this.nodeCanvasPoint(node);
+				const x =
+					map.originX +
+					map.zoom * (base.x + Number(pin.dataset.criticDx ?? "0"));
+				const y =
+					map.originY +
+					map.zoom * (base.y + Number(pin.dataset.criticDy ?? "0"));
+				const stack = Number(pin.dataset.criticStack ?? "0");
+				const top = pin.dataset.criticCarrier
+					? // Carrier pins hang their teardrop tip on the anchor point;
+						// node pins hang from their top edge.
+						y - PIN_SIZE
+					: y + stack * PIN_STACK_GAP;
+				pin.style.left = `${x}px`;
+				pin.style.top = `${top}px`;
+			});
+		if (this.cardOwner === view) this.positionCard(view);
+	}
+
+	/**
+	 * Keep the open card with its thread: close it if the thread
+	 * disappeared under us, otherwise refresh its position. The card
+	 * lives on the overlay, so node element recreation (drags, LOD swaps)
+	 * never touches it.
+	 */
+	private syncCard(view: CanvasViewLike): void {
 		if (!this.card || !this.cardKey) return;
 		const [nodeId, threadId] = this.cardKey.split(":");
 		const node = this.findNodeObject(view, nodeId);
-		const data = node?.nodeEl?.isConnected ? node.getData() : null;
+		const data = node?.getData() ?? null;
 		const thread = data
 			? threadsOf(data).find((candidate) => candidate.id === threadId)
 			: null;
-		if (!node?.nodeEl || !thread) {
+		if (!thread) {
 			this.closeCard();
 			return;
 		}
-		if (this.card.parentElement !== node.nodeEl) {
-			node.nodeEl.appendChild(this.card);
-		}
-		this.positionCard(view, this.card, thread, zoom);
+		this.positionCard(view);
 	}
 
 	/**
-	 * Counter-scales must track the zoom gesture frame by frame — the data
-	 * poll alone lets pins grow with the canvas for up to 400ms and then
-	 * snap back. The canvas pans and zooms by mutating one container's
-	 * style, so watch that attribute and re-scale synchronously (the
-	 * observer runs before the next paint). Pans keep the scale, so the
-	 * epsilon check makes them free.
+	 * Track every frame of a pan, zoom, or drag: Obsidian animates all of
+	 * them by writing style attributes (the canvas element for the
+	 * viewport, each node element for drags) once per frame, and this
+	 * observer runs before the following paint. Repositioning the overlay
+	 * from those writes keeps pins and cards glued with zero lag — and
+	 * because the overlay never scales, there is nothing to counter-scale
+	 * and no mid-ease mismatch: tZoom snaps to the gesture target while
+	 * the transform is still easing, which is why anything keyed off the
+	 * zoom value (rather than the written transform) visibly pulsed.
 	 */
-	private watchTransform(view: CanvasViewLike, canvas: CanvasLike): void {
-		const el =
-			canvas.nodes.values().next().value?.nodeEl?.parentElement ??
-			canvas.canvasEl;
+	private watchViewport(view: CanvasViewLike, canvas: CanvasLike): void {
+		const el = canvas.canvasEl;
 		if (!el) return;
-		this.transformWatchers = this.transformWatchers.filter((watcher) => {
+		this.viewportWatchers = this.viewportWatchers.filter((watcher) => {
 			if (watcher.el.isConnected) return true;
 			watcher.observer.disconnect();
 			return false;
 		});
-		if (this.transformWatchers.some((watcher) => watcher.el === el)) return;
-		let lastZoom = 0;
+		if (this.viewportWatchers.some((watcher) => watcher.el === el)) return;
 		const observer = new MutationObserver(() => {
-			const zoom = this.canvasScale(canvas);
-			if (!zoom || Math.abs(zoom - lastZoom) < 0.0005) return;
-			lastZoom = zoom;
-			view.containerEl
-				.querySelectorAll<HTMLElement>("[data-critic-pin]")
-				.forEach((pin) => {
-					pin.style.transform = pin.dataset.criticCarrier
-						? `translate(0, -100%) scale(${1 / zoom})`
-						: `scale(${1 / zoom})`;
-					// Stack gaps are screen-constant, so zoom changes move
-					// every stacked pin's node-local top.
-					const stack = Number(pin.dataset.criticStack ?? "0");
-					if (stack > 0) {
-						const dy = Number(pin.dataset.criticDy ?? "0");
-						pin.style.top = `${dy + (stack * PIN_STACK_GAP) / zoom}px`;
-					}
-				});
-			if (this.cardOwner === view) this.syncCard(view, zoom);
+			const overlay = canvas.wrapperEl?.querySelector<HTMLElement>(
+				":scope > .critic-canvas-overlay",
+			);
+			if (overlay) this.positionPins(view, canvas, overlay);
 		});
-		observer.observe(el, { attributes: true, attributeFilter: ["style"] });
-		this.transformWatchers.push({ el, observer });
+		observer.observe(el, {
+			attributes: true,
+			attributeFilter: ["style"],
+			subtree: true,
+		});
+		this.viewportWatchers.push({ el, observer });
 	}
 
 	private createPin(
@@ -562,7 +636,13 @@ export class CanvasCommentPins {
 		retries = 10,
 	): void {
 		const key = `${nodeId}:${threadId}`;
-		this.closeCard();
+		// Same-thread reopen (posting, resolving): the old card stays on
+		// screen until the replacement takes its place in the same tick —
+		// closing first blanked the card for a few frames on every submit.
+		// A card for a different thread closes immediately as before.
+		const previous = this.cardKey === key ? this.card : null;
+		const previousCleanup = previous ? this.cardCleanup : null;
+		if (!previous) this.closeCard();
 		const nodeObject = this.findNodeObject(view, nodeId);
 		const data = nodeObject?.getData();
 		const thread = data
@@ -570,14 +650,14 @@ export class CanvasCommentPins {
 			: null;
 		if (!nodeObject || !thread) return;
 
-		// The card lives INSIDE the node's element, like the pin, so drags,
-		// pans, and zooms carry it on the compositor with zero skew — a
-		// viewport-fixed card re-synced from rAF reads lags a frame behind
-		// and stutters through zooms. It counter-scales 1/zoom for constant
-		// screen size, like the pins. A just-imported carrier's element may
-		// not exist until the canvas renders a frame; retry briefly.
-		const mount = nodeObject.nodeEl;
-		if (!mount || !mount.isConnected) {
+		// The card lives on the same screen-space overlay as the pins: it
+		// never scales with the zoom (comments are UI, not content), and
+		// node element recreation can't tear it down. Its pin must exist
+		// before the side decision can be made; a just-placed thread's pin
+		// appears in the same renderAll, so retry is a formality.
+		const overlay = view.canvas ? this.overlayFor(view.canvas) : null;
+		const mount = overlay;
+		if (!mount) {
 			if (retries > 0) {
 				requestAnimationFrame(() =>
 					this.openCard(
@@ -620,9 +700,14 @@ export class CanvasCommentPins {
 		] as const) {
 			card.addEventListener(type, (event) => event.stopPropagation());
 		}
-		this.card = card;
-		this.cardKey = key;
-		this.cardOwner = view;
+		// positionCard finds this card's pin via this marker.
+		card.dataset.criticFor = key;
+		// Carry the side over from the card being replaced: the flip is
+		// sticky per open, and a submit that re-opened on the other side
+		// read on film as the card teleporting across its anchor.
+		if (previous?.classList.contains("is-flipped")) {
+			card.classList.add("is-flipped");
+		}
 
 		const header = card.createDiv({ cls: "critic-canvas-card-header" });
 		header.createSpan({
@@ -767,10 +852,8 @@ export class CanvasCommentPins {
 				}),
 				nodeId,
 			);
+			// The reopened card focuses its own composer when it reveals.
 			this.openCard(view, nodeId, threadId, pin);
-			this.card
-				?.querySelector<HTMLTextAreaElement>(".critic-thread-textarea")
-				?.focus();
 		};
 		submit.addEventListener("click", post);
 		textarea.addEventListener("input", syncSubmit);
@@ -786,23 +869,24 @@ export class CanvasCommentPins {
 			if (!submit.disabled) post();
 		});
 
-		// A card opened right after an importData can measure its pin
-		// before the canvas has laid the node back out, which briefly
-		// painted the card unflipped and clipped at the pane edge. Hold it
-		// invisible for the first frame and show it after the re-measure,
-		// so it appears once, on the correct side.
-		card.style.visibility = "hidden";
-		this.positionCard(view, card, thread, this.canvasScale(view.canvas!));
-		requestAnimationFrame(() => {
-			if (this.card !== card) return;
-			if (view.canvas) {
-				this.positionCard(view, card, thread, this.canvasScale(view.canvas));
-			}
-			card.style.visibility = "";
-		});
+		// The overlay position is pure math from the canvas matrix, so the
+		// card can be placed and swapped in immediately — no settle wait,
+		// no first-paint clipping. The old same-thread card is removed in
+		// the same tick, so a submit never blanks the card.
+		previous?.remove();
+		previousCleanup?.();
+		this.card = card;
+		this.cardKey = key;
+		this.cardOwner = view;
+		if (!card.classList.contains("is-flipped")) {
+			this.decideCardSide(view, card, key);
+		}
+		this.positionCard(view);
 		const onDocumentMouseDown = (event: MouseEvent) => {
 			const target = event.target as Node | null;
-			if (target && (card.contains(target) || pin?.contains(target))) return;
+			if (target && (card.contains(target) || pin?.contains(target))) {
+				return;
+			}
 			this.closeCard();
 		};
 		const onKeyDown = (event: KeyboardEvent) => {
@@ -821,47 +905,62 @@ export class CanvasCommentPins {
 	private cardCleanup: (() => void) | null = null;
 	private cardOwner: CanvasViewLike | null = null;
 
+	/** The card's pin element on the shared overlay. */
+	private cardPin(card: HTMLElement): HTMLElement | null {
+		return (
+			card.parentElement?.querySelector<HTMLElement>(
+				`:scope > [data-critic-pin="${CSS.escape(
+					card.dataset.criticFor ?? this.cardKey ?? "",
+				)}"]`,
+			) ?? null
+		);
+	}
+
 	/**
-	 * Place the card next to its pin in NODE-LOCAL coordinates and
-	 * counter-scale it. The node's transform does the rest during any
-	 * gesture; this re-runs from the render poll and the transform
-	 * watcher because the gap offsets are in screen pixels.
+	 * Choose which side of its pin the card opens on — decided once per
+	 * open and sticky for the card's lifetime (side swaps mid-gesture
+	 * read as thrash, and a left-side card can never clip the right
+	 * edge). Flip against the canvas pane's edge, not the window's: the
+	 * pane clips its content, so with a sidebar open a window-based check
+	 * leaves the card cut off.
 	 */
-	private positionCard(
+	private decideCardSide(
 		view: CanvasViewLike,
 		card: HTMLElement,
-		thread: CanvasCommentThread,
-		zoom: number,
+		key: string,
 	): void {
-		// Open the card top-aligned with its pin, a constant 38 screen px
-		// to the pin's right. The pin element is the position source: its
-		// rendered top already carries any stack offset, and a carrier pin
-		// is tip-anchored so the card aligns with its bubble instead.
-		// Flip against the canvas pane's edge, not the window's: the pane
-		// clips its content, so with a sidebar open a window-based check
-		// leaves the card cut off.
-		const pin = card.parentElement?.querySelector<HTMLElement>(
-			`:scope > [data-critic-pin="${CSS.escape(this.cardKey ?? "")}"]`,
+		const overlay = card.parentElement;
+		const pin = overlay?.querySelector<HTMLElement>(
+			`:scope > [data-critic-pin="${CSS.escape(key)}"]`,
 		);
-		const flip = (() => {
-			const rect = pin?.getBoundingClientRect();
-			const pane = view.canvas?.wrapperEl?.getBoundingClientRect();
-			const edge = pane ? pane.right : window.innerWidth;
-			// The flip is sticky while the card is open: zoom gestures
-			// wiggle these rects, and a card that swaps sides mid-gesture
-			// reads as thrash. A left-side card can never clip the right
-			// edge, so once flipped it stays flipped.
-			const wasFlipped = card.classList.contains("is-flipped");
-			if (!rect) return wasFlipped;
-			return wasFlipped || rect.right + 340 > edge;
-		})();
-		const pinTop = pin ? parseFloat(pin.style.top) : thread.dy;
-		const top = pin?.dataset.criticCarrier ? pinTop - 32 / zoom : pinTop;
+		if (!pin || !overlay) return;
+		const pinLeft = parseFloat(pin.style.left);
+		const edge = overlay.clientWidth || window.innerWidth;
+		card.classList.toggle(
+			"is-flipped",
+			pinLeft + PIN_SIZE + CARD_GAP + 320 > edge,
+		);
+	}
+
+	/**
+	 * Place the card against its pin in overlay screen space — constant
+	 * gap, constant size, no transform, no layout reads. Runs with
+	 * positionPins on every frame Obsidian writes during gestures.
+	 */
+	private positionCard(view: CanvasViewLike): void {
+		const card = this.card;
+		if (!card || this.cardOwner !== view || !card.isConnected) return;
+		const pin = this.cardPin(card);
+		if (!pin) return;
+		const pinLeft = parseFloat(pin.style.left);
+		const pinTop = parseFloat(pin.style.top);
+		const flip = card.classList.contains("is-flipped");
+		// A node pin hangs from its anchor, a carrier pin is tip-anchored;
+		// the card top-aligns with the pin's bubble either way.
+		const top = pin.dataset.criticCarrier ? pinTop - 4 : pinTop;
 		card.style.width = "320px";
-		card.style.left = `${thread.dx + (flip ? -352 / zoom : 38 / zoom)}px`;
+		card.style.left = `${pinLeft + (flip ? -CARD_FLIP_OFFSET : CARD_GAP)}px`;
 		card.style.top = `${top}px`;
-		card.style.transform = `scale(${1 / zoom})`;
-		card.classList.toggle("is-flipped", flip);
 		card.style.setProperty("--critic-canvas-caret-y", "16px");
 	}
 
