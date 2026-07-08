@@ -26,7 +26,7 @@ replacements `{~~old~>new~~}`. Review them where they sit: hover a
 suggestion and **Accept** or **Reject** it from the preview — or sweep
 the whole note at once with `Finalize for publish`.
 
-![Hovering a suggested replacement shows Accept and Reject; accepting rewrites the text in place](docs/suggested-edits.gif)
+[![Hovering a suggested replacement shows Accept and Reject; accepting rewrites the text in place — click to play](docs/suggested-edits-poster.png)](docs/suggested-edits.mp4)
 
 ## Review in the sidebar
 
@@ -35,16 +35,27 @@ with colored spines and diff chips so you can scan what each one is.
 Click a card to jump to its place in the note; resolve a thread with one
 click — the markup leaves the note, the text stays.
 
-![Opening the review sidebar, jumping to a suggestion from its card, and resolving a thread](docs/review-sidebar.gif)
+[![Opening the review sidebar, jumping to a suggestion from its card, and resolving a thread — click to play](docs/review-sidebar-poster.png)](docs/review-sidebar.mp4)
 
 ## Comment on canvases
 
-Figma-style pins on any canvas: right-click a card or the empty board
-and the pin lands exactly where you clicked. Pins carry the author's
-initial, hold their size at any zoom, ride their card when it moves, and
-open a floating thread to read, reply, and resolve.
+Figma-style pins on any canvas: comment on a card — from its right-click
+menu or by clicking it in comment mode — and the pin docks at the card's
+corner; click the empty board to drop a freestanding pin right there.
+Pins carry the author's initial, hold their size at any zoom, ride their
+card when it moves, and open a floating thread to read, reply, and
+resolve.
 
-![A canvas card gets a comment from its right-click menu, then a freestanding pin lands between two cards](docs/canvas-comments.gif)
+[![A canvas card gets a comment from its right-click menu, then a freestanding pin lands between two cards — click to play](docs/canvas-comments-poster.png)](docs/canvas-comments.mp4)
+
+## Review checklists
+
+Marked-up tasks stay real tasks. Highlight, comment on, or suggest a
+checklist item and its checkbox keeps rendering — and keeps working —
+inside the mark in the editor, so you can tick things off mid-review.
+Sidebar cards quote the task text without the `- [ ]` noise.
+
+[![A comment lands on a checklist item and its checkbox still ticks off — click to play](docs/task-checklist-poster.png)](docs/task-checklist.mp4)
 
 ## Works standalone, better with Relay
 
