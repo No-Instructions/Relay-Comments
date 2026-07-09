@@ -3,6 +3,7 @@ import {
 	MarkdownView,
 	Notice,
 	Plugin,
+	Scope,
 	type Editor,
 	type EventRef,
 	type Hotkey,
@@ -11,6 +12,10 @@ import {
 	type TFile,
 	type WorkspaceLeaf,
 } from "obsidian";
+import {
+	getComposerSubmitScopeBinding,
+	isComposerSubmitKey,
+} from "./ui/composer-keys";
 import { CanvasCommentPins } from "./canvas/pins";
 import type { Extension } from "@codemirror/state";
 import { EditorView as CodeMirrorEditorView } from "@codemirror/view";
@@ -231,6 +236,22 @@ export default class RelayCommentsPlugin
 			},
 			registerInterval: (id) => this.registerInterval(id),
 			getCanvasLeaves: () => this.app.workspace.getLeavesOfType("canvas"),
+			// The card's composer needs the submit chord before Obsidian's
+			// global keymap eats it — same Scope trick as the sidebar view.
+			pushComposerScope: (onSubmit) => {
+				const binding = getComposerSubmitScopeBinding();
+				const scope = new Scope(this.app.scope);
+				scope.register(binding.modifiers, binding.key, (event) => {
+					if (isComposerSubmitKey(event)) {
+						event.preventDefault();
+						onSubmit();
+						return false;
+					}
+					return true;
+				});
+				this.app.keymap.pushScope(scope);
+				return () => this.app.keymap.popScope(scope);
+			},
 		});
 
 		this.app.workspace.onLayoutReady(() => {

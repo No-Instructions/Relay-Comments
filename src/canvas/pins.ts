@@ -45,6 +45,10 @@ export interface PinHost {
 	getIdentity(): { name: string; id?: string; color?: string };
 	registerInterval(id: number): number;
 	getCanvasLeaves(): WorkspaceLeaf[];
+	/** Push a keymap scope that fires onSubmit for the composer submit
+	    chord; returns the pop function. Obsidian's global keymap consumes
+	    the chord before it can reach the card's textarea. */
+	pushComposerScope(onSubmit: () => void): () => void;
 }
 
 /** Rendered pin box size in screen pixels (styles.css width/height). */
@@ -890,12 +894,35 @@ export class CanvasCommentPins {
 			this.closeCard();
 		};
 		const onKeyDown = (event: KeyboardEvent) => {
-			if (event.key === "Escape") this.closeCard();
+			if (event.key === "Escape") {
+				this.closeCard();
+				return;
+			}
+			// Backup for submit chords Obsidian's keymap ignores (e.g. the
+			// meta variant on Linux); the primary path is the pushed scope.
+			if (
+				document.activeElement === textarea &&
+				isComposerSubmitKey(event)
+			) {
+				event.preventDefault();
+				event.stopPropagation();
+				if (!submit.disabled) post();
+			}
 		};
+		// The composer advertises mod-Enter, but Obsidian's global keymap
+		// consumes that chord before it reaches the textarea (verified:
+		// the Control keydown arrived, the Enter never did). A pushed
+		// scope gets first chance, same as the sidebar view's composer.
+		const popScope = this.host.pushComposerScope(() => {
+			if (document.activeElement === textarea && !submit.disabled) {
+				post();
+			}
+		});
 		document.addEventListener("mousedown", onDocumentMouseDown, true);
 		document.addEventListener("keydown", onKeyDown, true);
 		card.dataset.criticCleanup = "true";
 		this.cardCleanup = () => {
+			popScope();
 			document.removeEventListener("mousedown", onDocumentMouseDown, true);
 			document.removeEventListener("keydown", onKeyDown, true);
 		};
