@@ -7,9 +7,11 @@ import {
 	setIcon,
 	setTooltip,
 	type App,
+	type HoverPopover,
 	type IconName,
 	type WorkspaceLeaf,
 } from "obsidian";
+import { renderCommentBody } from "./comment-body";
 import { collectAttachedComments } from "../critic/threading";
 import {
 	formatMarkDate,
@@ -70,6 +72,8 @@ interface PendingFocus {
 }
 
 export class ReviewSidebarView extends ItemView {
+	/** HoverParent for page previews spawned from links in comments. */
+	hoverPopover: HoverPopover | null = null;
 	private selectedItemId: string | null = null;
 	private replyDraftItemId: string | null = null;
 	private editingCommentId: string | null = null;
@@ -485,7 +489,9 @@ export class ReviewSidebarView extends ItemView {
 		});
 		card.addEventListener("keydown", (event) => {
 			if (event.key !== "Enter" && event.key !== " ") return;
-			if ((event.target as HTMLElement).closest("button, textarea, input")) {
+			if (
+				(event.target as HTMLElement).closest("button, textarea, input, a")
+			) {
 				return;
 			}
 			event.preventDefault();
@@ -574,7 +580,11 @@ export class ReviewSidebarView extends ItemView {
 		if (this.editingCommentId === comment.id) {
 			this.renderCommentEditor(message, item, comment);
 		} else {
-			message.createDiv({ cls: "critic-message-text", text: comment.content });
+			renderCommentBody(
+				message.createDiv({ cls: "critic-message-text" }),
+				comment.content,
+				{ app: this.app, sourcePath: filePath, hoverParent: this },
+			);
 		}
 	}
 

@@ -17,6 +17,10 @@ import {
 	isComposerSubmitKey,
 } from "./ui/composer-keys";
 import { CanvasCommentPins } from "./canvas/pins";
+import {
+	COMMENT_LINK_HOVER_SOURCE,
+	renderCommentBody,
+} from "./ui/comment-body";
 import type { Extension } from "@codemirror/state";
 import { EditorView as CodeMirrorEditorView } from "@codemirror/view";
 import { parseCriticMarkup } from "./critic/parse";
@@ -103,6 +107,7 @@ interface ThreadPreviewData {
 	label: string;
 	countLabel: string;
 	snippet: string;
+	sourcePath: string;
 	moreLabel: string | null;
 	author: string | null;
 	date: string | null;
@@ -219,6 +224,10 @@ export default class RelayCommentsPlugin
 		this.app.workspace.updateOptions();
 		this.registerMarkdownPostProcessor(createReviewPostProcessor(this));
 		this.addSettingTab(new RelayCommentsSettingTab(this.app, this));
+		this.registerHoverLinkSource(COMMENT_LINK_HOVER_SOURCE, {
+			display: "Relay Comments",
+			defaultMod: true,
+		});
 
 		this.addRibbonIcon("message-square-text", "Open Relay Comments", () => {
 			void this.toggleReviewSidebarFromRibbon();
@@ -230,6 +239,7 @@ export default class RelayCommentsPlugin
 		this.queueEditorExtensionRefresh(250);
 
 		this.canvasPins = new CanvasCommentPins({
+			app: this.app,
 			getIdentity: () => {
 				const identity = this.getCurrentReviewerIdentity();
 				return { name: identity.name, id: identity.id, color: identity.color };
@@ -531,7 +541,8 @@ export default class RelayCommentsPlugin
 	): HTMLElement {
 		// The popover is for reading; everything else is a CTA — reply,
 		// resolve, accept/reject, or follow the breadcrumb to the full
-		// thread. The body stays plain (normal pointer, selectable text).
+		// thread. Thread bodies render their links (following one dismisses
+		// the popover); suggestion bodies quote the document and stay plain.
 		const wireLink = (link: HTMLElement, act: () => void) => {
 			link.addClass("critic-thread-preview-link");
 			link.setAttribute("role", "button");
@@ -575,10 +586,20 @@ export default class RelayCommentsPlugin
 				text: "Resolved",
 			});
 		}
-		element.createDiv({
+		const message = element.createDiv({
 			cls: "critic-thread-preview-message",
-			text: data.snippet,
 		});
+		if (data.kind === "thread") {
+			renderCommentBody(message, data.snippet, {
+				app: this.app,
+				sourcePath: data.sourcePath,
+				onNavigate: () => this.hideThreadPreview(),
+			});
+		} else {
+			// Suggestion snippets quote the document; linkifying them would
+			// put live links where the sidebar shows plain diff chips.
+			message.setText(data.snippet);
+		}
 
 		const links: Array<{ label: string; aria: string; act: () => void }> =
 			data.kind === "suggestion"
@@ -783,6 +804,7 @@ export default class RelayCommentsPlugin
 				label: parts.label,
 				countLabel: "",
 				snippet: clampPreviewSnippet(parts.snippet),
+				sourcePath: filePath,
 				moreLabel: null,
 				author: identity.source === "fallback" ? null : identity.name,
 				date: formatMarkDate(mark),
@@ -807,6 +829,7 @@ export default class RelayCommentsPlugin
 					? `${visibleComments.length} comments`
 					: "",
 			snippet: clampPreviewSnippet(firstComment.content),
+			sourcePath: filePath,
 			moreLabel:
 				visibleComments.length > 1
 					? `+${visibleComments.length - 1} ${

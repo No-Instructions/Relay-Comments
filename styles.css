@@ -587,6 +587,34 @@
 	overflow-wrap: anywhere;
 }
 
+/* Links inside comment bodies — sidebar messages, canvas cards, and the
+   hover popover all render through the same comment-body helper. */
+a.critic-comment-link {
+	color: var(--link-color);
+	text-decoration-line: var(--link-decoration);
+	cursor: var(--cursor-link);
+}
+
+a.critic-comment-link:hover {
+	color: var(--link-color-hover);
+	text-decoration-line: var(--link-decoration-hover);
+}
+
+a.critic-comment-link.external-link {
+	color: var(--link-external-color);
+	text-decoration-line: var(--link-external-decoration);
+}
+
+a.critic-comment-link.external-link:hover {
+	color: var(--link-external-color-hover);
+}
+
+a.critic-comment-link.is-unresolved {
+	color: var(--link-unresolved-color);
+	opacity: var(--link-unresolved-opacity);
+	filter: var(--link-unresolved-filter);
+}
+
 /* ---------- Composers ---------- */
 
 .critic-thread-composer {
@@ -1009,6 +1037,7 @@
 
 .critic-canvas-card-text {
 	white-space: pre-wrap;
+	overflow-wrap: anywhere;
 	margin: 2px 0 0 2px;
 }
 

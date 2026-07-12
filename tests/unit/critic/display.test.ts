@@ -57,6 +57,15 @@ describe("clampPreviewSnippet", () => {
 		expect(result.length).toBe(318);
 		expect(result.endsWith("…")).toBe(true);
 	});
+
+	it("never cuts a token in half at the clamp boundary", () => {
+		// A URL straddling the cut must be dropped whole: a partial URL
+		// would linkify into a wrong href in the hover preview.
+		const long = `${"word ".repeat(60)}https://example.com/${"a".repeat(60)}`;
+		const result = clampPreviewSnippet(long);
+		expect(result).not.toContain("https");
+		expect(result.endsWith("…")).toBe(true);
+	});
 });
 
 describe("findPrecedingWordRange", () => {

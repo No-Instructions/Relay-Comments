@@ -1,8 +1,16 @@
-import { Menu, Platform, setIcon, setTooltip, type WorkspaceLeaf } from "obsidian";
+import {
+	Menu,
+	Platform,
+	setIcon,
+	setTooltip,
+	type App,
+	type WorkspaceLeaf,
+} from "obsidian";
 import {
 	formatComposerSubmitHint,
 	isComposerSubmitKey,
 } from "../ui/composer-keys";
+import { renderCommentBody } from "../ui/comment-body";
 import {
 	addReply,
 	authorInitials,
@@ -42,6 +50,7 @@ interface CanvasViewLike {
 }
 
 export interface PinHost {
+	app: App;
 	getIdentity(): { name: string; id?: string; color?: string };
 	registerInterval(id: number): number;
 	getCanvasLeaves(): WorkspaceLeaf[];
@@ -797,7 +806,17 @@ export class CanvasCommentPins {
 				cls: "critic-comment-date",
 				text: formatCommentDate(comment.date),
 			});
-			item.createDiv({ cls: "critic-canvas-card-text", text: comment.text });
+			renderCommentBody(
+				item.createDiv({ cls: "critic-canvas-card-text" }),
+				comment.text,
+				{
+					app: this.host.app,
+					sourcePath: view.file?.path ?? "",
+					// In-place navigation would replace the canvas leaf itself,
+					// destroying the card and any unsent reply draft.
+					openInNewTab: true,
+				},
+			);
 		}
 
 		const composer = card.createDiv({

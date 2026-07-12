@@ -108,7 +108,16 @@ export function clampPreviewSnippet(value: string): string {
 	const clipped = lines.slice(0, 3).join("\n");
 	const suffix = lines.length > 3 ? "…" : "";
 	if (clipped.length <= 320) return `${clipped}${suffix}`;
-	return `${clipped.slice(0, 317).trimEnd()}…`;
+	let cut = clipped.slice(0, 317);
+	// Never cut mid-token: a split token reads wrong, and a split URL
+	// would linkify into a plausible-looking truncated href downstream
+	// (the preview renders snippets through the comment-link parser).
+	// A single token longer than the whole budget keeps the hard cut.
+	if (/\S$/.test(cut) && /\S/.test(clipped.charAt(317))) {
+		const lastBreak = cut.search(/\s\S*$/);
+		if (lastBreak !== -1) cut = cut.slice(0, lastBreak);
+	}
+	return `${cut.trimEnd()}…`;
 }
 
 export interface RectLike {
