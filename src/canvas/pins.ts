@@ -389,6 +389,7 @@ export class CanvasCommentPins {
 		// frame of a pan).
 		const maxLeft = overlay.clientWidth - PIN_SIZE - PIN_EDGE_MARGIN;
 		const maxTop = usablePaneHeight(overlay) - PIN_SIZE - PIN_EDGE_MARGIN;
+		const controls = this.controlsRect(view, overlay);
 		overlay
 			.querySelectorAll<HTMLElement>("[data-critic-pin]")
 			.forEach((pin) => {
@@ -411,10 +412,46 @@ export class CanvasCommentPins {
 				// tappable — on a phone-width canvas a node's top-right corner
 				// routinely sits at the screen edge. Pins further out belong
 				// to scrolled-away content and keep leaving the viewport.
-				pin.style.left = `${nudgeIntoRange(x, PIN_EDGE_MARGIN, maxLeft)}px`;
-				pin.style.top = `${nudgeIntoRange(top, PIN_EDGE_MARGIN, maxTop)}px`;
+				let left = nudgeIntoRange(x, PIN_EDGE_MARGIN, maxLeft);
+				const clampedTop = nudgeIntoRange(top, PIN_EDGE_MARGIN, maxTop);
+				// Obsidian's canvas control rail owns the top-right corner of
+				// a phone-width pane — exactly where node pins land. A pin
+				// over the rail covers the zoom buttons (and, sitting above
+				// them, steals their taps); it steps left of the rail instead.
+				if (
+					controls &&
+					left + PIN_SIZE > controls.left &&
+					left < controls.right &&
+					clampedTop + PIN_SIZE > controls.top &&
+					clampedTop < controls.bottom
+				) {
+					left = controls.left - PIN_SIZE - PIN_EDGE_MARGIN;
+				}
+				pin.style.left = `${left}px`;
+				pin.style.top = `${clampedTop}px`;
 			});
 		if (this.cardOwner === view) this.positionCard(view);
+	}
+
+	/** The canvas control rail's rect in overlay-local coordinates, or
+	    null when it isn't rendered. Read once per positioning pass. */
+	private controlsRect(
+		view: CanvasViewLike,
+		overlay: HTMLElement,
+	): { left: number; right: number; top: number; bottom: number } | null {
+		const el = view.containerEl.querySelector(".canvas-controls");
+		if (!el) return null;
+		const rect = el.getBoundingClientRect();
+		if (!rect.width || !rect.height) return null;
+		const overlayRect = overlay.getBoundingClientRect();
+		if (!overlayRect.width) return null;
+		const scale = overlay.clientWidth / overlayRect.width;
+		return {
+			left: (rect.left - overlayRect.left) * scale,
+			right: (rect.right - overlayRect.left) * scale,
+			top: (rect.top - overlayRect.top) * scale,
+			bottom: (rect.bottom - overlayRect.top) * scale,
+		};
 	}
 
 	/**
