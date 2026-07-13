@@ -2,6 +2,7 @@ import {
 	ItemView,
 	MarkdownView,
 	Notice,
+	Platform,
 	Plugin,
 	Scope,
 	type Editor,
@@ -1398,6 +1399,18 @@ export default class RelayCommentsPlugin
 				: this.app.workspace.getLeavesOfType(VIEW_TYPE_CRITIC_REVIEW);
 		for (const reviewLeaf of leaves) {
 			reviewLeaf.detach();
+		}
+		// On mobile the right drawer outlives its detached view, staying
+		// open on Obsidian's blank "Empty" placeholder (caught by a blind
+		// demo review); closing the sidebar there means the whole drawer
+		// should slide away.
+		if (Platform.isMobile && leaves.length > 0) {
+			const rightSplit = (
+				this.app.workspace as typeof this.app.workspace & {
+					rightSplit?: { collapse?: () => void };
+				}
+			).rightSplit;
+			rightSplit?.collapse?.();
 		}
 	}
 
