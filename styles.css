@@ -376,6 +376,15 @@
 	object-fit: cover;
 }
 
+/* On a canvas the avatar sits next to the thread's pin: an accent-purple
+   avatar beside an amber pin read as a color bug to three independent
+   cold reviewers. Inside canvas cards the default avatar echoes the
+   pin's comment ink; own-identity avatars still get their inline color. */
+.critic-canvas-card .critic-avatar {
+	background: color-mix(in srgb, var(--color-yellow) 85%, var(--background-primary));
+	color: rgba(0, 0, 0, 0.75);
+}
+
 .critic-avatar-unknown {
 	background: var(--background-modifier-border);
 	color: var(--text-muted);
