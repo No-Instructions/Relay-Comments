@@ -12,6 +12,17 @@ import {
 } from "../ui/composer-keys";
 import { renderCommentBody } from "../ui/comment-body";
 import {
+	CARD_EDGE_MARGIN,
+	CARD_FLIP_GAP,
+	CARD_GAP,
+	cardWidthFor,
+	nudgeIntoRange,
+	PIN_EDGE_MARGIN,
+	PIN_SIZE,
+	PIN_STACK_GAP,
+	pinNearPane,
+} from "./geometry";
+import {
 	addReply,
 	authorInitials,
 	createThread,
@@ -60,29 +71,6 @@ export interface PinHost {
 	pushComposerScope(onSubmit: () => void): () => void;
 }
 
-/** Rendered pin box size in screen pixels (styles.css width/height). */
-const PIN_SIZE = 28;
-/** Screen-pixel gap between stacked same-anchor pins (pin height + 6). */
-const PIN_STACK_GAP = 34;
-/** Screen-pixel gap from a pin's anchor to its card's near edge. */
-const CARD_GAP = 38;
-/** Card width plus the flipped-side gap, in screen pixels. */
-const CARD_FLIP_OFFSET = 352;
-/** The card's designed width; shrinks on panes narrower than it. */
-const CARD_WIDTH = 320;
-/** Minimum gap kept between screen-space UI and the pane edge. */
-const PIN_EDGE_MARGIN = 4;
-/** How far past an edge a pin still gets nudged back on-screen. */
-const PIN_NUDGE_BAND = PIN_SIZE;
-/** Minimum gap kept between the card and the pane edge. */
-const CARD_EDGE_MARGIN = 12;
-
-/** The card's rendered width on a pane: designed width, shrinking to
-    fit narrow (phone-width) panes. */
-function cardWidthFor(paneWidth: number): number {
-	return Math.min(CARD_WIDTH, paneWidth - 2 * CARD_EDGE_MARGIN);
-}
-
 /** Overlay-local height that's actually usable. Obsidian mobile floats
     a fixed navbar over the pane's bottom edge; anything clamped to the
     raw pane bottom lands underneath it. Desktop has no navbar and gets
@@ -93,20 +81,15 @@ function usablePaneHeight(overlay: HTMLElement): number {
 	if (!navbar) return height;
 	const overlayRect = overlay.getBoundingClientRect();
 	if (!overlayRect.height) return height;
-	const navTop = navbar.getBoundingClientRect().top - PIN_EDGE_MARGIN;
+	const navRect = navbar.getBoundingClientRect();
+	// A present-but-hidden navbar (display:none — tablets, keyboard up)
+	// has an all-zero rect; treating y=0 as its top would collapse the
+	// usable height to nothing.
+	if (!navRect.height) return height;
+	const navTop = navRect.top - PIN_EDGE_MARGIN;
 	if (navTop >= overlayRect.bottom) return height;
 	const scale = height / overlayRect.height;
 	return Math.max(0, (navTop - overlayRect.top) * scale);
-}
-
-/** Clamp value into [min, max], but only when it's within the nudge
-    band — anything further out is scrolled-away content, not edge
-    clipping, and should keep tracking its anchor off-screen. */
-function nudgeIntoRange(value: number, min: number, max: number): number {
-	if (max < min) return value;
-	if (value > max && value <= max + PIN_NUDGE_BAND) return max;
-	if (value < min && value >= min - PIN_NUDGE_BAND) return min;
-	return value;
 }
 
 /**
@@ -400,6 +383,12 @@ export class CanvasCommentPins {
 	): void {
 		const map = this.overlayMapping(canvas, overlay);
 		if (!map) return;
+		// Pane bounds are loop-invariant: read once, before any style
+		// write, so the per-pin loop stays pure arithmetic (interleaving
+		// these reads with the writes would force a reflow per pin, every
+		// frame of a pan).
+		const maxLeft = overlay.clientWidth - PIN_SIZE - PIN_EDGE_MARGIN;
+		const maxTop = usablePaneHeight(overlay) - PIN_SIZE - PIN_EDGE_MARGIN;
 		overlay
 			.querySelectorAll<HTMLElement>("[data-critic-pin]")
 			.forEach((pin) => {
@@ -422,16 +411,8 @@ export class CanvasCommentPins {
 				// tappable — on a phone-width canvas a node's top-right corner
 				// routinely sits at the screen edge. Pins further out belong
 				// to scrolled-away content and keep leaving the viewport.
-				pin.style.left = `${nudgeIntoRange(
-					x,
-					PIN_EDGE_MARGIN,
-					overlay.clientWidth - PIN_SIZE - PIN_EDGE_MARGIN,
-				)}px`;
-				pin.style.top = `${nudgeIntoRange(
-					top,
-					PIN_EDGE_MARGIN,
-					usablePaneHeight(overlay) - PIN_SIZE - PIN_EDGE_MARGIN,
-				)}px`;
+				pin.style.left = `${nudgeIntoRange(x, PIN_EDGE_MARGIN, maxLeft)}px`;
+				pin.style.top = `${nudgeIntoRange(top, PIN_EDGE_MARGIN, maxTop)}px`;
 			});
 		if (this.cardOwner === view) this.positionCard(view);
 	}
@@ -594,8 +575,23 @@ export class CanvasCommentPins {
 			attr: { type: "button" },
 		});
 		bannerCancel.addEventListener("click", () => cleanup());
-		const onClick = (event: MouseEvent) => {
-			// Pins and open thread cards live inside node elements: a click
+		// Fence the banner like the card: without this the canvas treats a
+		// press on Cancel as the start of a background pan and pointer
+		// capture swallows the button's click.
+		for (const type of [
+			"pointerdown",
+			"pointermove",
+			"mousedown",
+			"mousemove",
+			"mouseup",
+			"touchstart",
+			"dblclick",
+			"contextmenu",
+		] as const) {
+			banner.addEventListener(type, (event) => event.stopPropagation());
+		}
+		const place = (event: MouseEvent | PointerEvent) => {
+			// Pins and open thread cards live inside node elements: a press
 			// on one is never a placement. Leave the event alone so the pin
 			// or card handles its own click; just exit the mode. The
 			// banner's cancel button likewise handles its own click.
@@ -623,6 +619,34 @@ export class CanvasCommentPins {
 				event.clientY,
 			);
 		};
+		const onClick = (event: MouseEvent) => place(event);
+		// Touch backstop: the canvas's own touch handling can keep a tap
+		// from ever synthesizing a click (it reliably eats mousedown; on
+		// some platforms the click too), so placement also recognizes a
+		// raw pointer tap — press and release without drift — and dedupes
+		// against the click path via cleanup having already run.
+		let touchPress: { x: number; y: number; time: number } | null = null;
+		const onPointerDown = (event: PointerEvent) => {
+			touchPress =
+				event.pointerType === "touch"
+					? { x: event.clientX, y: event.clientY, time: Date.now() }
+					: null;
+		};
+		const onPointerUp = (event: PointerEvent) => {
+			const press = touchPress;
+			touchPress = null;
+			if (!press || event.pointerType !== "touch") return;
+			const drift = Math.hypot(
+				event.clientX - press.x,
+				event.clientY - press.y,
+			);
+			if (drift > 12 || Date.now() - press.time > 600) return;
+			// Let a synthesized click land first (it carries the real
+			// target); if none arrives this tick, the tap places.
+			window.setTimeout(() => {
+				if (this.placement === cleanup) place(event);
+			}, 120);
+		};
 		const onKey = (event: KeyboardEvent) => {
 			if (event.key === "Escape") cleanup();
 		};
@@ -630,10 +654,14 @@ export class CanvasCommentPins {
 			banner.remove();
 			target.removeClass("critic-canvas-placing");
 			target.removeEventListener("click", onClick, true);
+			target.removeEventListener("pointerdown", onPointerDown, true);
+			target.removeEventListener("pointerup", onPointerUp, true);
 			document.removeEventListener("keydown", onKey, true);
 			this.placement = null;
 		};
 		target.addEventListener("click", onClick, true);
+		target.addEventListener("pointerdown", onPointerDown, true);
+		target.addEventListener("pointerup", onPointerUp, true);
 		document.addEventListener("keydown", onKey, true);
 		this.placement = cleanup;
 	}
@@ -1093,36 +1121,50 @@ export class CanvasCommentPins {
 		// either side, so the card shrinks to the pane and clamps to its
 		// edges instead of clipping (the pane hides overflow).
 		const width = cardWidthFor(paneWidth);
-		const flipGap = CARD_FLIP_OFFSET - CARD_WIDTH;
-		const left = Math.min(
-			Math.max(
-				pinLeft + (flip ? -(width + flipGap) : CARD_GAP),
-				CARD_EDGE_MARGIN,
-			),
-			Math.max(CARD_EDGE_MARGIN, paneWidth - width - CARD_EDGE_MARGIN),
-		);
 		// A node pin hangs from its anchor, a carrier pin is tip-anchored;
-		// the card top-aligns with the pin's bubble either way — unless
-		// that would push the composer under the bottom edge.
-		const top = Math.min(
-			Math.max(
-				pin.dataset.criticCarrier ? pinTop - 4 : pinTop,
-				CARD_EDGE_MARGIN,
-			),
-			Math.max(
-				CARD_EDGE_MARGIN,
-				paneHeight - card.offsetHeight - CARD_EDGE_MARGIN,
-			),
-		);
+		// the card top-aligns with the pin's bubble either way.
+		const rawLeft = pinLeft + (flip ? -(width + CARD_FLIP_GAP) : CARD_GAP);
+		const rawTop = pin.dataset.criticCarrier ? pinTop - 4 : pinTop;
+		// Width first: the bottom clamp needs the height AT this width (a
+		// narrower card wraps taller), so the offsetHeight read comes
+		// after the write.
 		card.style.width = `${width}px`;
+		let left = rawLeft;
+		let top = rawTop;
+		// Clamp only while the pin is at least near the pane: a pin
+		// tracking a scrolled-away anchor takes its card with it — a card
+		// glued to the pane edge with no visible anchor reads as detached.
+		if (pinNearPane(pinLeft, pinTop, paneWidth, paneHeight)) {
+			const cardHeight = card.offsetHeight;
+			left = Math.min(
+				Math.max(rawLeft, CARD_EDGE_MARGIN),
+				Math.max(CARD_EDGE_MARGIN, paneWidth - width - CARD_EDGE_MARGIN),
+			);
+			top = Math.min(
+				Math.max(rawTop, CARD_EDGE_MARGIN),
+				Math.max(CARD_EDGE_MARGIN, paneHeight - cardHeight - CARD_EDGE_MARGIN),
+			);
+			// The caret keeps pointing at the pin through vertical clamp
+			// displacement (bounded to the card), but a horizontal clamp
+			// slides the card OVER its pin — a side caret would point at
+			// nothing, so it hides instead.
+			card.style.setProperty(
+				"--critic-canvas-caret-y",
+				`${Math.min(
+					Math.max(16, rawTop - top + 16),
+					Math.max(16, cardHeight - 16),
+				)}px`,
+			);
+			card.classList.toggle(
+				"is-caret-detached",
+				Math.abs(left - rawLeft) > 1,
+			);
+		} else {
+			card.style.setProperty("--critic-canvas-caret-y", "16px");
+			card.classList.remove("is-caret-detached");
+		}
 		card.style.left = `${left}px`;
 		card.style.top = `${top}px`;
-		// The caret keeps pointing at the pin when clamping displaces the
-		// card; with no displacement this stays the designed 16px.
-		card.style.setProperty(
-			"--critic-canvas-caret-y",
-			`${Math.max(16, pinTop - top + 16)}px`,
-		);
 	}
 
 	closeCard(): void {

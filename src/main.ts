@@ -489,8 +489,16 @@ export default class RelayCommentsPlugin
 				this.hideThreadPreview();
 			}
 		}, 120);
+		// Hover-model dismissal only: a touch pointer always "leaves" when
+		// the finger lifts, so this would close the preview 180ms after
+		// any tap or scroll inside it. Touch dismisses via outside
+		// pointerdown, scroll, or Escape instead.
+		const onPointerLeave = (event: PointerEvent) => {
+			if (event.pointerType === "touch") return;
+			scheduleDismiss();
+		};
 		element.addEventListener("pointerenter", cancelDismiss);
-		element.addEventListener("pointerleave", scheduleDismiss);
+		element.addEventListener("pointerleave", onPointerLeave);
 		document.addEventListener("pointerdown", onDocumentPointerDown, true);
 		document.addEventListener("keydown", onDocumentKeyDown, true);
 		document.addEventListener("scroll", onScroll, true);
@@ -504,7 +512,7 @@ export default class RelayCommentsPlugin
 			returnFocus: options.returnFocus,
 			cleanup: () => {
 				element.removeEventListener("pointerenter", cancelDismiss);
-				element.removeEventListener("pointerleave", scheduleDismiss);
+				element.removeEventListener("pointerleave", onPointerLeave);
 				document.removeEventListener(
 					"pointerdown",
 					onDocumentPointerDown,

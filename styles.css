@@ -781,7 +781,8 @@ a.critic-comment-link.is-unresolved {
 /* ---------- Buttons ---------- */
 
 .critic-sidebar .critic-text-button,
-.critic-canvas-card .critic-text-button {
+.critic-canvas-card .critic-text-button,
+.critic-placement-banner .critic-text-button {
 	appearance: none;
 	border: none;
 	border-radius: 999px;
@@ -1009,23 +1010,20 @@ a.critic-comment-link.is-unresolved {
 	font-size: var(--font-ui-small);
 }
 
-.critic-placement-banner .critic-text-button {
-	appearance: none;
-	border: none;
-	border-radius: 999px;
-	padding: 5px 14px;
-	background: transparent;
-	color: var(--text-muted);
-	font-family: var(--font-interface);
-	font-size: var(--font-ui-smaller);
-	font-weight: 600;
-	line-height: 1.2;
-	cursor: pointer;
-}
-
 .critic-placement-banner .critic-text-button:hover {
 	background: var(--background-modifier-hover);
 	color: var(--text-normal);
+}
+
+/* Placement mode's universal crosshair (below) would win over the
+   button's own cursor; the banner is UI, not placement surface. */
+.critic-canvas-placing .critic-placement-banner,
+.critic-canvas-placing .critic-placement-banner .critic-placement-banner-text {
+	cursor: default !important;
+}
+
+.critic-canvas-placing .critic-placement-banner .critic-text-button {
+	cursor: pointer !important;
 }
 
 /* The floating thread card, on the same screen-space overlay as the
@@ -1053,6 +1051,12 @@ a.critic-comment-link.is-unresolved {
 	border-left: 1px solid var(--background-modifier-border);
 	border-bottom: 1px solid var(--background-modifier-border);
 	transform: rotate(45deg);
+}
+
+/* A horizontal clamp slides the card over its pin (narrow panes); a
+   side caret would point at nothing, so it hides. Set by positionCard. */
+.critic-canvas-card.is-caret-detached::after {
+	display: none;
 }
 
 .critic-canvas-card-header {
