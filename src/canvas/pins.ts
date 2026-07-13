@@ -68,6 +68,46 @@ const PIN_STACK_GAP = 34;
 const CARD_GAP = 38;
 /** Card width plus the flipped-side gap, in screen pixels. */
 const CARD_FLIP_OFFSET = 352;
+/** The card's designed width; shrinks on panes narrower than it. */
+const CARD_WIDTH = 320;
+/** Minimum gap kept between screen-space UI and the pane edge. */
+const PIN_EDGE_MARGIN = 4;
+/** How far past an edge a pin still gets nudged back on-screen. */
+const PIN_NUDGE_BAND = PIN_SIZE;
+/** Minimum gap kept between the card and the pane edge. */
+const CARD_EDGE_MARGIN = 12;
+
+/** The card's rendered width on a pane: designed width, shrinking to
+    fit narrow (phone-width) panes. */
+function cardWidthFor(paneWidth: number): number {
+	return Math.min(CARD_WIDTH, paneWidth - 2 * CARD_EDGE_MARGIN);
+}
+
+/** Overlay-local height that's actually usable. Obsidian mobile floats
+    a fixed navbar over the pane's bottom edge; anything clamped to the
+    raw pane bottom lands underneath it. Desktop has no navbar and gets
+    the plain height. */
+function usablePaneHeight(overlay: HTMLElement): number {
+	const height = overlay.clientHeight;
+	const navbar = document.querySelector(".mobile-navbar");
+	if (!navbar) return height;
+	const overlayRect = overlay.getBoundingClientRect();
+	if (!overlayRect.height) return height;
+	const navTop = navbar.getBoundingClientRect().top - PIN_EDGE_MARGIN;
+	if (navTop >= overlayRect.bottom) return height;
+	const scale = height / overlayRect.height;
+	return Math.max(0, (navTop - overlayRect.top) * scale);
+}
+
+/** Clamp value into [min, max], but only when it's within the nudge
+    band — anything further out is scrolled-away content, not edge
+    clipping, and should keep tracking its anchor off-screen. */
+function nudgeIntoRange(value: number, min: number, max: number): number {
+	if (max < min) return value;
+	if (value > max && value <= max + PIN_NUDGE_BAND) return max;
+	if (value < min && value >= min - PIN_NUDGE_BAND) return min;
+	return value;
+}
 
 /**
  * Figma-style comment pins for canvases: one pin per thread, mounted on
@@ -378,8 +418,20 @@ export class CanvasCommentPins {
 						// node pins hang from their top edge.
 						y - PIN_SIZE
 					: y + stack * PIN_STACK_GAP;
-				pin.style.left = `${x}px`;
-				pin.style.top = `${top}px`;
+				// A pin just past an edge gets nudged back inside so it stays
+				// tappable — on a phone-width canvas a node's top-right corner
+				// routinely sits at the screen edge. Pins further out belong
+				// to scrolled-away content and keep leaving the viewport.
+				pin.style.left = `${nudgeIntoRange(
+					x,
+					PIN_EDGE_MARGIN,
+					overlay.clientWidth - PIN_SIZE - PIN_EDGE_MARGIN,
+				)}px`;
+				pin.style.top = `${nudgeIntoRange(
+					top,
+					PIN_EDGE_MARGIN,
+					usablePaneHeight(overlay) - PIN_SIZE - PIN_EDGE_MARGIN,
+				)}px`;
 			});
 		if (this.cardOwner === view) this.positionCard(view);
 	}
@@ -453,6 +505,7 @@ export class CanvasCommentPins {
 		pin.createSpan({ cls: "critic-canvas-pin-initial" });
 		pin.createSpan({ cls: "critic-canvas-pin-count" });
 		pin.addEventListener("mousedown", (event) => event.stopPropagation());
+		pin.addEventListener("pointerdown", (event) => event.stopPropagation());
 		pin.addEventListener("click", (event) => {
 			event.stopPropagation();
 			this.openCard(view, nodeId, threadId, pin);
@@ -525,11 +578,29 @@ export class CanvasCommentPins {
 		const target = canvas?.wrapperEl ?? view.containerEl;
 		if (!canvas || !target) return;
 		target.addClass("critic-canvas-placing");
+		// The crosshair cursor is the only desktop cue and doesn't exist on
+		// touch, and Escape is the only exit a keyboard offers — so the
+		// mode gets a visible banner with its own cancel.
+		const banner = target.createDiv({ cls: "critic-placement-banner" });
+		banner.createSpan({
+			cls: "critic-placement-banner-text",
+			text: Platform.isMobile
+				? "Tap to place a comment"
+				: "Click to place a comment",
+		});
+		const bannerCancel = banner.createEl("button", {
+			cls: "critic-text-button",
+			text: "Cancel",
+			attr: { type: "button" },
+		});
+		bannerCancel.addEventListener("click", () => cleanup());
 		const onClick = (event: MouseEvent) => {
 			// Pins and open thread cards live inside node elements: a click
 			// on one is never a placement. Leave the event alone so the pin
-			// or card handles its own click; just exit the mode.
+			// or card handles its own click; just exit the mode. The
+			// banner's cancel button likewise handles its own click.
 			const el = event.target instanceof Element ? event.target : null;
+			if (el?.closest(".critic-placement-banner")) return;
 			if (el?.closest(".critic-canvas-pin, .critic-canvas-card")) {
 				cleanup();
 				return;
@@ -556,6 +627,7 @@ export class CanvasCommentPins {
 			if (event.key === "Escape") cleanup();
 		};
 		const cleanup = () => {
+			banner.remove();
 			target.removeClass("critic-canvas-placing");
 			target.removeEventListener("click", onClick, true);
 			document.removeEventListener("keydown", onKey, true);
@@ -840,17 +912,21 @@ export class CanvasCommentPins {
 			attr: { type: "button" },
 		});
 		cancel.addEventListener("click", () => this.closeCard());
-		const help = actions.createSpan({ cls: "critic-composer-help" });
-		const helpButton = help.createEl("button", {
-			cls: "critic-icon-button critic-composer-help-button",
-			attr: { type: "button", "aria-label": "Show composer shortcuts" },
-		});
-		setIcon(helpButton, "keyboard");
-		help.createDiv({
-			cls: "critic-composer-help-tooltip",
-			text: formatComposerSubmitHint(Platform.isMacOS),
-			attr: { role: "tooltip" },
-		});
+		// The shortcut help advertises keys a phone doesn't have; the
+		// visible submit and cancel buttons are the whole story there.
+		if (!Platform.isMobile) {
+			const help = actions.createSpan({ cls: "critic-composer-help" });
+			const helpButton = help.createEl("button", {
+				cls: "critic-icon-button critic-composer-help-button",
+				attr: { type: "button", "aria-label": "Show composer shortcuts" },
+			});
+			setIcon(helpButton, "keyboard");
+			help.createDiv({
+				cls: "critic-composer-help-tooltip",
+				text: formatComposerSubmitHint(Platform.isMacOS),
+				attr: { role: "tooltip" },
+			});
+		}
 
 		const syncSubmit = () => {
 			submit.disabled = textarea.value.trim().length === 0;
@@ -905,7 +981,10 @@ export class CanvasCommentPins {
 			this.decideCardSide(view, card, key);
 		}
 		this.positionCard(view);
-		const onDocumentMouseDown = (event: MouseEvent) => {
+		// pointerdown, not mousedown: the canvas prevents default on its
+		// touch handling, which cancels the synthesized mouse events, so a
+		// mousedown listener never sees background taps on mobile.
+		const onDocumentPointerDown = (event: PointerEvent) => {
 			const target = event.target as Node | null;
 			if (target && (card.contains(target) || pin?.contains(target))) {
 				return;
@@ -937,12 +1016,16 @@ export class CanvasCommentPins {
 				post();
 			}
 		});
-		document.addEventListener("mousedown", onDocumentMouseDown, true);
+		document.addEventListener("pointerdown", onDocumentPointerDown, true);
 		document.addEventListener("keydown", onKeyDown, true);
 		card.dataset.criticCleanup = "true";
 		this.cardCleanup = () => {
 			popScope();
-			document.removeEventListener("mousedown", onDocumentMouseDown, true);
+			document.removeEventListener(
+				"pointerdown",
+				onDocumentPointerDown,
+				true,
+			);
 			document.removeEventListener("keydown", onKeyDown, true);
 		};
 		textarea.focus();
@@ -984,7 +1067,7 @@ export class CanvasCommentPins {
 		const edge = overlay.clientWidth || window.innerWidth;
 		card.classList.toggle(
 			"is-flipped",
-			pinLeft + PIN_SIZE + CARD_GAP + 320 > edge,
+			pinLeft + PIN_SIZE + CARD_GAP + cardWidthFor(edge) > edge,
 		);
 	}
 
@@ -1001,13 +1084,45 @@ export class CanvasCommentPins {
 		const pinLeft = parseFloat(pin.style.left);
 		const pinTop = parseFloat(pin.style.top);
 		const flip = card.classList.contains("is-flipped");
+		const overlay = card.parentElement;
+		const paneWidth = overlay?.clientWidth || window.innerWidth;
+		const paneHeight = overlay
+			? usablePaneHeight(overlay)
+			: window.innerHeight;
+		// A phone-width pane can't fit the designed card beside its pin on
+		// either side, so the card shrinks to the pane and clamps to its
+		// edges instead of clipping (the pane hides overflow).
+		const width = cardWidthFor(paneWidth);
+		const flipGap = CARD_FLIP_OFFSET - CARD_WIDTH;
+		const left = Math.min(
+			Math.max(
+				pinLeft + (flip ? -(width + flipGap) : CARD_GAP),
+				CARD_EDGE_MARGIN,
+			),
+			Math.max(CARD_EDGE_MARGIN, paneWidth - width - CARD_EDGE_MARGIN),
+		);
 		// A node pin hangs from its anchor, a carrier pin is tip-anchored;
-		// the card top-aligns with the pin's bubble either way.
-		const top = pin.dataset.criticCarrier ? pinTop - 4 : pinTop;
-		card.style.width = "320px";
-		card.style.left = `${pinLeft + (flip ? -CARD_FLIP_OFFSET : CARD_GAP)}px`;
+		// the card top-aligns with the pin's bubble either way — unless
+		// that would push the composer under the bottom edge.
+		const top = Math.min(
+			Math.max(
+				pin.dataset.criticCarrier ? pinTop - 4 : pinTop,
+				CARD_EDGE_MARGIN,
+			),
+			Math.max(
+				CARD_EDGE_MARGIN,
+				paneHeight - card.offsetHeight - CARD_EDGE_MARGIN,
+			),
+		);
+		card.style.width = `${width}px`;
+		card.style.left = `${left}px`;
 		card.style.top = `${top}px`;
-		card.style.setProperty("--critic-canvas-caret-y", "16px");
+		// The caret keeps pointing at the pin when clamping displaces the
+		// card; with no displacement this stays the designed 16px.
+		card.style.setProperty(
+			"--critic-canvas-caret-y",
+			`${Math.max(16, pinTop - top + 16)}px`,
+		);
 	}
 
 	closeCard(): void {

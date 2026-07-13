@@ -574,7 +574,10 @@
 }
 
 .critic-thread-message:hover .critic-message-actions,
-.critic-thread-message:focus-within .critic-message-actions {
+.critic-thread-message:focus-within .critic-message-actions,
+/* Touch has no hover: the selected card shows every message's actions,
+   matching the card-toolbar reveal below. */
+.critic-card-selected .critic-message-actions {
 	opacity: 1;
 }
 
@@ -980,6 +983,51 @@ a.critic-comment-link.is-unresolved {
 	cursor: crosshair !important;
 }
 
+/* Placement mode's visible cue: the cursor is invisible on touch and
+   Escape needs a keyboard, so the mode announces itself and carries
+   its own cancel. */
+.critic-placement-banner {
+	position: absolute;
+	top: 12px;
+	left: 50%;
+	transform: translateX(-50%);
+	z-index: 70;
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	padding: 6px 8px 6px 14px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 999px;
+	background: var(--background-primary);
+	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+	white-space: nowrap;
+}
+
+.critic-placement-banner-text {
+	color: var(--text-normal);
+	font-family: var(--font-interface);
+	font-size: var(--font-ui-small);
+}
+
+.critic-placement-banner .critic-text-button {
+	appearance: none;
+	border: none;
+	border-radius: 999px;
+	padding: 5px 14px;
+	background: transparent;
+	color: var(--text-muted);
+	font-family: var(--font-interface);
+	font-size: var(--font-ui-smaller);
+	font-weight: 600;
+	line-height: 1.2;
+	cursor: pointer;
+}
+
+.critic-placement-banner .critic-text-button:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
 /* The floating thread card, on the same screen-space overlay as the
    pins: constant size, no transforms. */
 .critic-canvas-card {
@@ -1065,4 +1113,38 @@ a.critic-comment-link.is-unresolved {
 	border-right: none;
 	border-top: none;
 	transform: rotate(-135deg);
+}
+
+/* ── Mobile ──────────────────────────────────────────────────────── */
+
+/* Touch targets: the desktop sizes sit well under the ~44px touch
+   guideline. Buttons that live in flexible rows get real size bumps;
+   the pin's geometry is position-critical (PIN_SIZE in pins.ts), so it
+   grows an invisible hit ring instead. */
+body.is-mobile .critic-sidebar .critic-icon-button,
+body.is-mobile .critic-canvas-card .critic-icon-button {
+	width: 36px;
+	height: 36px;
+}
+
+body.is-mobile .critic-sidebar .critic-text-button,
+body.is-mobile .critic-canvas-card .critic-text-button,
+body.is-mobile .critic-placement-banner .critic-text-button {
+	padding: 9px 18px;
+}
+
+body.is-mobile .cm-critic-comment-button {
+	width: 40px;
+	height: 40px;
+}
+
+body.is-mobile .critic-canvas-pin::after {
+	content: "";
+	position: absolute;
+	inset: -8px;
+}
+
+body.is-mobile .critic-thread-preview-actions .critic-thread-preview-link {
+	padding: 6px 4px;
+	display: inline-block;
 }

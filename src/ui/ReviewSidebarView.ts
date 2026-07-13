@@ -777,7 +777,11 @@ export class ReviewSidebarView extends ItemView {
 		parent: HTMLElement,
 		textarea: HTMLTextAreaElement,
 	): void {
-		const hint = formatComposerSubmitHint(Platform.isMacOS);
+		// Keyboard chords mean nothing on a phone; describe the visible
+		// buttons for assistive tech instead.
+		const hint = Platform.isMobile
+			? "Use the buttons below the text field to submit or cancel"
+			: formatComposerSubmitHint(Platform.isMacOS);
 		const descriptionId = `relay-comments-composer-hint-${++this.composerHintId}`;
 		textarea.setAttr("aria-describedby", descriptionId);
 		const description = parent.createDiv({
@@ -787,7 +791,12 @@ export class ReviewSidebarView extends ItemView {
 		description.setText(hint);
 	}
 
-	private addComposerHelpButton(parent: HTMLElement): HTMLButtonElement {
+	private addComposerHelpButton(
+		parent: HTMLElement,
+	): HTMLButtonElement | null {
+		// The button's whole payload is a keyboard-shortcut tooltip;
+		// there's nothing it can teach a phone.
+		if (Platform.isMobile) return null;
 		const hint = formatComposerSubmitHint(Platform.isMacOS);
 		const tooltipId = `relay-comments-composer-help-${++this.composerHintId}`;
 		const wrapper = parent.createSpan({ cls: "critic-composer-help" });

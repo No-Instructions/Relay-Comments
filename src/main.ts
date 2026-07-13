@@ -453,7 +453,10 @@ export default class RelayCommentsPlugin
 			}
 		};
 		const scheduleDismiss = () => this.scheduleThreadPreviewDismiss();
-		const onDocumentMouseDown = (event: MouseEvent) => {
+		// pointerdown rather than mousedown: touch handling that prevents
+		// default (canvas pans, editor gestures) suppresses the synthesized
+		// mouse events, so mousedown misses outside taps on mobile.
+		const onDocumentPointerDown = (event: PointerEvent) => {
 			const target = event.target as Node | null;
 			if (
 				target &&
@@ -488,7 +491,7 @@ export default class RelayCommentsPlugin
 		}, 120);
 		element.addEventListener("pointerenter", cancelDismiss);
 		element.addEventListener("pointerleave", scheduleDismiss);
-		document.addEventListener("mousedown", onDocumentMouseDown, true);
+		document.addEventListener("pointerdown", onDocumentPointerDown, true);
 		document.addEventListener("keydown", onDocumentKeyDown, true);
 		document.addEventListener("scroll", onScroll, true);
 		window.addEventListener("resize", onResize);
@@ -502,7 +505,11 @@ export default class RelayCommentsPlugin
 			cleanup: () => {
 				element.removeEventListener("pointerenter", cancelDismiss);
 				element.removeEventListener("pointerleave", scheduleDismiss);
-				document.removeEventListener("mousedown", onDocumentMouseDown, true);
+				document.removeEventListener(
+					"pointerdown",
+					onDocumentPointerDown,
+					true,
+				);
 				document.removeEventListener("keydown", onDocumentKeyDown, true);
 				document.removeEventListener("scroll", onScroll, true);
 				window.removeEventListener("resize", onResize);
