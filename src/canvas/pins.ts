@@ -1046,6 +1046,14 @@ export class CanvasCommentPins {
 			this.decideCardSide(view, card, key);
 		}
 		this.positionCard(view);
+		// The card's height settles after this first placement (comment
+		// bodies render, and focusing the composer can toggle the mobile
+		// navbar that bounds the pane) — waiting for the 400ms poll to
+		// re-clamp showed on film as the card hopping up almost a second
+		// after opening. Track the settle directly.
+		const resizeWatcher = new ResizeObserver(() => this.positionCard(view));
+		resizeWatcher.observe(card);
+		const settleTimer = window.setTimeout(() => this.positionCard(view), 120);
 		// pointerdown, not mousedown: the canvas prevents default on its
 		// touch handling, which cancels the synthesized mouse events, so a
 		// mousedown listener never sees background taps on mobile.
@@ -1086,6 +1094,8 @@ export class CanvasCommentPins {
 		card.dataset.criticCleanup = "true";
 		this.cardCleanup = () => {
 			popScope();
+			resizeWatcher.disconnect();
+			window.clearTimeout(settleTimer);
 			document.removeEventListener(
 				"pointerdown",
 				onDocumentPointerDown,
