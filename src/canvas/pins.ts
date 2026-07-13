@@ -1056,7 +1056,27 @@ export class CanvasCommentPins {
 			);
 			document.removeEventListener("keydown", onKeyDown, true);
 		};
+		this.sweepStaleActiveEditor();
 		textarea.focus();
+	}
+
+	/**
+	 * Obsidian's mobile toolbar update reads
+	 * `activeEditor?.editor.hasFocus()` with no null check on `.editor`
+	 * (verified against app.js). Canvas node selection churn (long-press,
+	 * edit-mode enter/exit) can leave workspace.activeEditor pointing at
+	 * a node child whose editor is gone, after which every toolbar update
+	 * throws until something replaces the entry. The card's focus
+	 * transitions are exactly when the toolbar looks, so they sweep the
+	 * stale entry first.
+	 */
+	private sweepStaleActiveEditor(): void {
+		const workspace = this.host.app.workspace as unknown as {
+			activeEditor: { editor?: unknown } | null;
+		};
+		if (workspace.activeEditor && !workspace.activeEditor.editor) {
+			workspace.activeEditor = null;
+		}
 	}
 
 	private cardCleanup: (() => void) | null = null;
@@ -1174,5 +1194,8 @@ export class CanvasCommentPins {
 		this.card = null;
 		this.cardKey = null;
 		this.cardOwner = null;
+		// Focus returns to the canvas here — another toolbar-update
+		// moment; see sweepStaleActiveEditor.
+		this.sweepStaleActiveEditor();
 	}
 }
