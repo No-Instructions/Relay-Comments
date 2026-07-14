@@ -42,6 +42,17 @@
 	text-decoration-thickness: 1px;
 }
 
+/* Obsidian's markdown parser reads a substitution's {~~ ... ~~} delimiters
+   as a ~~strikethrough~~ pair, and an ancestor's line-through propagates
+   through descendants in the ancestor's text color — a default-colored
+   strike across the green replacement text (caught by a blind demo review
+   on Android). Descendants cannot cancel it, so suppress the syntax strike
+   on wrappers that contain suggestion content; each half draws its own. */
+.cm-strikethrough:has(.cm-critic-deletion),
+.cm-strikethrough:has(.cm-critic-addition) {
+	text-decoration: none;
+}
+
 .cm-critic-highlight,
 .cm-critic-comment-anchor,
 .critic-preview-highlight {
