@@ -1397,13 +1397,13 @@ export default class RelayCommentsPlugin
 			leaf !== undefined
 				? [leaf]
 				: this.app.workspace.getLeavesOfType(VIEW_TYPE_CRITIC_REVIEW);
-		for (const reviewLeaf of leaves) {
-			reviewLeaf.detach();
-		}
-		// On mobile the right drawer outlives its detached view, staying
-		// open on Obsidian's blank "Empty" placeholder (caught by a blind
-		// demo review); closing the sidebar there means the whole drawer
-		// should slide away.
+		// On mobile, closing means sliding the whole drawer away. The view
+		// must stay attached while it slides: detaching first re-renders
+		// the drawer onto its next tab for the entire close animation
+		// (Outline's "No headings found", caught by a blind demo review
+		// on device — an earlier review caught the detach-only variant
+		// stranding the drawer on Obsidian's "Empty" placeholder).
+		// Reopening reveals the kept leaf.
 		if (Platform.isMobile && leaves.length > 0) {
 			const rightSplit = (
 				this.app.workspace as typeof this.app.workspace & {
@@ -1411,6 +1411,10 @@ export default class RelayCommentsPlugin
 				}
 			).rightSplit;
 			rightSplit?.collapse?.();
+			return;
+		}
+		for (const reviewLeaf of leaves) {
+			reviewLeaf.detach();
 		}
 	}
 
