@@ -685,6 +685,15 @@ a.critic-comment-link.is-unresolved {
 	border-radius: 10px;
 }
 
+/* The collapsed pill is empty by definition, but its line box overflows
+   the 36px frame by a hair, and Android's overlay scrollbar draws a
+   thumb straight through the rounded corner (caught by a blind demo
+   review on the AVD). Nothing to scroll — clip it. */
+.critic-thread-composer:not(:focus-within):not(.has-content)
+	.critic-thread-textarea {
+	overflow: hidden;
+}
+
 .critic-composer-textarea {
 	min-height: 64px;
 	resize: vertical;
@@ -1162,4 +1171,12 @@ body.is-mobile .critic-canvas-pin::after {
 body.is-mobile .critic-thread-preview-actions .critic-thread-preview-link {
 	padding: 6px 4px;
 	display: inline-block;
+}
+
+/* Android draws overlay scrollbar thumbs inside composer textareas
+   (squared bar through the pill's rounded corner on film); touch
+   scrolling doesn't need the chrome. */
+body.is-mobile .critic-thread-textarea::-webkit-scrollbar,
+body.is-mobile .critic-composer-textarea::-webkit-scrollbar {
+	display: none;
 }
