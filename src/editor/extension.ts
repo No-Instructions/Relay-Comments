@@ -144,7 +144,7 @@ export function createReviewEditorExtension(
 			private handleClick = (event: MouseEvent): void => {
 				const target = event.target as HTMLElement | null;
 				const anchor = target?.closest<HTMLElement>(
-					".cm-critic-thread-anchor",
+					".cm-critic-thread-anchor, .cm-critic-suggestion-anchor",
 				);
 				if (!anchor) return;
 				const from = Number(anchor.dataset.criticFrom);
