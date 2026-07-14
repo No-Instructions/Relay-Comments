@@ -48,15 +48,6 @@ resolve.
 
 ![A canvas card gets a comment from its right-click menu, then a freestanding pin lands between two cards](docs/canvas-comments.gif)
 
-## Review checklists
-
-Marked-up tasks stay real tasks. Highlight, comment on, or suggest a
-checklist item and its checkbox keeps rendering — and keeps working —
-inside the mark in the editor, so you can tick things off mid-review.
-Sidebar cards quote the task text without the `- [ ]` noise.
-
-![A comment lands on a checklist item and its checkbox still ticks off](docs/task-checklist.gif)
-
 ## Works standalone, better with Relay
 
 No account or plugin dependency required. When the
