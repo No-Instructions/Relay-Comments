@@ -19,6 +19,7 @@ test-results/
 tests/integration/
 tests/demos/
 demo-artifacts/
+video-evidence/
 wiki/
 
 # local development vault (Obsidian test bench)
