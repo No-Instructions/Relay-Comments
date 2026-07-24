@@ -48,12 +48,18 @@ resolve.
 
 ![A canvas card gets a comment from its right-click menu, then a freestanding pin lands between two cards](docs/canvas-comments.gif)
 
-## Works standalone, better with Relay
+## Authorship and identity
 
-No account or plugin dependency required. When the
-[Relay](https://relay.md) plugin is present, comments in shared folders
-resolve to real collaborator names and avatars, and threads update live
-as teammates type.
+No account or plugin dependency is required. Comments can use a plain
+author name such as `Bongo Cat`; when no identity service is available,
+Relay Comments settings ask for your name and an optional profile
+picture. [Relay](https://relay.md) and Obsidian Sync can instead supply
+your service identity. When both are available, choose one in Relay
+Comments settings.
+
+The `identities` array in the plugin's `data.json` is a directory for
+resolving other people's author IDs. Those entries are never treated as
+your own identity.
 
 ## Usage notes
 
@@ -83,12 +89,16 @@ Notes stay portable because review state is plain text in the
 | Highlight | `{==marked text==}` |
 | Comment | `{>>comment text<<}` |
 
-Comments written by the plugin carry attribution metadata in a
-backwards-compatible extension of the comment mark:
+Authored comments use the established `author` metadata field:
 
 ```
-{==the passage==}{{author="Maya Chen" date="2026-06-30T14:22:00Z">>Can we ground this sooner?<<}}
+{==the passage==}{{author="Bongo Cat">>Can we ground this sooner?<<}}
 ```
+
+`author` may be a display name or an ID understood by the selected
+identity provider or the local identity directory. When it is an ID,
+names, avatars, and colors are resolved when the note is displayed and
+are not duplicated into its Markdown.
 
 Any CriticMarkup-aware tool still reads the note; plain-Markdown tools see
 readable text with visible annotations.

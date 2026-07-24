@@ -19,7 +19,7 @@ Draft for discussion. This project is an Obsidian community plugin named Relay C
 2. Do not store comments in a separate non-Relay database as the primary source of truth.
 3. Do not require Relay for local CriticMarkup editing.
 4. Do not implement a full Markdown parser in this plugin unless Obsidian's rendering hooks prove insufficient.
-5. Do not invent a CriticMarkup dialect for the MVP. Author identity is Relay-derived; any later optional metadata format must remain backwards-compatible plain text.
+5. Keep authored markup minimal: use the established `author` field and do not add parallel identity properties.
 
 ## References
 
@@ -123,7 +123,7 @@ Sidebar content:
 2. A draft card for new comments when the user is adding a comment to the current selection.
 3. A document-ordered list of review cards. Each card represents one CriticMarkup mark, or one highlight plus immediately following comment when they form a standard highlighted-comment pair.
 4. Card body showing the proposed text change or comment text without raw delimiters.
-5. Card metadata showing mark type, document location, and Relay-derived author when available.
+5. Card metadata showing mark type, document location, and provider-resolved author when available.
 6. Inline card actions:
    - accept suggestion
    - reject suggestion
@@ -171,9 +171,9 @@ src/
     commands.ts
   preview/
     postprocessor.ts
-  relay/
-    api.ts
-    attribution.ts
+  identity/
+    types.ts
+    providers.ts
   ui/
     ReviewSidebarView.ts
     ReviewSidebar.svelte
@@ -325,22 +325,59 @@ Relay is optional. Relay Comments should discover Relay at runtime through Obsid
 
 Relay uses plugin id `system3-relay`. Consumers should use `plugin.api` instead of internal objects such as `_liveViews`, `sharedFolders`, `metadataBridge`, or raw Yjs documents.
 
-### Relay as Identity Provider
+### Identity Providers
 
-Relay should be the identity provider for review UI, but Relay Comments remains the document markup owner. The boundary is:
+Relay Comments owns review markup and consumes identity through a small
+provider interface. Service providers answer two questions: who is the
+current user, and whether a stored `author` value identifies a known
+identity. Resolver-only directories can answer the latter without
+claiming that one of their entries is the current user.
+Range attribution is an optional enhancement, not part of the core
+authorship model.
 
-1. Relay answers identity questions: who am I, who is this user ID, who authored this source range, who is online.
-2. Relay Comments answers review questions: what marks exist, how are they rendered, what source edits accept/reject/resolve should perform.
-3. Relay Comments must not read Relay internals such as `_liveViews`, Yjs maps, auth stores, or `RelayManager.users` directly.
-4. Relay must not need to know CriticMarkup syntax to provide identity. It only needs to answer path/range/user queries.
+```ts
+export interface Identity {
+  id: string;
+  name: string;
+  picture?: string;
+  color?: string;
+  colorLight?: string;
+}
 
-Relay already has the pieces this API needs:
+export interface IdentityResolver {
+  readonly id: "relay" | "obsidian-sync" | "configured";
+  readonly name: string;
 
-1. Plugin id `system3-relay`.
-2. `LoginManager.user` / `RelayManager.user` for the signed-in user.
-3. `RelayManager.users` for durable user lookup.
-4. Provider awareness state with `user.id`, `user.name`, `user.color`, and `user.colorLight`.
-5. Yjs item attribution logic in `UserAttributionPlugin`, including offline fallback colors.
+  isAvailable(): boolean;
+  resolveUser(id: string, path: string): Promise<Identity | null>;
+}
+
+export interface IdentityProvider extends IdentityResolver {
+  readonly id: "relay" | "obsidian-sync";
+
+  getCurrentUser(path: string): Promise<Identity | null>;
+
+  getAuthorForRange?(
+    path: string,
+    from: number,
+    to: number,
+  ): Promise<Identity | null>;
+}
+```
+
+The initial current-user providers are:
+
+1. Relay, through the public `plugin.api.identity` contract below.
+2. Obsidian Sync, through an isolated adapter around the private Sync
+   `userId` and `getUsernames()` surfaces.
+
+Configured identities in Relay Comments' `data.json` form a resolver
+directory for other people. They never supply the current user.
+
+Relay Comments must not read Relay internals such as `_liveViews`, Yjs
+maps, auth stores, `sharedFolders`, or `RelayManager.users` directly.
+The Obsidian Sync adapter is explicitly best-effort because Obsidian
+does not expose a supported public Sync identity API.
 
 ### Proposed Relay Public API
 
@@ -350,62 +387,32 @@ Relay exposes a stable object on its plugin instance:
 export interface RelayPublicApiV1 {
   version: 1;
   identity: RelayIdentityApi;
-  documents: RelayDocumentsApi;
-  attribution: RelayAttributionApi;
-  awareness: RelayAwarenessApi;
 }
 
-export interface RelayUserSummary {
+export interface RelayIdentity {
   id: string;
   name: string;
   picture?: string;
   color?: string;
   colorLight?: string;
-  isCurrentUser: boolean;
 }
 
 export interface RelayIdentityApi {
-  getCurrentUser(path?: string): RelayUserSummary | null;
-  resolveUser(userId: string, path?: string): RelayUserSummary | null;
-  listUsersForPath(path: string): RelayUserSummary[];
-}
+  getCurrentUser(path: string): Promise<RelayIdentity | null>;
+  resolveUser(id: string, path: string): Promise<RelayIdentity | null>;
 
-export interface RelayDocumentsApi {
-  getContext(path: string): RelayDocumentContext | null;
-}
-
-export interface RelayDocumentContext {
-  path: string;
-  virtualPath: string;
-  sharedFolderPath: string;
-  sharedFolderGuid: string;
-  relayId: string | null;
-  remoteSharedFolderId: string | null;
-  documentGuid: string | null;
-  isLoaded: boolean;
-  isWritable: boolean;
-}
-
-export interface RelayAttributionApi {
-  getAuthorsForRange(path: string, from: number, to: number): RelayAttributionRange[];
-  getDominantAuthorForRange(path: string, from: number, to: number): RelayUserSummary | null;
-}
-
-export interface RelayAttributionRange {
-  from: number;
-  to: number;
-  user: RelayUserSummary;
-}
-
-export interface RelayAwarenessApi {
-  getOnlineUsers(path: string): RelayUserSummary[];
+  getAuthorForRange?(
+    path: string,
+    from: number,
+    to: number,
+  ): Promise<RelayIdentity | null>;
 }
 ```
 
 Relay should announce API availability with a workspace event after load and after reload:
 
 ```ts
-app.workspace.trigger("system3-relay:api-ready", relayApi);
+app.workspace.trigger("system3-relay:api-ready:v1", relayApi);
 ```
 
 Relay Comments should also poll the plugin registry on load because plugin load order is not guaranteed:
@@ -416,38 +423,48 @@ const relay = app.plugins.plugins["system3-relay"] as
   | undefined;
 ```
 
-The API must not expose auth tokens. Email should not be included in `RelayUserSummary` for Relay Comments unless there is a deliberate privacy setting, because comments may be visible in screenshots and exports.
+The API must not expose auth tokens. Email is not part of the contract.
+Relay returns `null` for paths outside Relay shared folders.
 
-### Relay Comments Consumer API
+### Provider Selection
 
-This plugin should wrap Relay in an adapter so the rest of the code does not know whether Relay is present:
+When both service providers are available, settings show an identity
+provider selector containing Relay and Obsidian Sync. There is no
+automatic option. The selected service supplies the current user's ID
+and is tried first when resolving stored author IDs. When only one
+service is available, Relay Comments uses it without showing a selector.
 
-```ts
-export interface ReviewIdentityProvider {
-  getCurrentAuthor(path: string): ReviewAuthor | null;
-  resolveAuthor(userId: string): ReviewAuthor | null;
-  getAuthorForMark(path: string, mark: CriticMark): ReviewAuthor | null;
-  getOnlineAuthors(path: string): ReviewAuthor[];
-  subscribe(path: string, callback: () => void): () => void;
-}
+When no service provider is available, settings show fields for the
+current user's name and optional profile-picture URL. The name itself is
+written to `author`; Relay Comments does not generate an ID for it.
 
-export interface ReviewAuthor {
-  provider: "relay";
-  id: string;
-  name: string;
-  picture?: string;
-  color: string;
-  colorLight: string;
+If Relay is installed without the supported public identity API,
+settings explain that Relay must be updated and keep the local profile
+fields available.
+
+Configured identities use the same `Identity` schema:
+
+```json
+{
+  "identityProvider": null,
+  "authorName": "Bongo Cat",
+  "authorPicture": "https://example.com/bongo-cat.png",
+  "identities": [
+    {
+      "id": "architecture-reviewer",
+      "name": "Architecture reviewer",
+      "color": "#7c3aed",
+      "colorLight": "#7c3aed33"
+    }
+  ]
 }
 ```
 
-Resolution order for a sidebar card:
-
-1. If the mark has compatible imported metadata with a Relay user ID, call `resolveAuthor`.
-2. Otherwise call `getAuthorForMark`, which asks Relay attribution for mark-specific source ranges.
-3. If Relay is missing, the file is outside Relay, or attribution is unknown, render a neutral local reviewer identity.
-
-On comment or suggestion creation, Relay Comments should ask `getCurrentAuthor(path)` so the draft card can show the current Relay identity immediately. The source edit remains a normal editor transaction so Relay synchronization continues to work.
+These values live with the plugin's other settings in `data.json`.
+`authorName` and `authorPicture` describe the local user. Every entry in
+`identities` describes another author whose stored ID should be expanded.
+Different roles or models are separate directory entries; the schema
+does not need role, model, or protocol-specific fields.
 
 ### Optional Relay CRDT Review Store
 
@@ -495,53 +512,54 @@ Open policy questions for the CRDT store:
 
 ### Persisting Author Identity
 
-Core CriticMarkup does not define author fields. The default MVP should not invent a new source format for authors. For shared Relay documents, author identity is derived from Relay attribution and user lookup.
+Relay Comments writes exactly one identity property: `author`.
 
-The plugin may read compatibility metadata from imported Track Changes-style comments, for example `{{author="Daniel" date="2026-07-01">>comment<<}}`, but this is compatibility input, not the primary write format.
+```text
+{{author="Bongo Cat">>Comment text<<}}
+```
 
-If durable author stamps are needed outside Relay-shared files, add an explicit later setting. That setting should write a documented compatibility metadata format with:
+The value may be a literal display name, as in the example, or an opaque
+user ID issued by the active identity provider. Relay Comments first
+offers the value to the selected provider and then to the configured
+identity directory; if it is not resolved, it displays the value
+literally. This preserves ordinary authored CriticMarkup such as
+`author="Bongo Cat"` while allowing service IDs to expand into names,
+avatars, and colors.
 
-1. Relay user ID when available.
-2. Display-name snapshot for offline reading.
-3. Creation timestamp.
-4. No auth token or email.
+Relay Comments does not add a parallel `authorId`, provider name,
+picture, color, email, date, or generated short ID to CriticMarkup.
 
-### Suggestion Attribution Algorithm
+Early and imported metadata such as `authorId` or `date` may still be
+read for compatibility. A display-name `author` remains fully supported;
+new comments simply avoid writing any additional identity properties.
 
-CriticMarkup does not have native author fields. MVP author identity is Relay-derived only. The plugin should not parse or write structured author metadata inside CriticMarkup marks for the first usable version.
+Suggestion marks without an attached authored comment do not require an
+author. A provider that implements `getAuthorForRange` may enhance their
+display, but review behavior must never depend on range attribution.
 
-When Relay attribution is available:
+### Identity-Aware UI
 
-1. Addition author: author of the opening `{++` delimiter, falling back to majority author across delimiters and added text.
-2. Deletion author: author of the opening `{--` delimiter, falling back to majority author across delimiters.
-3. Substitution author: author of the opening `{~~` delimiter or `~>` separator, falling back to majority author across delimiters and new text.
-4. Comment author: majority author of the comment body, falling back to delimiter author.
-5. Highlight author: author of the opening `{==` delimiter, falling back to highlighted text majority.
-
-This deliberately distinguishes "who wrote the original prose" from "who created the suggested change."
-
-### Relay-Aware UI
-
-When Relay data is available, the plugin should show:
+When identity data is available, the plugin should show:
 
 1. Author chip/avatar on comment popovers and suggestion widgets.
 2. Review sidebar filters by author, mark type, and file.
-3. Online/offline presence for users attached to open shared documents.
-4. Tooltips showing author name and suggestion type.
+3. Tooltips showing author name and suggestion type.
 
-When Relay data is unavailable:
+When identity data is unavailable:
 
 1. Keep all CriticMarkup features active.
-2. Hide author-specific controls.
-3. Display comments using only their plain text content.
+2. Display the unresolved `author` ID when one is present.
+3. Display comments using only their plain text content otherwise.
 
 ## Settings
 
 Initial settings:
 
-1. Show author chips when Relay is available.
+1. Identity provider when multiple services are available, or local
+   name and profile picture when none are available.
 2. Show inline comment controls.
-3. Enable review sidebar.
+3. Open the review sidebar when selecting comments.
+4. Show comment previews on hover.
 
 ## Testing Strategy
 
@@ -551,7 +569,7 @@ Unit tests:
 2. Parser invalid syntax cases.
 3. Accept/reject transformations.
 4. Reading-mode render policy output.
-5. Attribution-owner selection from mocked Relay ranges.
+5. Identity-provider selection and resolution.
 
 Integration tests:
 
@@ -587,9 +605,8 @@ Manual Obsidian checks:
 ### Phase 2 - Relay Public API
 
 1. Add `RelayPublicApiV1` to Relay.
-2. Move attribution range logic behind the API.
-3. Integrate this plugin with `plugin.api`.
-4. Add mocked Relay API tests.
+2. Integrate this plugin with `plugin.api.identity`.
+3. Add mocked Relay API tests.
 
 ### Phase 3 - Robust Review UX
 
