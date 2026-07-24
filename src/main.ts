@@ -64,6 +64,22 @@ import {
 	ReviewSidebarView,
 	VIEW_TYPE_CRITIC_REVIEW,
 } from "./ui/ReviewSidebarView";
+import {
+	ConfiguredIdentityResolver,
+	createIdentityProviders,
+	getRelayIdentitySupportStatus,
+	providerById,
+	selectIdentityProvider,
+} from "./identity/providers";
+import type {
+	Identity,
+	IdentityProvider,
+	IdentityProviderId,
+	IdentityProviderOption,
+	IdentityResolver,
+	IdentityResolverId,
+} from "./identity/types";
+import { formatAuthoredComment } from "./identity/markup";
 
 export interface ActiveReviewState {
 	file: TFile;
@@ -86,7 +102,7 @@ export interface ReviewerIdentity {
 	picture?: string;
 	color?: string;
 	colorLight?: string;
-	source: "metadata" | "relay" | "fallback";
+	source: "metadata" | "fallback" | "local" | IdentityResolverId;
 }
 
 interface ClientRectLike {
@@ -124,77 +140,6 @@ interface ActiveThreadPreview {
 	cleanup: () => void;
 }
 
-interface RelayUserLike {
-	id?: string;
-	name?: string;
-	email?: string;
-	picture?: string;
-	color?: string | { color?: string; light?: string };
-	colorLight?: string;
-}
-
-interface RelayUserCollectionLike {
-	get(id: string): RelayUserLike | undefined;
-}
-
-interface RelayUserIdListLike {
-	toArray(): unknown[];
-}
-
-interface RelayUserEntryLike {
-	get(key: string): RelayUserIdListLike | undefined;
-}
-
-interface RelayYItemLike {
-	length: number;
-	deleted?: boolean;
-	id?: { client?: unknown };
-	right?: RelayYItemLike | null;
-}
-
-interface RelayYTextLike {
-	_start?: RelayYItemLike | null;
-}
-
-interface RelayYUserMapLike {
-	forEach(callback: (entry: RelayUserEntryLike, userId: string) => void): void;
-}
-
-interface RelayYDocLike {
-	getMap(name: string): RelayYUserMapLike;
-	getText(name: string): RelayYTextLike;
-}
-
-interface RelayDocumentLike {
-	localDoc?: RelayYDocLike;
-}
-
-interface RelaySharedFolderLike {
-	proxy?: {
-		getDoc(path: string): RelayDocumentLike | undefined;
-	};
-	getUserDisplayName?(userId: string): string | undefined;
-}
-
-interface RelaySharedFoldersLike {
-	lookup(path: string): RelaySharedFolderLike | undefined;
-	manager?: {
-		user?: RelayUserLike;
-		users?: RelayUserCollectionLike;
-	};
-}
-
-interface RelayPluginLike {
-	loginManager?: {
-		user?: RelayUserLike;
-	};
-	relayManager?: {
-		user?: RelayUserLike;
-		users?: RelayUserCollectionLike;
-	};
-	sharedFolders?: RelaySharedFoldersLike;
-}
-
 export default class RelayCommentsPlugin
 	extends Plugin
 	implements ReviewEditorController
@@ -211,9 +156,17 @@ export default class RelayCommentsPlugin
 	private activeThreadPreview: ActiveThreadPreview | null = null;
 	private previewId = 0;
 	private readonly editorExtensions: Extension[] = [];
+	private identityProviders: IdentityProvider[] = [];
+	private configuredIdentityResolver!: IdentityResolver;
+	private readonly identityCache = new Map<string, ReviewerIdentity | null>();
+	private readonly identityRequests = new Map<string, Promise<void>>();
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
+		this.identityProviders = createIdentityProviders(this.app);
+		this.configuredIdentityResolver = new ConfiguredIdentityResolver(
+			() => this.settings.identities,
+		);
 
 		this.registerView(
 			VIEW_TYPE_CRITIC_REVIEW,
@@ -236,6 +189,7 @@ export default class RelayCommentsPlugin
 
 		this.registerCommands();
 		this.registerWorkspaceEvents();
+		void this.refreshCurrentIdentity();
 		this.queueEditorExtensionRefresh(0);
 		this.queueEditorExtensionRefresh(250);
 
@@ -715,46 +669,70 @@ export default class RelayCommentsPlugin
 		element.toggleClass("is-above", placedAbove);
 	}
 
-	getCurrentReviewerIdentity(): ReviewerIdentity {
-		return this.getCurrentRelayIdentity() ?? fallbackIdentity();
+	getCurrentReviewerIdentity(path?: string | null): ReviewerIdentity {
+		const filePath =
+			path ?? this.app.workspace.getActiveFile()?.path ?? this.lastMarkdownPath;
+		if (!filePath) return fallbackIdentity();
+		const key = this.identityCacheKey("current", filePath);
+		if (this.identityCache.has(key)) {
+			return this.identityCache.get(key) ?? fallbackIdentity();
+		}
+		this.queueIdentityRequest(key, async () => {
+			return this.resolveCurrentIdentity(filePath);
+		});
+		return fallbackIdentity();
+	}
+
+	async getCurrentReviewerIdentityAsync(
+		path: string,
+	): Promise<ReviewerIdentity> {
+		const key = this.identityCacheKey("current", path);
+		if (this.identityCache.has(key)) {
+			return this.identityCache.get(key) ?? fallbackIdentity();
+		}
+		const identity = await this.resolveCurrentIdentity(path);
+		this.identityCache.set(key, identity);
+		return identity ?? fallbackIdentity();
 	}
 
 	getReviewerIdentityForMark(
 		mark: CriticMark,
 		filePath?: string | null,
 	): ReviewerIdentity {
-		// A persisted Relay user ID is the strongest signal: it survives
-		// display-name changes and needs no attribution guessing.
-		const metadataAuthorId = mark.metadata?.authorId?.trim();
-		if (metadataAuthorId) {
-			const resolved = this.resolveRelayUserById(metadataAuthorId);
-			if (resolved) return resolved;
-		}
 		const metadataAuthor = mark.metadata?.author?.trim();
+		// Early Relay Comments builds wrote an ID in authorId and a display
+		// name in author. Prefer the actual ID when reading those marks.
+		const author = mark.metadata?.authorId?.trim() ?? metadataAuthor;
 		const resolvedFilePath =
 			filePath ?? this.app.workspace.getActiveFile()?.path ?? null;
-		const relayIdentity = this.getRelayIdentityForRange(
-			resolvedFilePath,
-			mark.contentFrom,
-			mark.contentTo,
-		);
-		if (
-			relayIdentity &&
-			(!metadataAuthor || isSameReviewerName(relayIdentity.name, metadataAuthor))
-		) {
-			return relayIdentity;
-		}
-		if (metadataAuthor) {
-			const currentRelayIdentity = this.getCurrentRelayIdentity();
-			if (
-				currentRelayIdentity &&
-				isSameReviewerName(currentRelayIdentity.name, metadataAuthor)
-			) {
-				return currentRelayIdentity;
+		if (author && resolvedFilePath) {
+			const unresolvedName =
+				mark.metadata?.authorId?.trim() && metadataAuthor
+					? metadataAuthor
+					: author;
+			const key = this.identityCacheKey("author", resolvedFilePath, author);
+			if (this.identityCache.has(key)) {
+				return (
+					this.identityCache.get(key) ?? {
+						id: author,
+						name: unresolvedName,
+						source: "metadata",
+					}
+				);
 			}
-			return { name: metadataAuthor, source: "metadata" };
+			this.queueIdentityRequest(key, async () => {
+				return this.resolveAuthorIdentity(author, resolvedFilePath);
+			});
+			return { id: author, name: unresolvedName, source: "metadata" };
 		}
-		return relayIdentity ?? fallbackIdentity();
+		if (author) {
+			return {
+				id: author,
+				name: metadataAuthor ?? author,
+				source: "metadata",
+			};
+		}
+		return fallbackIdentity();
 	}
 
 	private findMarkRunAtRange(
@@ -946,6 +924,8 @@ export default class RelayCommentsPlugin
 
 	async saveSettingsAndRefresh(): Promise<void> {
 		await this.saveData(this.settings);
+		this.identityCache.clear();
+		void this.refreshCurrentIdentity();
 		this.bumpRenderVersion();
 	}
 
@@ -1014,7 +994,7 @@ export default class RelayCommentsPlugin
 		this.startCommentDraft(info?.file?.path ?? null, from, to, selectedText);
 	}
 
-	commitCommentDraft(comment: string): void {
+	async commitCommentDraft(comment: string): Promise<void> {
 		if (!this.commentDraft) return;
 		const draft = this.commentDraft;
 		const view = this.getMarkdownViewByPath(draft.filePath);
@@ -1028,12 +1008,22 @@ export default class RelayCommentsPlugin
 			new Notice("Select text to comment on.");
 			return;
 		}
-		const commentMarkup = this.formatAttachedCommentMarkup(comment);
+		const identity = await this.getCurrentReviewerIdentityAsync(draft.filePath);
+		// Identity lookup may involve the network. Recheck that the same draft
+		// and editor are still active before applying its source edit.
+		if (this.commentDraft !== draft) return;
+		const refreshedView = this.getMarkdownViewByPath(draft.filePath);
+		const refreshedEditor = refreshedView?.editor;
+		if (!refreshedEditor || refreshedView.file?.path !== draft.filePath) {
+			new Notice("Open the commented note before saving this comment.");
+			return;
+		}
+		const commentMarkup = this.formatAttachedCommentMarkup(comment, identity);
 		const insertion = `{==${draft.selectedText}==}${commentMarkup}`;
-		editor.replaceRange(
+		refreshedEditor.replaceRange(
 			insertion,
-			editor.offsetToPos(draft.from),
-			editor.offsetToPos(draft.to),
+			refreshedEditor.offsetToPos(draft.from),
+			refreshedEditor.offsetToPos(draft.to),
 			"relay-comments",
 		);
 		this.commentDraft = null;
@@ -1127,113 +1117,124 @@ export default class RelayCommentsPlugin
 		return (editor as unknown as { cm?: CodeMirrorAdapter }).cm ?? null;
 	}
 
-	private resolveRelayUserById(userId: string): ReviewerIdentity | null {
-		const relay = this.getRelayPlugin();
-		if (!relay) return null;
-		const user =
-			relay.relayManager?.users?.get(userId) ??
-			relay.sharedFolders?.manager?.users?.get(userId);
-		return userToIdentity(user, "relay");
+	getAvailableIdentityProviders(): IdentityProviderOption[] {
+		return this.identityProviders
+			.filter((provider) => provider.isAvailable())
+			.map(({ id, name }) => ({ id, name }));
 	}
 
-	private getCurrentRelayIdentity(): ReviewerIdentity | null {
-		const relay = this.getRelayPlugin();
-		const user =
-			relay?.loginManager?.user ??
-			relay?.relayManager?.user ??
-			relay?.sharedFolders?.manager?.user;
-		return userToIdentity(user, "relay");
-	}
-
-	private getRelayIdentityForRange(
-		filePath: string | null,
-		fromOffset: number,
-		toOffset: number,
-	): ReviewerIdentity | null {
-		if (!filePath) return null;
-		const relay = this.getRelayPlugin();
-		const folder = relay?.sharedFolders?.lookup(filePath);
-		const ydoc = folder?.proxy?.getDoc(filePath)?.localDoc;
-		if (!relay || !folder || !ydoc) return null;
-
-		const userId = this.getDominantRelayUserId(ydoc, fromOffset, toOffset);
-		if (!userId) return null;
-		return this.resolveRelayUserIdentity(relay, folder, userId);
-	}
-
-	private getDominantRelayUserId(
-		ydoc: RelayYDocLike,
-		fromOffset: number,
-		toOffset: number,
-	): string | null {
-		const clientToUser = new Map<string, string>();
-		ydoc.getMap("users").forEach((entry, userId) => {
-			const ids = entry.get("ids")?.toArray();
-			if (!ids) return;
-			for (const clientId of ids) {
-				clientToUser.set(String(clientId), userId);
-			}
-		});
-
-		const counts = new Map<string, number>();
-		let pos = 0;
-		let item = ydoc.getText("contents")._start ?? null;
-		while (item) {
-			const length = item.length;
-			if (!item.deleted) {
-				const start = pos;
-				const end = pos + length;
-				const overlap = Math.max(
-					0,
-					Math.min(toOffset, end) - Math.max(fromOffset, start),
-				);
-				const userId = clientToUser.get(String(item.id?.client));
-				if (overlap > 0 && userId) {
-					counts.set(userId, (counts.get(userId) ?? 0) + overlap);
-				}
-				pos = end;
-			}
-			item = item.right ?? null;
-		}
-
-		let bestUserId: string | null = null;
-		let bestCount = 0;
-		for (const [userId, count] of counts) {
-			if (count > bestCount) {
-				bestUserId = userId;
-				bestCount = count;
-			}
-		}
-		return bestUserId;
-	}
-
-	private resolveRelayUserIdentity(
-		relay: RelayPluginLike,
-		folder: RelaySharedFolderLike,
-		userId: string,
-	): ReviewerIdentity {
-		const user =
-			relay.relayManager?.users?.get(userId) ??
-			relay.sharedFolders?.manager?.users?.get(userId);
-		const identity = userToIdentity(user, "relay");
-		if (identity) return identity;
-
-		const displayName = folder.getUserDisplayName?.(userId)?.trim();
-		return {
-			name: displayName || userId,
-			source: "relay",
-		};
-	}
-
-	private getRelayPlugin(): RelayPluginLike | null {
-		const appWithPlugins = this.app as unknown as {
-			plugins?: { plugins?: Record<string, unknown> };
-		};
+	getSelectedIdentityProviderId(): IdentityProviderId | null {
 		return (
-			(appWithPlugins.plugins?.plugins?.["system3-relay"] as
-				| RelayPluginLike
-				| undefined) ?? null
+			selectIdentityProvider(
+				this.identityProviders,
+				this.settings.identityProvider,
+			)?.id ?? null
 		);
+	}
+
+	getRelayIdentitySupportStatus(): ReturnType<
+		typeof getRelayIdentitySupportStatus
+	> {
+		return getRelayIdentitySupportStatus(this.app);
+	}
+
+	private async refreshCurrentIdentity(): Promise<void> {
+		const path =
+			this.app.workspace.getActiveFile()?.path ?? this.lastMarkdownPath;
+		if (!path) return;
+		await this.getCurrentReviewerIdentityAsync(path);
+		this.bumpRenderVersion();
+	}
+
+	private getSelectedIdentityProvider(): IdentityProvider | null {
+		const selected = this.getSelectedIdentityProviderId();
+		return selected ? providerById(this.identityProviders, selected) : null;
+	}
+
+	private async resolveCurrentIdentity(
+		path: string,
+	): Promise<ReviewerIdentity | null> {
+		const provider = this.getSelectedIdentityProvider();
+		if (provider) {
+			try {
+				const identity = await provider.getCurrentUser(path);
+				if (identity) return providerIdentity(identity, provider.id);
+			} catch {
+				// Providers are optional integrations. A failure must not
+				// prevent standalone comments from working.
+			}
+		}
+		return provider ? null : this.getLocalReviewerIdentity();
+	}
+
+	private async resolveAuthorIdentity(
+		author: string,
+		path: string,
+	): Promise<ReviewerIdentity | null> {
+		const provider = this.getSelectedIdentityProvider();
+		const resolvers: IdentityResolver[] = [
+			...(provider ? [provider] : []),
+			this.configuredIdentityResolver,
+		];
+		for (const resolver of resolvers) {
+			if (!resolver.isAvailable()) continue;
+			try {
+				const identity = await resolver.resolveUser(author, path);
+				if (identity) return providerIdentity(identity, resolver.id);
+			} catch {
+				// Resolver failures degrade to the unresolved author value
+				// instead of breaking review rendering.
+			}
+		}
+		const local = this.getLocalReviewerIdentity();
+		if (local?.id === author) return local;
+		return null;
+	}
+
+	private getLocalReviewerIdentity(): ReviewerIdentity | null {
+		const name = this.settings.authorName.trim();
+		if (!name) return null;
+		const picture = this.settings.authorPicture.trim();
+		return {
+			id: name,
+			name,
+			...(picture ? { picture } : {}),
+			source: "local",
+		};
+	}
+
+	private queueIdentityRequest(
+		key: string,
+		resolve: () => Promise<ReviewerIdentity | null>,
+	): void {
+		if (this.identityRequests.has(key)) return;
+		const request = resolve()
+			.then((identity) => {
+				this.identityCache.set(key, identity);
+				this.bumpRenderVersion();
+			})
+			.catch(() => {
+				this.identityCache.set(key, null);
+			})
+			.finally(() => {
+				this.identityRequests.delete(key);
+			});
+		this.identityRequests.set(key, request);
+	}
+
+	private identityCacheKey(
+		kind: "current" | "author",
+		path: string,
+		author = "",
+	): string {
+		return [
+			kind,
+			this.getSelectedIdentityProviderId() ?? "",
+			this.settings.authorName,
+			this.settings.authorPicture,
+			path,
+			author,
+		].join("\u0000");
 	}
 
 	private scrollRenderedRangeIntoView(
@@ -1292,15 +1293,20 @@ export default class RelayCommentsPlugin
 		this.bumpRenderVersion();
 	}
 
-	insertReplyToMark(mark: CriticMark, reply: string): boolean {
+	async insertReplyToMark(mark: CriticMark, reply: string): Promise<boolean> {
 		const view = this.getCurrentMarkdownView();
 		const editor = view?.editor;
-		if (!editor) return false;
-		const cm = this.getCodeMirrorEditor(editor);
+		const path = view?.file?.path;
+		if (!editor || !path) return false;
+		const identity = await this.getCurrentReviewerIdentityAsync(path);
+		const refreshedView = this.getCurrentMarkdownView();
+		const refreshedEditor = refreshedView?.editor;
+		if (!refreshedEditor || refreshedView.file?.path !== path) return false;
+		const cm = this.getCodeMirrorEditor(refreshedEditor);
 		const scrollTop = cm?.scrollDOM?.scrollTop;
-		editor.replaceRange(
-			this.formatAttachedCommentMarkup(reply),
-			editor.offsetToPos(mark.to),
+		refreshedEditor.replaceRange(
+			this.formatAttachedCommentMarkup(reply, identity),
+			refreshedEditor.offsetToPos(mark.to),
 			undefined,
 			"relay-comments",
 		);
@@ -1331,21 +1337,22 @@ export default class RelayCommentsPlugin
 		return true;
 	}
 
-	private formatCommentMarkup(comment: string): string {
-		const identity = this.getCurrentReviewerIdentity();
-		const metadata: string[] = [];
-		if (identity.source === "relay" && identity.id) {
-			metadata.push(`authorId="${formatMetadataValue(identity.id)}"`);
-		}
-		metadata.push(
-			`author="${formatMetadataValue(identity.name)}"`,
-			`date="${new Date().toISOString()}"`,
-		);
-		return `{{${metadata.join(" ")}>>${sanitizeCommentText(comment)}<<}}`;
+	private formatCommentMarkup(
+		comment: string,
+		identity: ReviewerIdentity,
+	): string {
+		const content = sanitizeCommentText(comment);
+		return formatAuthoredComment(content, identity.id);
 	}
 
-	private formatAttachedCommentMarkup(comment: string): string {
-		return `${CRITIC_SECTION_SEPARATOR}${this.formatCommentMarkup(comment)}`;
+	private formatAttachedCommentMarkup(
+		comment: string,
+		identity: ReviewerIdentity,
+	): string {
+		return `${CRITIC_SECTION_SEPARATOR}${this.formatCommentMarkup(
+			comment,
+			identity,
+		)}`;
 	}
 
 	async openReviewSidebar(): Promise<void> {
@@ -1524,6 +1531,14 @@ export default class RelayCommentsPlugin
 
 	private registerWorkspaceEvents(): void {
 		this.registerEvent(
+			(this.app.workspace as unknown as {
+				on(name: "system3-relay:api-ready:v1", callback: () => void): EventRef;
+			}).on("system3-relay:api-ready:v1", () => {
+				this.identityCache.clear();
+				void this.refreshCurrentIdentity();
+			}),
+		);
+		this.registerEvent(
 			this.app.workspace.on("editor-menu", (menu, editor, info) => {
 				this.addEditorMenuItems(menu, editor, info);
 			}),
@@ -1591,6 +1606,7 @@ export default class RelayCommentsPlugin
 				this.hideThreadPreview();
 				this.queueEditorExtensionRefresh(0);
 				this.refreshReviewSidebars();
+				void this.refreshCurrentIdentity();
 			}),
 		);
 	}
@@ -1692,33 +1708,14 @@ function rectFromElement(element: HTMLElement): ClientRectLike {
 	};
 }
 
-function userToIdentity(
-	user: RelayUserLike | undefined,
-	source: ReviewerIdentity["source"],
-): ReviewerIdentity | null {
-	const name = user?.name?.trim();
-	if (!user || !name) return null;
-	const color =
-		typeof user.color === "string" ? user.color : user.color?.color;
-	const colorLight =
-		user.colorLight ??
-		(typeof user.color === "string" ? undefined : user.color?.light);
+function providerIdentity(
+	identity: Identity,
+	source: IdentityResolverId,
+): ReviewerIdentity {
 	return {
-		id: user.id,
-		name,
-		picture: user.picture,
-		color,
-		colorLight,
+		...identity,
 		source,
 	};
-}
-
-function isSameReviewerName(left: string, right: string): boolean {
-	return left.trim().toLocaleLowerCase() === right.trim().toLocaleLowerCase();
-}
-
-function formatMetadataValue(value: string): string {
-	return value.replace(/"/g, "'");
 }
 
 function sanitizeCommentText(value: string): string {

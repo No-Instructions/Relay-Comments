@@ -14,11 +14,19 @@ describe("resolveSettings", () => {
 				showInlineActions: false,
 				openSidebarOnCommentSelect: false,
 				showHoverPreview: false,
+				identityProvider: "obsidian-sync",
+				identities: [{ id: "architect", name: "Architecture reviewer" }],
+				authorName: " Bongo Cat ",
+				authorPicture: " https://example.com/bongo.png ",
 			}),
 		).toEqual({
 			showInlineActions: false,
 			openSidebarOnCommentSelect: false,
 			showHoverPreview: false,
+			identityProvider: "obsidian-sync",
+			identities: [{ id: "architect", name: "Architecture reviewer" }],
+			authorName: "Bongo Cat",
+			authorPicture: "https://example.com/bongo.png",
 		});
 	});
 
@@ -56,5 +64,51 @@ describe("resolveSettings", () => {
 				enableReviewSidebar: true,
 			}).openSidebarOnCommentSelect,
 		).toBe(false);
+	});
+
+	it("normalizes configured identities from data.json", () => {
+		expect(
+			resolveSettings({
+				identities: [
+					{
+						id: " architect ",
+						name: " Architecture reviewer ",
+						picture: " avatar.png ",
+						color: " #123456 ",
+						colorLight: "",
+						extra: "ignored",
+					},
+					{ id: "architect", name: "Duplicate" },
+					{ id: "", name: "Missing id" },
+					null,
+				],
+			}),
+		).toMatchObject({
+			identityProvider: null,
+			identities: [
+				{
+					id: "architect",
+					name: "Architecture reviewer",
+					picture: "avatar.png",
+					color: "#123456",
+				},
+			],
+		});
+	});
+
+	it("falls back from unknown provider and malformed identities", () => {
+		expect(
+			resolveSettings({
+				identityProvider: "unknown",
+				identities: "not-an-array",
+				authorName: 42,
+				authorPicture: {},
+			}),
+		).toMatchObject({
+			identityProvider: null,
+			identities: [],
+			authorName: "",
+			authorPicture: "",
+		});
 	});
 });

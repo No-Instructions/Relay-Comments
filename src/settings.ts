@@ -3,6 +3,7 @@ import {
 	RELAY_COMMENTS_BUILD_ID,
 	RELAY_COMMENTS_VERSION,
 } from "./buildInfo";
+import type { IdentityProviderId } from "./identity/types";
 import type RelayCommentsPlugin from "./main";
 
 export {
@@ -21,6 +22,8 @@ export class RelayCommentsSettingTab extends PluginSettingTab {
 		containerEl.empty();
 		containerEl.addClass("relay-comments-settings-tab");
 		containerEl.createEl("h2", { text: "Relay Comments" });
+
+		this.renderIdentitySettings(containerEl);
 
 		new Setting(containerEl)
 			.setName("Open sidebar when selecting comments")
@@ -65,6 +68,74 @@ export class RelayCommentsSettingTab extends PluginSettingTab {
 			});
 
 		this.renderVersionLabel(containerEl);
+	}
+
+	private renderIdentitySettings(containerEl: HTMLElement): void {
+		const providers = this.plugin.getAvailableIdentityProviders();
+		if (this.plugin.getRelayIdentitySupportStatus() === "unsupported") {
+			const warning = containerEl.createDiv({
+				cls: "relay-comments-identity-warning",
+			});
+			warning.createDiv({
+				cls: "relay-comments-identity-warning-title",
+				text: "Relay identity needs an update",
+			});
+			warning.createDiv({
+				text: "Relay is installed, but this version does not support comment identities. Update Relay to use it as your identity provider.",
+			});
+		}
+
+		if (providers.length > 1) {
+			new Setting(containerEl)
+				.setName("Identity provider")
+				.setDesc(
+					"Choose which service supplies your identity when you add comments.",
+				)
+				.addDropdown((dropdown) => {
+					for (const provider of providers) {
+						dropdown.addOption(provider.id, provider.name);
+					}
+					const selected =
+						this.plugin.getSelectedIdentityProviderId() ?? providers[0].id;
+					dropdown.setValue(selected).onChange(async (value) => {
+						this.plugin.settings.identityProvider =
+							value as IdentityProviderId;
+						await this.plugin.saveSettingsAndRefresh();
+					});
+				});
+		}
+
+		if (providers.length > 0) return;
+
+		new Setting(containerEl)
+			.setName("Your name")
+			.setDesc(
+				"Written directly to the author field when you add a comment.",
+			)
+			.addText((text) => {
+				text
+					.setPlaceholder("Bongo Cat")
+					.setValue(this.plugin.settings.authorName)
+					.onChange(async (value) => {
+						this.plugin.settings.authorName = value;
+						await this.plugin.saveSettingsAndRefresh();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName("Profile picture")
+			.setDesc(
+				"Optional image URL used for your avatar on this device. It is not written into Markdown.",
+			)
+			.addText((text) => {
+				text
+					.setPlaceholder("https://example.com/avatar.png")
+					.setValue(this.plugin.settings.authorPicture)
+					.onChange(async (value) => {
+						this.plugin.settings.authorPicture = value;
+						await this.plugin.saveSettingsAndRefresh();
+					});
+			});
 	}
 
 	private renderVersionLabel(containerEl: HTMLElement): void {

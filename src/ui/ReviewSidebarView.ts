@@ -454,7 +454,7 @@ export class ReviewSidebarView extends ItemView {
 	private commitDraftComment(textarea: HTMLTextAreaElement): void {
 		const value = textarea.value.trim();
 		if (value.length === 0) return;
-		this.plugin.commitCommentDraft(value);
+		void this.plugin.commitCommentDraft(value);
 	}
 
 	private renderItem(
@@ -1069,18 +1069,18 @@ export class ReviewSidebarView extends ItemView {
 		return confirmDiscardDraft(this.app);
 	}
 
-	private commitThreadReply(
+	private async commitThreadReply(
 		item: ReviewItem,
 		mark: CriticMark,
 		textarea: HTMLTextAreaElement,
-	): void {
+	): Promise<void> {
 		const value = textarea.value.trim();
 		if (value.length === 0) return;
 		const previousValue = textarea.value;
 		textarea.value = "";
 		this.replyDrafts.delete(item.id);
 		this.replyDraftItemId = null;
-		if (!this.plugin.insertReplyToMark(mark, value)) {
+		if (!(await this.plugin.insertReplyToMark(mark, value))) {
 			textarea.value = previousValue;
 			this.replyDrafts.set(item.id, previousValue);
 			this.replyDraftItemId = item.id;
