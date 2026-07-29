@@ -1,4 +1,4 @@
-import type { App } from "obsidian";
+import type { App, EventRef } from "obsidian";
 import type {
 	Identity,
 	IdentityProvider,
@@ -7,24 +7,23 @@ import type {
 	IdentityResolver,
 } from "./types";
 
+interface RelayObservableLike<T> {
+	readonly value: T;
+	subscribe(run: (value: T) => void): () => void;
+}
+
+interface RelayObservableMapLike<K, V>
+	extends RelayObservableLike<RelayObservableMapLike<K, V>> {
+	get(key: K): V | undefined;
+}
+
 interface RelayIdentityApiLike {
-	getCurrentUser(path: string): IdentityLike | null | Promise<IdentityLike | null>;
-	resolveUser(
-		id: string,
-		path: string,
-	): IdentityLike | null | Promise<IdentityLike | null>;
-	getAuthorForRange?(
-		path: string,
-		from: number,
-		to: number,
-	): IdentityLike | null | Promise<IdentityLike | null>;
+	users: RelayObservableMapLike<string, IdentityLike>;
+	currentUser: RelayObservableLike<IdentityLike | null>;
 }
 
 interface RelayPluginLike {
-	api?: {
-		version?: unknown;
-		identity?: RelayIdentityApiLike;
-	};
+	api?: unknown;
 }
 
 interface IdentityLike {
@@ -83,14 +82,14 @@ export type RelayIdentitySupportStatus =
 	| "unsupported"
 	| "available";
 
+const RELAY_API_READY_EVENT = "system3-relay:api-ready";
+
 export function getRelayIdentitySupportStatus(
 	app: App,
 ): RelayIdentitySupportStatus {
 	const plugin = getRelayPlugin(app);
 	if (!plugin) return "not-installed";
-	return plugin.api?.version === 1 && plugin.api.identity
-		? "available"
-		: "unsupported";
+	return getRelayIdentityApi(plugin.api) ? "available" : "unsupported";
 }
 
 export class RelayIdentityProvider implements IdentityProvider {
@@ -100,34 +99,60 @@ export class RelayIdentityProvider implements IdentityProvider {
 	constructor(private readonly app: App) {}
 
 	isAvailable(): boolean {
-		return Boolean(this.getApi());
+		const api = this.getApi();
+		return Boolean(api && normalizeIdentity(api.currentUser.value));
 	}
 
-	async getCurrentUser(path: string): Promise<Identity | null> {
+	async getCurrentUser(_path: string): Promise<Identity | null> {
 		const api = this.getApi();
 		if (!api) return null;
-		return normalizeIdentity(await api.getCurrentUser(path));
+		return normalizeIdentity(api.currentUser.value);
 	}
 
-	async resolveUser(id: string, path: string): Promise<Identity | null> {
+	async resolveUser(id: string, _path: string): Promise<Identity | null> {
 		const api = this.getApi();
 		if (!api) return null;
-		return normalizeIdentity(await api.resolveUser(id, path));
+		return normalizeIdentity(api.users.get(id) ?? null);
 	}
 
-	async getAuthorForRange(
-		path: string,
-		from: number,
-		to: number,
-	): Promise<Identity | null> {
-		const api = this.getApi();
-		if (!api?.getAuthorForRange) return null;
-		return normalizeIdentity(await api.getAuthorForRange(path, from, to));
+	subscribe(onChange: () => void): () => void {
+		let detachApi = () => {};
+		const attach = (api: unknown): void => {
+			detachApi();
+			detachApi = () => {};
+			const identity = getRelayIdentityApi(api);
+			if (identity) {
+				const unsubscribeCurrentUser =
+					identity.currentUser.subscribe(onChange);
+				const unsubscribeUsers = identity.users.subscribe(onChange);
+				detachApi = () => {
+					unsubscribeCurrentUser();
+					unsubscribeUsers();
+				};
+			}
+			onChange();
+		};
+
+		const plugin = getRelayPlugin(this.app);
+		if (plugin?.api) attach(plugin.api);
+
+		const eventRef = (
+			this.app.workspace as unknown as {
+				on(
+					name: typeof RELAY_API_READY_EVENT,
+					callback: (api: unknown) => void,
+				): EventRef;
+			}
+		).on(RELAY_API_READY_EVENT, attach);
+
+		return () => {
+			detachApi();
+			this.app.workspace.offref(eventRef);
+		};
 	}
 
 	private getApi(): RelayIdentityApiLike | null {
-		const plugin = getRelayPlugin(this.app);
-		return plugin?.api?.version === 1 ? (plugin.api.identity ?? null) : null;
+		return getRelayIdentityApi(getRelayPlugin(this.app)?.api);
 	}
 }
 
@@ -313,4 +338,26 @@ function getRelayPlugin(app: App): RelayPluginLike | null {
 			"system3-relay"
 		] as RelayPluginLike | undefined) ?? null
 	);
+}
+
+function getRelayIdentityApi(value: unknown): RelayIdentityApiLike | null {
+	if (!isRecord(value)) return null;
+	const v0 = value.v0;
+	if (!isRecord(v0) || !isRecord(v0.identity)) return null;
+	const { users, currentUser } = v0.identity;
+	if (
+		!isRecord(users) ||
+		typeof users.get !== "function" ||
+		typeof users.subscribe !== "function" ||
+		!isRecord(currentUser) ||
+		!("value" in currentUser) ||
+		typeof currentUser.subscribe !== "function"
+	) {
+		return null;
+	}
+	return v0.identity as unknown as RelayIdentityApiLike;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return Boolean(value) && typeof value === "object";
 }

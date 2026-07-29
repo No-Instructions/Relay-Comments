@@ -160,6 +160,8 @@ export default class RelayCommentsPlugin
 	private configuredIdentityResolver!: IdentityResolver;
 	private readonly identityCache = new Map<string, ReviewerIdentity | null>();
 	private readonly identityRequests = new Map<string, Promise<void>>();
+	private identityRevision = 0;
+	private settingsTab: RelayCommentsSettingTab | null = null;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -177,7 +179,8 @@ export default class RelayCommentsPlugin
 		this.registerEditorExtension(this.editorExtensions);
 		this.app.workspace.updateOptions();
 		this.registerMarkdownPostProcessor(createReviewPostProcessor(this));
-		this.addSettingTab(new RelayCommentsSettingTab(this.app, this));
+		this.settingsTab = new RelayCommentsSettingTab(this.app, this);
+		this.addSettingTab(this.settingsTab);
 		this.registerHoverLinkSource(COMMENT_LINK_HOVER_SOURCE, {
 			display: "Relay Comments",
 			defaultMod: true,
@@ -189,6 +192,13 @@ export default class RelayCommentsPlugin
 
 		this.registerCommands();
 		this.registerWorkspaceEvents();
+		for (const provider of this.identityProviders) {
+			if (provider.subscribe) {
+				this.register(
+					provider.subscribe(() => this.handleIdentityProviderChange()),
+				);
+			}
+		}
 		void this.refreshCurrentIdentity();
 		this.queueEditorExtensionRefresh(0);
 		this.queueEditorExtensionRefresh(250);
@@ -924,6 +934,7 @@ export default class RelayCommentsPlugin
 
 	async saveSettingsAndRefresh(): Promise<void> {
 		await this.saveData(this.settings);
+		this.identityRevision += 1;
 		this.identityCache.clear();
 		void this.refreshCurrentIdentity();
 		this.bumpRenderVersion();
@@ -1228,6 +1239,7 @@ export default class RelayCommentsPlugin
 		author = "",
 	): string {
 		return [
+			this.identityRevision,
 			kind,
 			this.getSelectedIdentityProviderId() ?? "",
 			this.settings.authorName,
@@ -1531,14 +1543,6 @@ export default class RelayCommentsPlugin
 
 	private registerWorkspaceEvents(): void {
 		this.registerEvent(
-			(this.app.workspace as unknown as {
-				on(name: "system3-relay:api-ready:v1", callback: () => void): EventRef;
-			}).on("system3-relay:api-ready:v1", () => {
-				this.identityCache.clear();
-				void this.refreshCurrentIdentity();
-			}),
-		);
-		this.registerEvent(
 			this.app.workspace.on("editor-menu", (menu, editor, info) => {
 				this.addEditorMenuItems(menu, editor, info);
 			}),
@@ -1609,6 +1613,14 @@ export default class RelayCommentsPlugin
 				void this.refreshCurrentIdentity();
 			}),
 		);
+	}
+
+	private handleIdentityProviderChange(): void {
+		this.identityRevision += 1;
+		this.identityCache.clear();
+		this.settingsTab?.refreshIdentityProviderState();
+		this.bumpRenderVersion();
+		void this.refreshCurrentIdentity();
 	}
 
 	private addEditorMenuItems(

@@ -13,11 +13,14 @@ export {
 } from "./settings-data";
 
 export class RelayCommentsSettingTab extends PluginSettingTab {
+	private hasDisplayed = false;
+
 	constructor(app: App, private plugin: RelayCommentsPlugin) {
 		super(app, plugin);
 	}
 
 	display(): void {
+		this.hasDisplayed = true;
 		const { containerEl } = this;
 		containerEl.empty();
 		containerEl.addClass("relay-comments-settings-tab");
@@ -68,6 +71,12 @@ export class RelayCommentsSettingTab extends PluginSettingTab {
 			});
 
 		this.renderVersionLabel(containerEl);
+	}
+
+	refreshIdentityProviderState(): void {
+		if (this.hasDisplayed && this.containerEl.isConnected) {
+			this.display();
+		}
 	}
 
 	private renderIdentitySettings(containerEl: HTMLElement): void {

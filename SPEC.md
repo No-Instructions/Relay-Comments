@@ -367,7 +367,7 @@ export interface IdentityProvider extends IdentityResolver {
 
 The initial current-user providers are:
 
-1. Relay, through the public `plugin.api.identity` contract below.
+1. Relay, through the public `plugin.api.v0.identity` contract below.
 2. Obsidian Sync, through an isolated adapter around the private Sync
    `userId` and `getUsernames()` surfaces.
 
@@ -379,14 +379,39 @@ maps, auth stores, `sharedFolders`, or `RelayManager.users` directly.
 The Obsidian Sync adapter is explicitly best-effort because Obsidian
 does not expose a supported public Sync identity API.
 
-### Proposed Relay Public API
+### Relay Public API
 
-Relay exposes a stable object on its plugin instance:
+Relay exposes a versioned, read-only object on its plugin instance:
 
 ```ts
-export interface RelayPublicApiV1 {
-  version: 1;
-  identity: RelayIdentityApi;
+export type Unsubscriber = () => void;
+
+export interface Observable<T> {
+  readonly value: T;
+  subscribe(run: (value: T) => void): Unsubscriber;
+  unsubscribe(run: (value: T) => void): void;
+}
+
+export interface ObservableMap<K, V>
+  extends Observable<ObservableMap<K, V>> {
+  get(key: K): V | undefined;
+  has(key: K): boolean;
+  keys(): K[];
+  values(): V[];
+  entries(): [K, V][];
+  forEach(
+    callbackfn: (value: V, key: K, map: Map<K, V>) => void,
+  ): void;
+  readonly size: number;
+}
+
+export interface RelayPublicApi {
+  v0: {
+    identity: {
+      users: ObservableMap<string, RelayIdentity>;
+      currentUser: Observable<RelayIdentity | null>;
+    };
+  };
 }
 
 export interface RelayIdentity {
@@ -394,37 +419,31 @@ export interface RelayIdentity {
   name: string;
   picture?: string;
   color?: string;
-  colorLight?: string;
-}
-
-export interface RelayIdentityApi {
-  getCurrentUser(path: string): Promise<RelayIdentity | null>;
-  resolveUser(id: string, path: string): Promise<RelayIdentity | null>;
-
-  getAuthorForRange?(
-    path: string,
-    from: number,
-    to: number,
-  ): Promise<RelayIdentity | null>;
 }
 ```
 
 Relay should announce API availability with a workspace event after load and after reload:
 
 ```ts
-app.workspace.trigger("system3-relay:api-ready:v1", relayApi);
+app.workspace.trigger("system3-relay:api-ready", relayApi);
 ```
 
-Relay Comments should also poll the plugin registry on load because plugin load order is not guaranteed:
+Relay Comments also inspects the plugin registry on load because plugin load order is not guaranteed:
 
 ```ts
 const relay = app.plugins.plugins["system3-relay"] as
-  | { api?: RelayPublicApiV1 }
+  | { api?: RelayPublicApi }
   | undefined;
 ```
 
-The API must not expose auth tokens. Email is not part of the contract.
-Relay returns `null` for paths outside Relay shared folders.
+Relay Comments reads the current identity from
+`api.v0.identity.currentUser.value`, resolves a stored `author` with
+`api.v0.identity.users.get(author)`, and subscribes to both views so
+identity changes invalidate rendered identity data. The identity
+directory is not file-scoped.
+
+The API does not expose auth tokens or email, and does not provide
+range attribution.
 
 ### Provider Selection
 
@@ -602,10 +621,10 @@ Manual Obsidian checks:
 4. Add reading-mode postprocessor for simple, safe marks.
 5. Add tests for parser, transforms, and rendering policy.
 
-### Phase 2 - Relay Public API
+### Phase 2 - Relay Identity API
 
-1. Add `RelayPublicApiV1` to Relay.
-2. Integrate this plugin with `plugin.api.identity`.
+1. Expose Relay's versioned identity views.
+2. Integrate this plugin with `plugin.api.v0.identity`.
 3. Add mocked Relay API tests.
 
 ### Phase 3 - Robust Review UX

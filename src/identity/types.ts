@@ -25,6 +25,12 @@ export interface IdentityProvider extends IdentityResolver {
 
 	getCurrentUser(path: string): Promise<Identity | null>;
 
+	/**
+	 * Notify the consumer when availability or identity data changes.
+	 * Providers without a live API may omit this.
+	 */
+	subscribe?(onChange: () => void): () => void;
+
 	/** Optional enhancement for providers with document provenance. */
 	getAuthorForRange?(
 		path: string,
