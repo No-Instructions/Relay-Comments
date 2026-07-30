@@ -977,6 +977,15 @@ export default class RelayCommentsPlugin
 		this.bumpRenderVersion();
 	}
 
+	async onExternalSettingsChange(): Promise<void> {
+		await this.loadSettings();
+		this.identityRevision += 1;
+		this.identityCache.clear();
+		this.settingsTab?.refreshIdentityProviderState();
+		void this.refreshCurrentIdentity();
+		this.bumpRenderVersion();
+	}
+
 	getActiveReviewState(): ActiveReviewState | null {
 		const view = this.getCurrentMarkdownView();
 		const file = view?.file;
