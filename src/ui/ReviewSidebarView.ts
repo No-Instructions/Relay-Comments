@@ -28,6 +28,12 @@ import { replacementForMark, type CriticAction } from "../critic/transform";
 import type { CriticMark, CriticMarkType } from "../critic/types";
 import type RelayCommentsPlugin from "../main";
 import type { CommentDraft, ReviewerIdentity } from "../main";
+import {
+	groupExternalCommentComponents,
+	type ExternalCommentComponent,
+	type ExternalCommentGroup,
+	type ExternalCommentState,
+} from "../dom/comment-components";
 
 export const VIEW_TYPE_CRITIC_REVIEW = "relay-comments-review-sidebar";
 
@@ -250,6 +256,13 @@ export class ReviewSidebarView extends ItemView {
 		root.empty();
 		root.addClass("critic-sidebar");
 
+		const externalState = this.plugin.getActiveExternalCommentState();
+		if (externalState) {
+			this.renderHeader(root, externalState.title);
+			this.renderExternalComments(root, externalState);
+			return;
+		}
+
 		const state = this.plugin.getActiveReviewState();
 		this.renderHeader(root, state?.file.basename ?? "Relay Comments");
 		if (!state) {
@@ -308,6 +321,120 @@ export class ReviewSidebarView extends ItemView {
 			this.renderDraft(list, draft);
 		}
 		this.scrollSelectedIntoView(list, visiblySelectedId);
+	}
+
+	private renderExternalComments(
+		root: HTMLElement,
+		state: ExternalCommentState,
+	): void {
+		const groups = groupExternalCommentComponents(state.comments);
+		if (state.comments.length === 0) {
+			this.renderEmptyState(root, "No rendered comments in this view.");
+			return;
+		}
+
+		root.createDiv({
+			cls: "critic-sidebar-counts",
+			text: `${state.comments.length} ${
+				state.comments.length === 1 ? "comment" : "comments"
+			} from this view`,
+		});
+		const list = root.createDiv({ cls: "critic-sidebar-list" });
+		for (const group of groups) {
+			this.renderExternalCommentGroup(list, group, state.filePath);
+		}
+	}
+
+	private renderExternalCommentGroup(
+		parent: HTMLElement,
+		group: ExternalCommentGroup,
+		filePath: string | null,
+	): void {
+		const itemId = `external:${group.snapshotKey}`;
+		const selected = this.selectedItemId === itemId;
+		const card = parent.createDiv({
+			cls: selected
+				? "critic-card critic-card-selected critic-external-card"
+				: "critic-card critic-external-card",
+			attr: {
+				tabindex: "0",
+				role: "button",
+				"data-critic-item-id": itemId,
+				"data-critic-type": "comment",
+				...(group.status
+					? { "data-critic-status": group.status }
+					: {}),
+			},
+		});
+		card.addEventListener("mousedown", (event) => {
+			if (event.button !== 0) return;
+			if ((event.target as HTMLElement).closest("button, textarea, input, a")) {
+				return;
+			}
+			if (selected) return;
+			this.locateExternalComment(itemId, group.comments[0]);
+		});
+		card.addEventListener("keydown", (event) => {
+			if (event.key !== "Enter" && event.key !== " ") return;
+			if (
+				(event.target as HTMLElement).closest("button, textarea, input, a")
+			) {
+				return;
+			}
+			event.preventDefault();
+			this.locateExternalComment(itemId, group.comments[0]);
+		});
+
+		if (group.label || group.status === "resolved") {
+			const eyebrow = card.createDiv({ cls: "critic-card-eyebrow" });
+			if (group.label) {
+				eyebrow.createSpan({
+					cls: "critic-eyebrow-label",
+					text: group.label,
+				});
+			}
+			if (group.status === "resolved") {
+				eyebrow.createSpan({
+					cls: "critic-thread-preview-badge",
+					text: "Resolved",
+				});
+			}
+		}
+
+		const messages = card.createDiv({ cls: "critic-thread-messages" });
+		for (const comment of group.comments) {
+			this.renderExternalCommentMessage(messages, comment, filePath);
+		}
+	}
+
+	private renderExternalCommentMessage(
+		parent: HTMLElement,
+		comment: ExternalCommentComponent,
+		filePath: string | null,
+	): void {
+		const message = parent.createDiv({ cls: "critic-thread-message" });
+		const identity = this.plugin.getReviewerIdentityForExternalAuthor(
+			comment.author,
+			filePath,
+		);
+		if (identity.source !== "fallback") {
+			this.renderCommentHeader(message, { identity });
+		}
+		message.createDiv({
+			cls: "critic-message-text",
+			text: comment.bodyText,
+		});
+	}
+
+	private locateExternalComment(
+		itemId: string,
+		comment: ExternalCommentComponent,
+	): void {
+		this.selectedItemId = itemId;
+		this.replyDraftItemId = null;
+		this.editingCommentId = null;
+		this.plugin.revealExternalComment(comment);
+		this.render();
 	}
 
 	private renderHeader(root: HTMLElement, title: string): void {

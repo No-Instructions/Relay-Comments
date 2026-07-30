@@ -80,6 +80,12 @@ import type {
 	IdentityResolverId,
 } from "./identity/types";
 import { formatAuthoredComment } from "./identity/markup";
+import {
+	collectExternalCommentComponents,
+	scrollToExternalComment,
+	type ExternalCommentComponent,
+	type ExternalCommentState,
+} from "./dom/comment-components";
 
 export interface ActiveReviewState {
 	file: TFile;
@@ -148,6 +154,9 @@ export default class RelayCommentsPlugin
 	private renderVersion = 0;
 	private commentDraft: CommentDraft | null = null;
 	private lastMarkdownPath: string | null = null;
+	private lastContentLeaf: WorkspaceLeaf | null = null;
+	private externalCommentObserver: MutationObserver | null = null;
+	private externalCommentRefreshTimer: number | null = null;
 	private reviewSidebarOpenPromise: Promise<void> | null = null;
 	private selectionRefreshTimer: number | null = null;
 	private canvasPins: CanvasCommentPins | null = null;
@@ -192,6 +201,7 @@ export default class RelayCommentsPlugin
 
 		this.registerCommands();
 		this.registerWorkspaceEvents();
+		this.captureActiveContentLeaf(this.app.workspace.activeLeaf);
 		for (const provider of this.identityProviders) {
 			if (provider.subscribe) {
 				this.register(
@@ -230,6 +240,7 @@ export default class RelayCommentsPlugin
 		});
 
 		this.app.workspace.onLayoutReady(() => {
+			this.captureActiveContentLeaf(this.app.workspace.activeLeaf);
 			this.queueEditorExtensionRefresh(0);
 			this.queueEditorExtensionRefresh(250);
 			this.refreshReviewSidebars();
@@ -240,6 +251,12 @@ export default class RelayCommentsPlugin
 	onunload(): void {
 		this.canvasPins?.stop();
 		this.canvasPins = null;
+		this.externalCommentObserver?.disconnect();
+		this.externalCommentObserver = null;
+		if (this.externalCommentRefreshTimer !== null) {
+			window.clearTimeout(this.externalCommentRefreshTimer);
+			this.externalCommentRefreshTimer = null;
+		}
 		this.reviewSidebarOpenPromise = null;
 		if (this.selectionRefreshTimer !== null) {
 			window.clearTimeout(this.selectionRefreshTimer);
@@ -713,36 +730,56 @@ export default class RelayCommentsPlugin
 		// Early Relay Comments builds wrote an ID in authorId and a display
 		// name in author. Prefer the actual ID when reading those marks.
 		const author = mark.metadata?.authorId?.trim() ?? metadataAuthor;
+		const unresolvedName =
+			mark.metadata?.authorId?.trim() && metadataAuthor
+				? metadataAuthor
+				: author;
+		return this.getReviewerIdentityForAuthorValue(
+			author,
+			unresolvedName,
+			filePath,
+		);
+	}
+
+	getReviewerIdentityForExternalAuthor(
+		author: string | null,
+		filePath?: string | null,
+	): ReviewerIdentity {
+		const normalized = author?.trim() || undefined;
+		return this.getReviewerIdentityForAuthorValue(
+			normalized,
+			normalized,
+			filePath,
+		);
+	}
+
+	private getReviewerIdentityForAuthorValue(
+		author: string | undefined,
+		unresolvedName: string | undefined,
+		filePath?: string | null,
+	): ReviewerIdentity {
+		if (!author) return fallbackIdentity();
 		const resolvedFilePath =
-			filePath ?? this.app.workspace.getActiveFile()?.path ?? null;
-		if (author && resolvedFilePath) {
-			const unresolvedName =
-				mark.metadata?.authorId?.trim() && metadataAuthor
-					? metadataAuthor
-					: author;
-			const key = this.identityCacheKey("author", resolvedFilePath, author);
-			if (this.identityCache.has(key)) {
-				return (
-					this.identityCache.get(key) ?? {
-						id: author,
-						name: unresolvedName,
-						source: "metadata",
-					}
-				);
-			}
-			this.queueIdentityRequest(key, async () => {
-				return this.resolveAuthorIdentity(author, resolvedFilePath);
-			});
-			return { id: author, name: unresolvedName, source: "metadata" };
+			filePath ??
+			this.app.workspace.getActiveFile()?.path ??
+			this.lastMarkdownPath;
+		if (!resolvedFilePath) {
+			return { id: author, name: unresolvedName ?? author, source: "metadata" };
 		}
-		if (author) {
-			return {
-				id: author,
-				name: metadataAuthor ?? author,
-				source: "metadata",
-			};
+		const key = this.identityCacheKey("author", resolvedFilePath, author);
+		if (this.identityCache.has(key)) {
+			return (
+				this.identityCache.get(key) ?? {
+					id: author,
+					name: unresolvedName ?? author,
+					source: "metadata",
+				}
+			);
 		}
-		return fallbackIdentity();
+		this.queueIdentityRequest(key, async () => {
+			return this.resolveAuthorIdentity(author, resolvedFilePath);
+		});
+		return { id: author, name: unresolvedName ?? author, source: "metadata" };
 	}
 
 	private findMarkRunAtRange(
@@ -956,6 +993,35 @@ export default class RelayCommentsPlugin
 			commentDraft:
 				this.commentDraft?.filePath === file.path ? this.commentDraft : null,
 		};
+	}
+
+	getActiveExternalCommentState(): ExternalCommentState | null {
+		const leaf = this.lastContentLeaf;
+		if (!leaf || leaf.view instanceof MarkdownView) return null;
+		const root = this.getLeafContentRoot(leaf);
+		if (!root?.isConnected) return null;
+		const file = (leaf.view as typeof leaf.view & { file?: TFile | null }).file;
+		return {
+			title: file?.basename ?? leaf.view.getDisplayText(),
+			filePath:
+				file?.path ??
+				this.app.workspace.getActiveFile()?.path ??
+				this.lastMarkdownPath,
+			comments: collectExternalCommentComponents(root),
+		};
+	}
+
+	revealExternalComment(comment: ExternalCommentComponent): boolean {
+		if (scrollToExternalComment(comment)) return true;
+		if (!comment.key && !comment.thread) return false;
+		const replacement = this.getActiveExternalCommentState()?.comments.find(
+			(candidate) =>
+				(comment.key && candidate.key === comment.key) ||
+				(!comment.key &&
+					comment.thread &&
+					candidate.thread === comment.thread),
+		);
+		return replacement ? scrollToExternalComment(replacement) : false;
 	}
 
 	startCommentDraft(
@@ -1593,7 +1659,6 @@ export default class RelayCommentsPlugin
 		);
 		this.registerEvent(
 			this.app.workspace.on("active-leaf-change", (leaf) => {
-				this.captureActiveMarkdownPath();
 				this.hideThreadPreview();
 				this.queueEditorExtensionRefresh(0);
 				// Clicking into the sidebar activates its leaf; rebuilding it
@@ -1601,11 +1666,14 @@ export default class RelayCommentsPlugin
 				// the very button press being made (resolve took two clicks).
 				// Its content tracks the reviewed note, which hasn't changed.
 				if (leaf?.view instanceof ReviewSidebarView) return;
+				this.captureActiveContentLeaf(leaf);
+				this.captureActiveMarkdownPath();
 				this.refreshReviewSidebars();
 			}),
 		);
 		this.registerEvent(
 			this.app.workspace.on("file-open", () => {
+				this.captureActiveContentLeaf(this.app.workspace.activeLeaf);
 				this.captureActiveMarkdownPath();
 				this.hideThreadPreview();
 				this.queueEditorExtensionRefresh(0);
@@ -1613,6 +1681,56 @@ export default class RelayCommentsPlugin
 				void this.refreshCurrentIdentity();
 			}),
 		);
+	}
+
+	private captureActiveContentLeaf(leaf: WorkspaceLeaf | null): void {
+		if (!leaf || leaf.view instanceof ReviewSidebarView) return;
+		this.lastContentLeaf = leaf;
+		this.observeExternalComments(leaf);
+	}
+
+	private getLeafContentRoot(leaf: WorkspaceLeaf): HTMLElement | null {
+		const root = (
+			leaf.view as typeof leaf.view & { containerEl?: HTMLElement }
+		).containerEl;
+		return root ?? null;
+	}
+
+	private observeExternalComments(leaf: WorkspaceLeaf): void {
+		this.externalCommentObserver?.disconnect();
+		this.externalCommentObserver = null;
+		if (leaf.view instanceof MarkdownView) return;
+		const root = this.getLeafContentRoot(leaf);
+		if (!root || typeof MutationObserver === "undefined") return;
+
+		this.externalCommentObserver = new MutationObserver(() => {
+			this.scheduleExternalCommentRefresh();
+		});
+		this.externalCommentObserver.observe(root, {
+			subtree: true,
+			childList: true,
+			characterData: true,
+			attributes: true,
+			attributeFilter: [
+				"id",
+				"data-criticmarkup-comment",
+				"data-criticmarkup-body",
+				"data-criticmarkup-author",
+				"data-criticmarkup-status",
+				"data-criticmarkup-thread",
+				"data-criticmarkup-key",
+				"data-criticmarkup-target",
+				"data-criticmarkup-label",
+			],
+		});
+	}
+
+	private scheduleExternalCommentRefresh(): void {
+		if (this.externalCommentRefreshTimer !== null) return;
+		this.externalCommentRefreshTimer = window.setTimeout(() => {
+			this.externalCommentRefreshTimer = null;
+			this.refreshReviewSidebars();
+		}, 50);
 	}
 
 	private handleIdentityProviderChange(): void {
@@ -1650,8 +1768,19 @@ export default class RelayCommentsPlugin
 	private getCurrentMarkdownView(): MarkdownView | null {
 		const active = this.app.workspace.getActiveViewOfType(MarkdownView);
 		if (active?.file) {
+			this.lastContentLeaf = active.leaf;
 			this.lastMarkdownPath = active.file.path;
 			return active;
+		}
+		if (this.lastContentLeaf) {
+			if (
+				this.lastContentLeaf.view instanceof MarkdownView &&
+				this.lastContentLeaf.view.file
+			) {
+				this.lastMarkdownPath = this.lastContentLeaf.view.file.path;
+				return this.lastContentLeaf.view;
+			}
+			return null;
 		}
 		if (this.lastMarkdownPath) {
 			const byPath = this.getMarkdownViewByPath(this.lastMarkdownPath);
