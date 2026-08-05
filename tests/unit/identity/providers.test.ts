@@ -60,27 +60,23 @@ describe("identity normalization", () => {
 
 describe("service identity providers", () => {
 	it("uses Relay's public plugin API without reading Relay internals", async () => {
-		const currentUser = createTestObservable({
-			id: "relay-user",
-			name: "Relay user",
-			color: "#123456",
-		});
-		const users = createTestObservableMap([
-			[
-				"relay-user",
-				{ id: "relay-user", name: "Resolved Relay user" },
-			],
-		]);
 		const provider = new RelayIdentityProvider({
 			plugins: {
 				plugins: {
 					"system3-relay": {
 						api: {
 							v0: {
-								identity: {
-									currentUser: currentUser.observable,
-									users: users.observable,
-								},
+								getCurrentUser: () => ({
+									id: "relay-user",
+									name: "Relay user",
+									color: "#123456",
+								}),
+								getUsers: () => [
+									{
+										id: "relay-user",
+										name: "Resolved Relay user",
+									},
+								],
 							},
 						},
 					},
@@ -119,36 +115,19 @@ describe("service identity providers", () => {
 		).toBe("not-installed");
 	});
 
-	it("subscribes after Relay announces its API and follows identity changes", () => {
-		const currentUser = createTestObservable<{
-			id: string;
-			name: string;
-		} | null>(null);
-		const users = createTestObservableMap<string, {
-			id: string;
-			name: string;
-		}>([]);
+	it("snapshots after Relay's payload-free ready event and applies deltas", async () => {
+		let currentUser: { id: string; name: string } | null = null;
+		let users: { id: string; name: string }[] = [];
 		const api = {
 			v0: {
-				identity: {
-					currentUser: currentUser.observable,
-					users: users.observable,
-				},
+				getCurrentUser: () => currentUser,
+				getUsers: () => users,
 			},
 		};
-		let apiReady: ((api: unknown) => void) | null = null;
-		let offrefCalls = 0;
+		const workspace = createTestWorkspace();
 		const app = {
 			plugins: { plugins: {} as Record<string, unknown> },
-			workspace: {
-				on: (_name: string, callback: (api: unknown) => void) => {
-					apiReady = callback;
-					return {};
-				},
-				offref: () => {
-					offrefCalls += 1;
-				},
-			},
+			workspace,
 		};
 		const provider = new RelayIdentityProvider(app as never);
 		let changes = 0;
@@ -157,23 +136,75 @@ describe("service identity providers", () => {
 		});
 
 		app.plugins.plugins["system3-relay"] = { api };
-		if (!apiReady) throw new Error("Relay API event was not registered");
-		apiReady(api);
+		workspace.emit("system3-relay:api-ready");
 		expect(provider.isAvailable()).toBe(false);
 		expect(changes).toBe(1);
 
-		currentUser.emit({ id: "relay-user", name: "Relay user" });
+		currentUser = { id: "relay-user", name: "Relay user" };
+		workspace.emit("system3-relay:v0:current-user", {
+			action: "update",
+			record: currentUser,
+		});
 		expect(provider.isAvailable()).toBe(true);
-		users.set("relay-user", {
+		await expect(provider.getCurrentUser("shared.md")).resolves.toEqual(
+			currentUser,
+		);
+
+		workspace.emit("system3-relay:v0:users", {
+			action: "create",
+			record: { id: "relay-user", name: "Relay user" },
+		});
+		expect(changes).toBe(3);
+		await expect(provider.resolveUser("relay-user", "shared.md")).resolves.toEqual({
+			id: "relay-user",
+			name: "Relay user",
+		});
+
+		workspace.emit("system3-relay:v0:users", {
+			action: "update",
+			record: { id: "relay-user", name: "Updated Relay user" },
+		});
+		await expect(provider.resolveUser("relay-user", "shared.md")).resolves.toEqual({
 			id: "relay-user",
 			name: "Updated Relay user",
 		});
-		expect(changes).toBe(3);
+
+		workspace.emit("system3-relay:v0:users", {
+			action: "delete",
+			record: { id: "relay-user", name: "Updated Relay user" },
+		});
+		await expect(
+			provider.resolveUser("relay-user", "shared.md"),
+		).resolves.toBeNull();
+
+		users = [{ id: "stale-user", name: "Old facade user" }];
+		app.plugins.plugins["system3-relay"] = {
+			api: {
+				v0: {
+					getCurrentUser: () => currentUser,
+					getUsers: () => [
+						{ id: "other-user", name: "Snapshot user" },
+					],
+				},
+			},
+		};
+		workspace.emit("system3-relay:api-ready");
+		await expect(provider.resolveUser("other-user", "shared.md")).resolves.toEqual({
+			id: "other-user",
+			name: "Snapshot user",
+		});
+		await expect(
+			provider.resolveUser("stale-user", "shared.md"),
+		).resolves.toBeNull();
 
 		unsubscribe();
-		currentUser.emit(null);
-		expect(changes).toBe(3);
-		expect(offrefCalls).toBe(1);
+		const changesAtUnsubscribe = changes;
+		workspace.emit("system3-relay:v0:current-user", {
+			action: "update",
+			record: null,
+		});
+		expect(changes).toBe(changesAtUnsubscribe);
+		expect(workspace.offrefCalls).toBe(3);
 	});
 
 	it("resolves the numeric Obsidian Sync user ID through its directory", async () => {
@@ -199,62 +230,33 @@ describe("service identity providers", () => {
 	});
 });
 
-function createTestObservable<T>(initial: T): {
-	observable: {
-		readonly value: T;
-		subscribe(run: (value: T) => void): () => void;
-	};
-	emit(value: T): void;
+function createTestWorkspace(): {
+	on(name: string, callback: (...args: unknown[]) => void): object;
+	offref(ref: object): void;
+	emit(name: string, ...args: unknown[]): void;
+	offrefCalls: number;
 } {
-	let value = initial;
-	const subscribers = new Set<(value: T) => void>();
-	const observable = {
-		get value(): T {
-			return value;
-		},
-		subscribe(run: (value: T) => void): () => void {
-			subscribers.add(run);
-			return () => subscribers.delete(run);
-		},
-	};
+	const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
+	const refs = new Map<object, { name: string; callback: (...args: unknown[]) => void }>();
 	return {
-		observable,
-		emit(next: T): void {
-			value = next;
-			for (const subscriber of subscribers) subscriber(next);
+		offrefCalls: 0,
+		on(name, callback): object {
+			const ref = {};
+			const callbacks = listeners.get(name) ?? new Set();
+			callbacks.add(callback);
+			listeners.set(name, callbacks);
+			refs.set(ref, { name, callback });
+			return ref;
 		},
-	};
-}
-
-function createTestObservableMap<K, V>(
-	entries: [K, V][],
-): {
-	observable: {
-		readonly value: unknown;
-		get(key: K): V | undefined;
-		subscribe(run: (value: unknown) => void): () => void;
-	};
-	set(key: K, value: V): void;
-} {
-	const values = new Map(entries);
-	const subscribers = new Set<(value: unknown) => void>();
-	const observable = {
-		get value(): unknown {
-			return observable;
+		offref(ref): void {
+			this.offrefCalls += 1;
+			const entry = refs.get(ref);
+			if (!entry) return;
+			listeners.get(entry.name)?.delete(entry.callback);
+			refs.delete(ref);
 		},
-		get(key: K): V | undefined {
-			return values.get(key);
-		},
-		subscribe(run: (value: unknown) => void): () => void {
-			subscribers.add(run);
-			return () => subscribers.delete(run);
-		},
-	};
-	return {
-		observable,
-		set(key: K, value: V): void {
-			values.set(key, value);
-			for (const subscriber of subscribers) subscriber(observable);
+		emit(name, ...args): void {
+			for (const callback of listeners.get(name) ?? []) callback(...args);
 		},
 	};
 }

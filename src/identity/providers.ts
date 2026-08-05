@@ -6,21 +6,7 @@ import type {
 	IdentityProviderSetting,
 	IdentityResolver,
 } from "./types";
-
-interface RelayObservableLike<T> {
-	readonly value: T;
-	subscribe(run: (value: T) => void): () => void;
-}
-
-interface RelayObservableMapLike<K, V>
-	extends RelayObservableLike<RelayObservableMapLike<K, V>> {
-	get(key: K): V | undefined;
-}
-
-interface RelayIdentityApiLike {
-	users: RelayObservableMapLike<string, IdentityLike>;
-	currentUser: RelayObservableLike<IdentityLike | null>;
-}
+import type { ApiV0, RelayEvent, User } from "./relay-plugin-api";
 
 interface RelayPluginLike {
 	api?: unknown;
@@ -83,6 +69,8 @@ export type RelayIdentitySupportStatus =
 	| "available";
 
 const RELAY_API_READY_EVENT = "system3-relay:api-ready";
+const RELAY_USERS_EVENT = "system3-relay:v0:users";
+const RELAY_CURRENT_USER_EVENT = "system3-relay:v0:current-user";
 
 export function getRelayIdentitySupportStatus(
 	app: App,
@@ -95,64 +83,107 @@ export function getRelayIdentitySupportStatus(
 export class RelayIdentityProvider implements IdentityProvider {
 	readonly id = "relay";
 	readonly name = "Relay";
+	private users = new Map<string, Identity>();
+	private currentUser: Identity | null = null;
+	private subscriptions = 0;
 
 	constructor(private readonly app: App) {}
 
 	isAvailable(): boolean {
-		const api = this.getApi();
-		return Boolean(api && normalizeIdentity(api.currentUser.value));
+		this.prepareRead();
+		return this.currentUser !== null;
 	}
 
 	async getCurrentUser(_path: string): Promise<Identity | null> {
-		const api = this.getApi();
-		if (!api) return null;
-		return normalizeIdentity(api.currentUser.value);
+		this.prepareRead();
+		return this.currentUser ? { ...this.currentUser } : null;
 	}
 
 	async resolveUser(id: string, _path: string): Promise<Identity | null> {
-		const api = this.getApi();
-		if (!api) return null;
-		return normalizeIdentity(api.users.get(id) ?? null);
+		this.prepareRead();
+		const identity = this.users.get(id);
+		return identity ? { ...identity } : null;
 	}
 
 	subscribe(onChange: () => void): () => void {
-		let detachApi = () => {};
-		const attach = (api: unknown): void => {
-			detachApi();
-			detachApi = () => {};
-			const identity = getRelayIdentityApi(api);
-			if (identity) {
-				const unsubscribeCurrentUser =
-					identity.currentUser.subscribe(onChange);
-				const unsubscribeUsers = identity.users.subscribe(onChange);
-				detachApi = () => {
-					unsubscribeCurrentUser();
-					unsubscribeUsers();
-				};
+		this.subscriptions += 1;
+		const refresh = (): void => {
+			this.resnapshot();
+			onChange();
+		};
+		const applyUsers = (event: RelayEvent<User>): void => {
+			const id = normalizeId(event.record.id);
+			if (id === null) return;
+			if (event.action === "delete") {
+				this.users.delete(id);
+			} else {
+				const identity = normalizeIdentity(event.record);
+				if (!identity) return;
+				this.users.set(identity.id, identity);
 			}
 			onChange();
 		};
+		const applyCurrentUser = (event: RelayEvent<User | null>): void => {
+			this.currentUser = normalizeIdentity(event.record);
+			onChange();
+		};
 
-		const plugin = getRelayPlugin(this.app);
-		if (plugin?.api) attach(plugin.api);
+		const eventRefs: EventRef[] = [
+			this.app.workspace.on(RELAY_API_READY_EVENT, refresh),
+			this.app.workspace.on(RELAY_USERS_EVENT, applyUsers),
+			this.app.workspace.on(RELAY_CURRENT_USER_EVENT, applyCurrentUser),
+		];
+		if (this.resnapshot()) onChange();
 
-		const eventRef = (
-			this.app.workspace as unknown as {
-				on(
-					name: typeof RELAY_API_READY_EVENT,
-					callback: (api: unknown) => void,
-				): EventRef;
-			}
-		).on(RELAY_API_READY_EVENT, attach);
-
+		let subscribed = true;
 		return () => {
-			detachApi();
-			this.app.workspace.offref(eventRef);
+			if (!subscribed) return;
+			subscribed = false;
+			this.subscriptions = Math.max(0, this.subscriptions - 1);
+			for (const eventRef of eventRefs) {
+				this.app.workspace.offref(eventRef);
+			}
 		};
 	}
 
-	private getApi(): RelayIdentityApiLike | null {
+	private getApi(): ApiV0 | null {
 		return getRelayIdentityApi(getRelayPlugin(this.app)?.api);
+	}
+
+	private prepareRead(): void {
+		if (!this.getApi()) {
+			this.clearSnapshot();
+			return;
+		}
+		if (this.subscriptions === 0) this.resnapshot();
+	}
+
+	private resnapshot(): boolean {
+		const api = this.getApi();
+		if (!api) {
+			this.clearSnapshot();
+			return false;
+		}
+		try {
+			const users = new Map<string, Identity>();
+			for (const record of api.getUsers()) {
+				const identity = normalizeIdentity(record);
+				if (identity) users.set(identity.id, identity);
+			}
+			this.users = users;
+			this.currentUser = normalizeIdentity(api.getCurrentUser());
+			return true;
+		} catch {
+			// A retained v0 facade throws after Relay unloads. Treat that the same
+			// as an unavailable provider until the next payload-free ready event.
+			this.clearSnapshot();
+			return false;
+		}
+	}
+
+	private clearSnapshot(): void {
+		this.users.clear();
+		this.currentUser = null;
 	}
 }
 
@@ -340,22 +371,17 @@ function getRelayPlugin(app: App): RelayPluginLike | null {
 	);
 }
 
-function getRelayIdentityApi(value: unknown): RelayIdentityApiLike | null {
+function getRelayIdentityApi(value: unknown): ApiV0 | null {
 	if (!isRecord(value)) return null;
 	const v0 = value.v0;
-	if (!isRecord(v0) || !isRecord(v0.identity)) return null;
-	const { users, currentUser } = v0.identity;
 	if (
-		!isRecord(users) ||
-		typeof users.get !== "function" ||
-		typeof users.subscribe !== "function" ||
-		!isRecord(currentUser) ||
-		!("value" in currentUser) ||
-		typeof currentUser.subscribe !== "function"
+		!isRecord(v0) ||
+		typeof v0.getUsers !== "function" ||
+		typeof v0.getCurrentUser !== "function"
 	) {
 		return null;
 	}
-	return v0.identity as unknown as RelayIdentityApiLike;
+	return v0 as unknown as ApiV0;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
