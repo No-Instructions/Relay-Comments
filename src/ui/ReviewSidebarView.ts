@@ -34,6 +34,10 @@ import {
 	type ExternalCommentGroup,
 	type ExternalCommentState,
 } from "../dom/comment-components";
+import {
+	reconcileDraftTarget,
+	type DraftTarget,
+} from "./draft-reconciliation";
 
 export const VIEW_TYPE_CRITIC_REVIEW = "relay-comments-review-sidebar";
 
@@ -82,6 +86,7 @@ export class ReviewSidebarView extends ItemView {
 	hoverPopover: HoverPopover | null = null;
 	private selectedItemId: string | null = null;
 	private replyDraftItemId: string | null = null;
+	private replyDraftTarget: DraftTarget | null = null;
 	private editingCommentId: string | null = null;
 	private replyDrafts = new Map<string, string>();
 	private editDrafts = new Map<string, string>();
@@ -183,6 +188,7 @@ export class ReviewSidebarView extends ItemView {
 
 		this.selectedItemId = item.id;
 		this.replyDraftItemId = item.id;
+		this.replyDraftTarget = toDraftTarget(item);
 		this.render();
 		if (options?.focusReply) {
 			this.containerEl
@@ -194,9 +200,26 @@ export class ReviewSidebarView extends ItemView {
 	}
 
 	private render(): void {
+		this.captureComposerValues();
 		const focusSnapshot = this.captureComposerFocus();
 		this.renderContent();
 		this.restoreComposerFocus(focusSnapshot);
+	}
+
+	private captureComposerValues(): void {
+		const draft = this.contentEl.querySelector<HTMLTextAreaElement>(
+			".critic-draft-textarea",
+		);
+		if (draft) this.draftText = draft.value;
+
+		this.contentEl
+			.querySelectorAll<HTMLTextAreaElement>(".critic-thread-textarea")
+			.forEach((textarea) => {
+				const itemId = textarea
+					.closest("[data-critic-item-id]")
+					?.getAttribute("data-critic-item-id");
+				if (itemId) this.replyDrafts.set(itemId, textarea.value);
+			});
 	}
 
 	/**
@@ -205,6 +228,7 @@ export class ReviewSidebarView extends ItemView {
 	 */
 	private captureComposerFocus(): {
 		selector: string;
+		kind: "draft" | "edit" | "thread";
 		start: number;
 		end: number;
 	} | null {
@@ -216,32 +240,47 @@ export class ReviewSidebarView extends ItemView {
 			return null;
 		}
 		let selector: string | null = null;
+		let kind: "draft" | "edit" | "thread" | null = null;
 		if (active.classList.contains("critic-draft-textarea")) {
 			selector = ".critic-draft-textarea";
+			kind = "draft";
 		} else if (active.classList.contains("critic-edit-textarea")) {
 			selector = ".critic-edit-textarea";
+			kind = "edit";
 		} else if (active.classList.contains("critic-thread-textarea")) {
 			const card = active.closest("[data-critic-item-id]");
 			const itemId = card?.getAttribute("data-critic-item-id");
 			if (itemId) {
 				selector = `[data-critic-item-id="${CSS.escape(itemId)}"] .critic-thread-textarea`;
+				kind = "thread";
 			}
 		}
-		if (!selector) return null;
+		if (!selector || !kind) return null;
 		return {
 			selector,
+			kind,
 			start: active.selectionStart,
 			end: active.selectionEnd,
 		};
 	}
 
 	private restoreComposerFocus(
-		snapshot: { selector: string; start: number; end: number } | null,
+		snapshot: {
+			selector: string;
+			kind: "draft" | "edit" | "thread";
+			start: number;
+			end: number;
+		} | null,
 	): void {
 		if (!snapshot) return;
-		const textarea = this.contentEl.querySelector<HTMLTextAreaElement>(
+		let textarea = this.contentEl.querySelector<HTMLTextAreaElement>(
 			snapshot.selector,
 		);
+		if (!textarea && snapshot.kind === "thread" && this.replyDraftItemId) {
+			textarea = this.contentEl.querySelector<HTMLTextAreaElement>(
+				`[data-critic-item-id="${CSS.escape(this.replyDraftItemId)}"] .critic-thread-textarea`,
+			);
+		}
 		if (!textarea) return;
 		textarea.focus();
 		const length = textarea.value.length;
@@ -274,6 +313,7 @@ export class ReviewSidebarView extends ItemView {
 			.filter((mark) => mark.valid)
 			.sort((a, b) => a.from - b.from || a.to - b.to);
 		const items = buildReviewItems(validMarks, state.editor.getValue());
+		this.reconcileReplyDraft(items);
 		if (items.length > 0) {
 			root.createDiv({
 				cls: "critic-sidebar-counts",
@@ -343,6 +383,31 @@ export class ReviewSidebarView extends ItemView {
 		for (const group of groups) {
 			this.renderExternalCommentGroup(list, group, state.filePath);
 		}
+	}
+
+	private reconcileReplyDraft(items: ReviewItem[]): void {
+		if (!this.replyDraftItemId || !this.replyDraftTarget) return;
+		const replacement = reconcileDraftTarget(
+			this.replyDraftTarget,
+			items.map(toDraftTarget),
+		);
+		if (!replacement) return;
+
+		const previousId = this.replyDraftItemId;
+		if (replacement.id !== previousId) {
+			if (this.replyDrafts.has(previousId)) {
+				this.replyDrafts.set(
+					replacement.id,
+					this.replyDrafts.get(previousId) ?? "",
+				);
+				this.replyDrafts.delete(previousId);
+			}
+			if (this.selectedItemId === previousId) {
+				this.selectedItemId = replacement.id;
+			}
+			this.replyDraftItemId = replacement.id;
+		}
+		this.replyDraftTarget = replacement;
 	}
 
 	private renderExternalCommentGroup(
@@ -432,6 +497,7 @@ export class ReviewSidebarView extends ItemView {
 	): void {
 		this.selectedItemId = itemId;
 		this.replyDraftItemId = null;
+		this.replyDraftTarget = null;
 		this.editingCommentId = null;
 		this.plugin.revealExternalComment(comment);
 		this.render();
@@ -500,6 +566,7 @@ export class ReviewSidebarView extends ItemView {
 
 			this.selectedItemId = null;
 			this.replyDraftItemId = null;
+			this.replyDraftTarget = null;
 			this.editingCommentId = null;
 			this.render();
 		};
@@ -537,6 +604,7 @@ export class ReviewSidebarView extends ItemView {
 			this.draftText = textarea.value;
 		});
 		this.renderComposerHint(card, textarea);
+		this.keepComposerVisible(textarea, card);
 		const actions = card.createDiv({ cls: "critic-composer-actions" });
 		const submit = this.addTextButton(
 			actions,
@@ -1003,6 +1071,7 @@ export class ReviewSidebarView extends ItemView {
 		}
 		this.selectedItemId = item.id;
 		this.replyDraftItemId = item.id;
+		this.replyDraftTarget = toDraftTarget(item);
 		const range = getItemTargetRange(item);
 		this.plugin.locateReviewRange(range.from, range.to, {
 			focusEditor: false,
@@ -1018,6 +1087,7 @@ export class ReviewSidebarView extends ItemView {
 	private startEditingComment(comment: CriticMark, item: ReviewItem): void {
 		this.selectedItemId = item.id;
 		this.replyDraftItemId = null;
+		this.replyDraftTarget = null;
 		this.editingCommentId = comment.id;
 		this.editDrafts.set(comment.id, this.editDrafts.get(comment.id) ?? comment.content);
 		this.pendingFocus = { kind: "edit", key: comment.id };
@@ -1047,6 +1117,7 @@ export class ReviewSidebarView extends ItemView {
 			this.editDrafts.set(comment.id, textarea.value);
 		});
 		this.renderComposerHint(editor, textarea);
+		this.keepComposerVisible(textarea, editor);
 		const actions = editor.createDiv({ cls: "critic-composer-actions" });
 		const submit = this.addTextButton(
 			actions,
@@ -1146,6 +1217,7 @@ export class ReviewSidebarView extends ItemView {
 			this.replyDrafts.set(item.id, textarea.value);
 		});
 		this.renderComposerHint(composer, textarea);
+		this.keepComposerVisible(textarea, composer);
 		const actions = composer.createDiv({ cls: "critic-composer-actions" });
 		const submit = this.addTextButton(
 			actions,
@@ -1188,6 +1260,7 @@ export class ReviewSidebarView extends ItemView {
 		}
 		this.replyDrafts.delete(item.id);
 		this.replyDraftItemId = null;
+		this.replyDraftTarget = null;
 		this.render();
 	}
 
@@ -1207,13 +1280,27 @@ export class ReviewSidebarView extends ItemView {
 		textarea.value = "";
 		this.replyDrafts.delete(item.id);
 		this.replyDraftItemId = null;
+		this.replyDraftTarget = null;
 		if (!(await this.plugin.insertReplyToMark(mark, value))) {
 			textarea.value = previousValue;
 			this.replyDrafts.set(item.id, previousValue);
 			this.replyDraftItemId = item.id;
+			this.replyDraftTarget = toDraftTarget(item);
 			return;
 		}
 		this.render();
+	}
+
+	private keepComposerVisible(
+		textarea: HTMLTextAreaElement,
+		composer: HTMLElement,
+	): void {
+		textarea.addEventListener("focus", () => {
+			window.requestAnimationFrame(() => {
+				if (!textarea.isConnected || !composer.isConnected) return;
+				composer.scrollIntoView({ block: "nearest", inline: "nearest" });
+			});
+		});
 	}
 
 	private resolveThread(
@@ -1329,6 +1416,15 @@ function getItemTargetRange(item: ReviewItem): { from: number; to: number } {
 		return { from: item.anchor.from, to: item.anchor.to };
 	}
 	return { from: item.mark.from, to: item.mark.to };
+}
+
+function toDraftTarget(item: ReviewItem): DraftTarget {
+	const anchor = item.kind === "anchored-comment" ? item.anchor : item.mark;
+	return {
+		id: item.id,
+		signature: `${item.kind}\u0000${anchor.type}\u0000${anchor.raw}`,
+		from: item.from,
+	};
 }
 
 function buildReviewItems(marks: CriticMark[], text: string): ReviewItem[] {

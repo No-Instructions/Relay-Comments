@@ -241,8 +241,13 @@
    ============================================================ */
 
 .critic-sidebar {
-	padding: 4px 10px 32px;
+	padding: 4px 10px max(96px, calc(env(safe-area-inset-bottom) + 48px));
+	scroll-padding-block: 12px 96px;
 	color: var(--text-normal);
+}
+
+.critic-sidebar .critic-composer-shell {
+	scroll-margin-block: 12px 96px;
 }
 
 .critic-sidebar-header {
