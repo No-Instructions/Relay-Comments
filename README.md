@@ -61,6 +61,14 @@ The `identities` array in the plugin's `data.json` is a directory for
 resolving other people's author IDs. Those entries are never treated as
 your own identity.
 
+## Privacy and network access
+
+Relay Comments has no account, telemetry, or direct note-upload service.
+When you select Relay or Obsidian Sync as your identity provider, Relay
+Comments asks that installed service for identity records; that service's
+network and privacy behavior still applies. Profile-picture URLs are loaded
+by Obsidian when their avatars are displayed.
+
 ## Usage notes
 
 - Live Preview and Reading mode render review marks and hide the raw

@@ -40,6 +40,18 @@ npm run build   # typecheck + produce main.js
   your fix or feature working makes a pull request much easier to land —
   and we welcome the contribution either way.
 
+## Releases
+
+Release tags match the version in `package.json` and `manifest.json`, with no
+leading `v`. `versions.json` maps each plugin version to its minimum Obsidian
+version.
+
+Maintainers prepare a release with `npm version <version> --no-git-tag-version`
+and run `npm run release`. Pushing the matching tag builds and verifies
+`main.js`, `manifest.json`, and `styles.css`, attests them, and creates the
+GitHub release. Release notes must describe the user-facing changes; release
+assets are never edited by hand after publication.
+
 ## Support and security
 
 Questions, ideas, and design discussion: [Relay Discord](https://discord.system3.md).
