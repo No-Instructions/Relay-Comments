@@ -829,7 +829,7 @@ export class ReviewSidebarView extends ItemView {
 			text: unknown ? "?" : initials(identity.name),
 		});
 		if (!unknown && identity.color) {
-			avatar.style.backgroundColor = identity.color;
+			avatar.setCssStyles({ backgroundColor: identity.color });
 		}
 	}
 

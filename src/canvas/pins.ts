@@ -342,8 +342,9 @@ export class CanvasCommentPins {
 					((first.authorId && first.authorId === identity.id) ||
 						first.author === identity.name);
 				pin.classList.toggle("is-identity", Boolean(own && identity.color));
-				pin.style.backgroundColor =
-					own && identity.color ? identity.color : "";
+				pin.setCssStyles({
+					backgroundColor: own && identity.color ? identity.color : "",
+				});
 				const initial = pin.querySelector(".critic-canvas-pin-initial");
 				if (initial) initial.textContent = pinInitial(thread);
 				const count = thread.comments.length;
@@ -352,7 +353,7 @@ export class CanvasCommentPins {
 				);
 				if (badge) {
 					badge.textContent = String(count);
-					badge.style.display = count > 1 ? "" : "none";
+					badge.setCssStyles({ display: count > 1 ? "" : "none" });
 				}
 			}
 		}
@@ -424,8 +425,10 @@ export class CanvasCommentPins {
 				) {
 					left = controls.left - PIN_SIZE - PIN_EDGE_MARGIN;
 				}
-				pin.style.left = `${left}px`;
-				pin.style.top = `${clampedTop}px`;
+				pin.setCssStyles({
+					left: `${left}px`,
+					top: `${clampedTop}px`,
+				});
 			});
 		if (this.cardOwner === view) this.positionCard(view);
 	}
@@ -927,7 +930,7 @@ export class CanvasCommentPins {
 				(comment.authorId && comment.authorId === identity.id) ||
 				comment.author === identity.name;
 			if (own && identity.color) {
-				avatar.style.backgroundColor = identity.color;
+				avatar.setCssStyles({ backgroundColor: identity.color });
 			}
 			const byline = commentIdentity.createDiv({
 				cls: "critic-comment-byline",
@@ -1192,7 +1195,7 @@ export class CanvasCommentPins {
 		// Width first: the bottom clamp needs the height AT this width (a
 		// narrower card wraps taller), so the offsetHeight read comes
 		// after the write.
-		card.style.width = `${width}px`;
+		card.setCssStyles({ width: `${width}px` });
 		let left = rawLeft;
 		let top = rawTop;
 		// Clamp only while the pin is at least near the pane: a pin
@@ -1226,8 +1229,7 @@ export class CanvasCommentPins {
 			card.setCssProps({ "--critic-canvas-caret-y": "16px" });
 			card.classList.remove("is-caret-detached");
 		}
-		card.style.left = `${left}px`;
-		card.style.top = `${top}px`;
+		card.setCssStyles({ left: `${left}px`, top: `${top}px` });
 	}
 
 	closeCard(): void {

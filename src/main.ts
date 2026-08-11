@@ -676,7 +676,7 @@ export default class RelayCommentsPlugin
 		const margin = 12;
 		const gap = 8;
 		const width = Math.min(360, Math.max(280, window.innerWidth - margin * 2));
-		element.style.width = `${width}px`;
+		element.setCssStyles({ width: `${width}px` });
 		const previewRect = element.getBoundingClientRect();
 		let left = anchorRect.left;
 		if (left + width > window.innerWidth - margin) {
@@ -691,15 +691,19 @@ export default class RelayCommentsPlugin
 			placedAbove = true;
 		}
 		top = Math.max(margin, top);
-		element.style.left = `${Math.round(left)}px`;
-		element.style.top = `${Math.round(top)}px`;
+		element.setCssStyles({
+			left: `${Math.round(left)}px`,
+			top: `${Math.round(top)}px`,
+		});
 		// The caret pins the popover to its anchor: aim it at the anchor's
 		// horizontal center, kept clear of the rounded corners.
 		const caretX = Math.min(
 			width - 18,
 			Math.max(18, anchorRect.left + (anchorRect.right - anchorRect.left) / 2 - left),
 		);
-		element.style.setProperty("--critic-preview-caret-x", `${Math.round(caretX)}px`);
+		element.setCssProps({
+			"--critic-preview-caret-x": `${Math.round(caretX)}px`,
+		});
 		element.toggleClass("is-above", placedAbove);
 	}
 

@@ -407,8 +407,10 @@ export function createReviewEditorExtension(
 					this.commentButton.classList.remove("is-visible");
 					return;
 				}
-				this.commentButton.style.left = `${placement.left}px`;
-				this.commentButton.style.top = `${placement.top}px`;
+				this.commentButton.setCssStyles({
+					left: `${placement.left}px`,
+					top: `${placement.top}px`,
+				});
 				this.commentButton.classList.add("is-visible");
 			}
 		},

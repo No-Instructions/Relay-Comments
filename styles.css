@@ -467,8 +467,8 @@
 	color: var(--text-faint);
 }
 
-.critic-sidebar .critic-icon-button,
-.critic-canvas-card .critic-icon-button {
+.workspace .critic-sidebar .critic-icon-button,
+.workspace .critic-canvas-card .critic-icon-button {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
@@ -479,7 +479,7 @@
 	border-radius: 50%;
 	background: transparent;
 	color: var(--text-muted);
-	box-shadow: none !important;
+	box-shadow: none;
 	cursor: pointer;
 }
 
@@ -648,7 +648,7 @@ a.critic-comment-link.is-unresolved {
 	flex-direction: column;
 }
 
-.critic-sidebar textarea {
+.workspace .critic-sidebar textarea {
 	width: 100%;
 	border: 1px solid var(--background-modifier-border);
 	background: var(--background-primary);
@@ -657,13 +657,13 @@ a.critic-comment-link.is-unresolved {
 	font-size: var(--font-ui-small);
 	line-height: 1.4;
 	margin: 0;
-	box-shadow: none !important;
+	box-shadow: none;
 }
 
-.critic-sidebar textarea:focus {
+.workspace .critic-sidebar textarea:focus {
 	border-color: var(--interactive-accent);
 	outline: none;
-	box-shadow: none !important;
+	box-shadow: none;
 }
 
 .critic-sidebar textarea::placeholder {
@@ -805,9 +805,9 @@ a.critic-comment-link.is-unresolved {
 
 /* ---------- Buttons ---------- */
 
-.critic-sidebar .critic-text-button,
-.critic-canvas-card .critic-text-button,
-.critic-placement-banner .critic-text-button {
+.workspace .critic-sidebar .critic-text-button,
+.workspace .critic-canvas-card .critic-text-button,
+.workspace .critic-placement-banner .critic-text-button {
 	appearance: none;
 	border: none;
 	border-radius: 999px;
@@ -818,7 +818,7 @@ a.critic-comment-link.is-unresolved {
 	font-size: var(--font-ui-smaller);
 	font-weight: 600;
 	line-height: 1.2;
-	box-shadow: none !important;
+	box-shadow: none;
 	cursor: pointer;
 	transition: background-color 100ms ease, color 100ms ease;
 }
@@ -1004,9 +1004,9 @@ a.critic-comment-link.is-unresolved {
 	text-align: center;
 }
 
-.critic-canvas-placing,
-.critic-canvas-placing * {
-	cursor: crosshair !important;
+.workspace .critic-canvas-placing,
+.workspace .critic-canvas-placing * {
+	cursor: crosshair;
 }
 
 /* Placement mode's visible cue: the cursor is invisible on touch and
@@ -1042,13 +1042,16 @@ a.critic-comment-link.is-unresolved {
 
 /* Placement mode's universal crosshair (below) would win over the
    button's own cursor; the banner is UI, not placement surface. */
-.critic-canvas-placing .critic-placement-banner,
-.critic-canvas-placing .critic-placement-banner .critic-placement-banner-text {
-	cursor: default !important;
+.workspace .critic-canvas-placing .critic-placement-banner,
+.workspace
+	.critic-canvas-placing
+	.critic-placement-banner
+	.critic-placement-banner-text {
+	cursor: default;
 }
 
-.critic-canvas-placing .critic-placement-banner .critic-text-button {
-	cursor: pointer !important;
+.workspace .critic-canvas-placing .critic-placement-banner .critic-text-button {
+	cursor: pointer;
 }
 
 /* The floating thread card, on the same screen-space overlay as the
