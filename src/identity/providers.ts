@@ -228,12 +228,10 @@ export class ObsidianSyncIdentityProvider implements IdentityProvider {
 		if (this.directoryRequest) return this.directoryRequest;
 
 		const request = (async () => {
-			const getUsernames = this.getPlugin()?.instance?.getUsernames;
-			if (!getUsernames) return new Map<string, Identity>();
+			const instance = this.getPlugin()?.instance;
+			if (!instance?.getUsernames) return new Map<string, Identity>();
 			try {
-				return normalizeSyncDirectory(await getUsernames.call(
-					this.getPlugin()?.instance,
-				));
+				return normalizeSyncDirectory(await instance.getUsernames());
 			} catch {
 				return new Map<string, Identity>();
 			}

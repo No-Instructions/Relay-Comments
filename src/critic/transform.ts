@@ -1,4 +1,3 @@
-import { parseCriticMarkup } from "./parse";
 import type { CriticMark } from "./types";
 
 export type CriticAction = "accept" | "reject";

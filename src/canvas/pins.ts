@@ -175,7 +175,9 @@ export class CanvasCommentPins {
 	private patchBackgroundMenu(view: CanvasViewLike, canvas: CanvasLike): void {
 		const el = canvas.wrapperEl;
 		if (!el || this.menuPatches.some((patch) => patch.el === el)) return;
-		const pins = this;
+		const placeThreadAtScreenPoint = (clientX: number, clientY: number) => {
+			this.placeThreadAtScreenPoint(view, canvas, clientX, clientY);
+		};
 		const listener = (event: MouseEvent) => {
 			const target = event.target as HTMLElement | null;
 			if (target?.closest(".canvas-node, .critic-canvas-pin")) return;
@@ -198,12 +200,7 @@ export class CanvasCommentPins {
 						.setTitle("Add comment")
 						.setIcon("message-square-plus")
 						.onClick(() => {
-							pins.placeThreadAtScreenPoint(
-								view,
-								canvas,
-								event.clientX,
-								event.clientY,
-							);
+							placeThreadAtScreenPoint(event.clientX, event.clientY);
 						});
 				});
 				return originalShow.apply(this, args);
@@ -809,7 +806,7 @@ export class CanvasCommentPins {
 		const mount = overlay;
 		if (!mount) {
 			if (retries > 0) {
-				requestAnimationFrame(() =>
+				window.requestAnimationFrame(() =>
 					this.openCard(
 						view,
 						nodeId,
@@ -1215,19 +1212,18 @@ export class CanvasCommentPins {
 			// displacement (bounded to the card), but a horizontal clamp
 			// slides the card OVER its pin — a side caret would point at
 			// nothing, so it hides instead.
-			card.style.setProperty(
-				"--critic-canvas-caret-y",
-				`${Math.min(
+			card.setCssProps({
+				"--critic-canvas-caret-y": `${Math.min(
 					Math.max(16, rawTop - top + 16),
 					Math.max(16, cardHeight - 16),
 				)}px`,
-			);
+			});
 			card.classList.toggle(
 				"is-caret-detached",
 				Math.abs(left - rawLeft) > 1,
 			);
 		} else {
-			card.style.setProperty("--critic-canvas-caret-y", "16px");
+			card.setCssProps({ "--critic-canvas-caret-y": "16px" });
 			card.classList.remove("is-caret-detached");
 		}
 		card.style.left = `${left}px`;

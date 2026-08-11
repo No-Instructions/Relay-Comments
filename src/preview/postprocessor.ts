@@ -125,7 +125,7 @@ function rewriteMultilineSlice(
 	const segments = renderSliceSegments(text, from, to, mode);
 	if (segments.length === 1 && segments[0].kind === "text") return false;
 
-	const fragment = el.ownerDocument.createDocumentFragment();
+	const fragment = createFragment();
 	for (const segment of segments) {
 		appendSegment(fragment, segment);
 	}
@@ -225,7 +225,7 @@ function rewriteElementFromSource(
 	const segments = renderDisplaySegments(source, mode);
 	if (segments.length === 1 && segments[0].kind === "text") return;
 
-	const fragment = el.ownerDocument.createDocumentFragment();
+	const fragment = createFragment();
 	for (const segment of segments) {
 		appendSegment(fragment, segment);
 	}
@@ -247,7 +247,7 @@ function replaceTextNode(node: Text, mode: DisplayMode): void {
 	const segments = renderDisplaySegments(text, mode);
 	if (segments.length === 1 && segments[0].kind === "text") return;
 
-	const fragment = node.ownerDocument.createDocumentFragment();
+	const fragment = createFragment();
 	for (const segment of segments) {
 		appendSegment(fragment, segment);
 	}
@@ -258,13 +258,12 @@ function appendSegment(parent: DocumentFragment, segment: RenderSegment): void {
 	if (segment.kind === "text") {
 		const parts = segment.text.split("\n");
 		parts.forEach((part, index) => {
-			if (index > 0) parent.append(parent.ownerDocument.createElement("br"));
+			if (index > 0) parent.append(createEl("br"));
 			if (part.length > 0) parent.append(part);
 		});
 		return;
 	}
 
-	const doc = parent.ownerDocument;
 	const tag =
 		segment.kind === "deletion"
 			? "del"
@@ -273,7 +272,7 @@ function appendSegment(parent: DocumentFragment, segment: RenderSegment): void {
 				: segment.kind === "highlight"
 					? "mark"
 					: "span";
-	const el = doc.createElement(tag);
+	const el = createEl(tag);
 	el.className = `critic-preview-${segment.kind}`;
 	el.textContent = segment.text;
 	if (segment.title) el.title = segment.title;

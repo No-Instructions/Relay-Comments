@@ -207,7 +207,9 @@ export default class RelayCommentsPlugin
 
 		this.registerCommands();
 		this.registerWorkspaceEvents();
-		this.captureActiveContentLeaf(this.app.workspace.activeLeaf);
+		this.captureActiveContentLeaf(
+			this.app.workspace.getActiveViewOfType(ItemView)?.leaf ?? null,
+		);
 		for (const provider of this.identityProviders) {
 			if (provider.subscribe) {
 				this.register(
@@ -246,7 +248,9 @@ export default class RelayCommentsPlugin
 		});
 
 		this.app.workspace.onLayoutReady(() => {
-			this.captureActiveContentLeaf(this.app.workspace.activeLeaf);
+			this.captureActiveContentLeaf(
+				this.app.workspace.getActiveViewOfType(ItemView)?.leaf ?? null,
+			);
 			this.queueEditorExtensionRefresh(0);
 			this.queueEditorExtensionRefresh(250);
 			this.refreshReviewSidebars();
@@ -274,7 +278,6 @@ export default class RelayCommentsPlugin
 		}
 		this.hideThreadPreview();
 		this.editorExtensions.length = 0;
-		this.app.workspace.detachLeavesOfType(VIEW_TYPE_CRITIC_REVIEW);
 		this.app.workspace.updateOptions();
 		this.refreshOpenEditors();
 	}
@@ -555,7 +558,7 @@ export default class RelayCommentsPlugin
 				act();
 			});
 		};
-		const element = document.createElement("div");
+		const element = createDiv();
 		element.id = `critic-thread-preview-${this.previewId}`;
 		element.className = data.resolved
 			? "critic-thread-preview is-resolved"
@@ -1529,7 +1532,10 @@ export default class RelayCommentsPlugin
 				rightSplit?: { collapsed?: boolean };
 			}
 		).rightSplit;
-		return this.app.workspace.activeLeaf === leaf && rightSplit?.collapsed !== true;
+		return (
+			this.app.workspace.getActiveViewOfType(ReviewSidebarView)?.leaf === leaf &&
+			rightSplit?.collapsed !== true
+		);
 	}
 
 	closeReviewSidebar(leaf?: WorkspaceLeaf): void {
@@ -1601,7 +1607,7 @@ export default class RelayCommentsPlugin
 			checkCallback: (checking) => {
 				const view = this.app.workspace.getActiveViewOfType(ItemView);
 				if (view?.getViewType() !== "canvas") return false;
-				if (!checking) this.canvasPins?.beginPlacement(view as never);
+				if (!checking) this.canvasPins?.beginPlacement(view);
 				return true;
 			},
 		});
@@ -1701,10 +1707,7 @@ export default class RelayCommentsPlugin
 											.canvas === node.canvas,
 								);
 							if (owner) {
-								this.canvasPins?.addThreadToNode(
-									owner.view as never,
-									node.id,
-								);
+								this.canvasPins?.addThreadToNode(owner.view, node.id);
 							}
 						});
 				});
@@ -1733,7 +1736,9 @@ export default class RelayCommentsPlugin
 		);
 		this.registerEvent(
 			this.app.workspace.on("file-open", () => {
-				this.captureActiveContentLeaf(this.app.workspace.activeLeaf);
+				this.captureActiveContentLeaf(
+					this.app.workspace.getActiveViewOfType(ItemView)?.leaf ?? null,
+				);
 				this.captureActiveMarkdownPath();
 				this.hideThreadPreview();
 				this.queueEditorExtensionRefresh(0);

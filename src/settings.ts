@@ -24,8 +24,6 @@ export class RelayCommentsSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 		containerEl.addClass("relay-comments-settings-tab");
-		containerEl.createEl("h2", { text: "Relay Comments" });
-
 		this.renderIdentitySettings(containerEl);
 
 		new Setting(containerEl)

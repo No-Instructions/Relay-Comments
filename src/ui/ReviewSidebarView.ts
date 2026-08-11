@@ -150,7 +150,11 @@ export class ReviewSidebarView extends ItemView {
 		// Mod+Enter binding consumes the keydown before the textarea sees it.
 		this.registerDomEvent(this.contentEl, "focusin", (event) => {
 			if (!(event.target instanceof HTMLTextAreaElement)) return;
-			if (this.app.workspace.activeLeaf === this.leaf) return;
+			if (
+				this.app.workspace.getActiveViewOfType(ReviewSidebarView) === this
+			) {
+				return;
+			}
 			this.app.workspace.setActiveLeaf(this.leaf, { focus: false });
 		});
 		this.render();
@@ -1221,7 +1225,7 @@ export class ReviewSidebarView extends ItemView {
 		const submit = this.addTextButton(
 			actions,
 			"Reply",
-			() => this.commitThreadReply(item, mark, textarea),
+			() => void this.commitThreadReply(item, mark, textarea),
 			{ primary: true },
 		);
 		this.addTextButton(actions, "Cancel", () => {
@@ -1231,7 +1235,7 @@ export class ReviewSidebarView extends ItemView {
 		bindSubmitToContent(textarea, submit, composer);
 		this.composerSubmits.set(textarea, () => {
 			if (!submit.disabled) {
-				this.commitThreadReply(item, mark, textarea);
+				void this.commitThreadReply(item, mark, textarea);
 			}
 		});
 		textarea.addEventListener("keydown", (event) => {
@@ -1244,7 +1248,7 @@ export class ReviewSidebarView extends ItemView {
 			if (!isComposerSubmitKey(event)) return;
 			event.preventDefault();
 			if (!submit.disabled) {
-				this.commitThreadReply(item, mark, textarea);
+				void this.commitThreadReply(item, mark, textarea);
 			}
 		});
 	}

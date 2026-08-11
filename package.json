@@ -8,7 +8,7 @@
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
 		"check": "tsc -noEmit -skipLibCheck",
 		"check:no-node": "tsc -noEmit -skipLibCheck -p tsconfig.no-node.json",
-		"lint": "eslint src manifest.json",
+		"lint": "eslint src",
 		"verify-release": "node scripts/verify-release.mjs",
 		"release": "npm run lint && npm run build && npm run check:no-node && npm test && npm run verify-release",
 		"test": "npm run test:unit",

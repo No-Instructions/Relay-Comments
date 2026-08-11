@@ -289,9 +289,9 @@ export function createReviewEditorExtension(
 			}
 
 			private observeSourceView(): void {
-				const sourceView = this.view.dom.closest(
+				const sourceView = this.view.dom.closest<HTMLElement>(
 					".markdown-source-view",
-				) as HTMLElement | null;
+				);
 				if (sourceView === this.sourceViewEl) return;
 
 				this.sourceViewObserver?.disconnect();
@@ -323,7 +323,7 @@ export function createReviewEditorExtension(
 			}
 
 			private createCommentButton(): HTMLButtonElement {
-				const button = this.view.dom.ownerDocument.createElement("button");
+				const button = createEl("button");
 				button.className = "cm-critic-comment-button";
 				button.type = "button";
 				// setTooltip, never the title attribute: a title makes the
@@ -775,17 +775,15 @@ class CriticTaskCheckboxWidget extends WidgetType {
 		// Same DOM shape as a native task line's widget — a
 		// label.task-list-label wrapping the input — so theme rules for
 		// task checkboxes apply unchanged.
-		const doc = view.dom.ownerDocument;
-		const label = doc.createElement("label");
-		label.className = "task-list-label";
+		const label = createEl("label");
+		label.className = "task-list-label cm-critic-task-label";
 		label.contentEditable = "false";
 		// The replace swallows the marker's trailing space, so the body
 		// text starts one space-width left of native task rows (the olive
 		// highlight then abuts the checkbox — a blind demo review measured
-		// the ~3px). Give that width back here; a stylesheet rule loses
-		// the cascade to Obsidian's own checkbox margins.
-		label.style.marginInlineEnd = "0.14em";
-		const checkbox = doc.createElement("input");
+		// the ~3px). The plugin-specific class gives that width back with
+		// enough specificity to beat Obsidian's task-label margin.
+		const checkbox = createEl("input");
 		checkbox.type = "checkbox";
 		checkbox.className = "task-list-item-checkbox cm-critic-task-checkbox";
 		checkbox.checked = this.taskPrefix.checked;
