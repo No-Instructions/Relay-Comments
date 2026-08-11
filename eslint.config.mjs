@@ -7,7 +7,6 @@ export default defineConfig(
 		"node_modules",
 		"coverage",
 		"main.js",
-		"package.json",
 		"package-lock.json",
 		"tsconfig.json",
 		"tsconfig.no-node.json",
