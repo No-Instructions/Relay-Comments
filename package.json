@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-relay-comments",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Relay-aware comments and suggestions for Obsidian Markdown notes.",
 	"main": "main.js",
 	"scripts": {
