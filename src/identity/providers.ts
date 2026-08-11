@@ -7,6 +7,7 @@ import type {
 	IdentityResolver,
 } from "./types";
 import type { ApiV0, RelayEvent, User } from "./relay-plugin-api";
+import { ObservableMap, ObservableValue } from "../observable/store";
 
 interface RelayPluginLike {
 	api?: unknown;
@@ -59,6 +60,10 @@ export class ConfiguredIdentityResolver implements IdentityResolver {
 	}
 
 	async resolveUser(id: string, _path: string): Promise<Identity | null> {
+		return this.resolveUserSnapshot(id, _path);
+	}
+
+	resolveUserSnapshot(id: string, _path: string): Identity | null {
 		return this.getIdentities().find((identity) => identity.id === id) ?? null;
 	}
 }
@@ -83,67 +88,95 @@ export function getRelayIdentitySupportStatus(
 export class RelayIdentityProvider implements IdentityProvider {
 	readonly id = "relay";
 	readonly name = "Relay";
-	private users = new Map<string, Identity>();
-	private currentUser: Identity | null = null;
-	private subscriptions = 0;
+	readonly users = new ObservableMap<string, Identity>(identitiesEqual);
+	readonly currentUser = new ObservableValue<Identity | null>(
+		null,
+		nullableIdentitiesEqual,
+	);
+	private readonly listeners = new Set<() => void>();
+	private eventRefs: EventRef[] | null = null;
 
 	constructor(private readonly app: App) {}
 
 	isAvailable(): boolean {
 		this.prepareRead();
-		return this.currentUser !== null;
+		return this.currentUser.value !== null;
 	}
 
 	async getCurrentUser(_path: string): Promise<Identity | null> {
+		return this.getCurrentUserSnapshot(_path);
+	}
+
+	getCurrentUserSnapshot(_path: string): Identity | null {
 		this.prepareRead();
-		return this.currentUser ? { ...this.currentUser } : null;
+		return this.currentUser.value ? { ...this.currentUser.value } : null;
 	}
 
 	async resolveUser(id: string, _path: string): Promise<Identity | null> {
+		return this.resolveUserSnapshot(id, _path);
+	}
+
+	resolveUserSnapshot(id: string, _path: string): Identity | null {
 		this.prepareRead();
 		const identity = this.users.get(id);
 		return identity ? { ...identity } : null;
 	}
 
 	subscribe(onChange: () => void): () => void {
-		this.subscriptions += 1;
-		const refresh = (): void => {
-			this.resnapshot();
-			onChange();
-		};
-		const applyUsers = (event: RelayEvent<User>): void => {
-			const id = normalizeId(event.record.id);
-			if (id === null) return;
-			if (event.action === "delete") {
-				this.users.delete(id);
-			} else {
-				const identity = normalizeIdentity(event.record);
-				if (!identity) return;
-				this.users.set(identity.id, identity);
-			}
-			onChange();
-		};
-		const applyCurrentUser = (event: RelayEvent<User | null>): void => {
-			this.currentUser = normalizeIdentity(event.record);
-			onChange();
-		};
-
-		const eventRefs: EventRef[] = [
-			this.app.workspace.on(RELAY_API_READY_EVENT, refresh),
-			this.app.workspace.on(RELAY_USERS_EVENT, applyUsers),
-			this.app.workspace.on(RELAY_CURRENT_USER_EVENT, applyCurrentUser),
-		];
-		if (this.resnapshot()) onChange();
+		this.listeners.add(onChange);
+		if (this.listeners.size === 1) this.attach();
 
 		let subscribed = true;
 		return () => {
 			if (!subscribed) return;
 			subscribed = false;
-			this.subscriptions = Math.max(0, this.subscriptions - 1);
-			for (const eventRef of eventRefs) {
-				this.app.workspace.offref(eventRef);
-			}
+			this.listeners.delete(onChange);
+			if (this.listeners.size === 0) this.detach();
 		};
+	}
+
+	private attach(): void {
+		if (this.eventRefs) return;
+		const refresh = (): void => {
+			if (this.resnapshot()) this.notifyChange();
+		};
+		const applyUsers = (event: RelayEvent<User>): void => {
+			const id = normalizeId(event.record.id);
+			if (id === null) return;
+			let changed = false;
+			if (event.action === "delete") {
+				changed = this.users.delete(id);
+			} else {
+				const identity = normalizeIdentity(event.record);
+				if (!identity) return;
+				changed = this.users.set(identity.id, identity);
+			}
+			if (changed) this.notifyChange();
+		};
+		const applyCurrentUser = (event: RelayEvent<User | null>): void => {
+			const identity =
+				event.action === "delete" ? null : normalizeIdentity(event.record);
+			if (this.currentUser.set(identity)) this.notifyChange();
+		};
+
+		this.eventRefs = [
+			this.app.workspace.on(RELAY_API_READY_EVENT, refresh),
+			this.app.workspace.on(RELAY_USERS_EVENT, applyUsers),
+			this.app.workspace.on(RELAY_CURRENT_USER_EVENT, applyCurrentUser),
+		];
+		if (this.resnapshot()) this.notifyChange();
+	}
+
+	private detach(): void {
+		if (!this.eventRefs) return;
+		for (const eventRef of this.eventRefs) {
+			this.app.workspace.offref(eventRef);
+		}
+		this.eventRefs = null;
+	}
+
+	private notifyChange(): void {
+		for (const listener of [...this.listeners]) listener();
 	}
 
 	private getApi(): ApiV0 | null {
@@ -151,39 +184,26 @@ export class RelayIdentityProvider implements IdentityProvider {
 	}
 
 	private prepareRead(): void {
-		if (!this.getApi()) {
-			this.clearSnapshot();
-			return;
-		}
-		if (this.subscriptions === 0) this.resnapshot();
+		if (this.listeners.size === 0) this.resnapshot();
 	}
 
 	private resnapshot(): boolean {
 		const api = this.getApi();
-		if (!api) {
-			this.clearSnapshot();
-			return false;
-		}
+		if (!api) return false;
 		try {
-			const users = new Map<string, Identity>();
+			const users: Array<[string, Identity]> = [];
 			for (const record of api.getUsers()) {
 				const identity = normalizeIdentity(record);
-				if (identity) users.set(identity.id, identity);
+				if (identity) users.push([identity.id, identity]);
 			}
-			this.users = users;
-			this.currentUser = normalizeIdentity(api.getCurrentUser());
+			this.users.reset(users);
+			this.currentUser.set(normalizeIdentity(api.getCurrentUser()));
 			return true;
 		} catch {
-			// A retained v0 facade throws after Relay unloads. Treat that the same
-			// as an unavailable provider until the next payload-free ready event.
-			this.clearSnapshot();
+			// Retained data stays usable while Relay is absent. The next payload-free
+			// ready event resolves a fresh facade and reconciles both stores.
 			return false;
 		}
-	}
-
-	private clearSnapshot(): void {
-		this.users.clear();
-		this.currentUser = null;
 	}
 }
 
@@ -255,6 +275,24 @@ export function normalizeIdentity(value: IdentityLike | null): Identity | null {
 		...optionalString("color", value.color),
 		...optionalString("colorLight", value.colorLight),
 	};
+}
+
+function identitiesEqual(left: Identity, right: Identity): boolean {
+	return (
+		left.id === right.id &&
+		left.name === right.name &&
+		left.picture === right.picture &&
+		left.color === right.color &&
+		left.colorLight === right.colorLight
+	);
+}
+
+function nullableIdentitiesEqual(
+	left: Identity | null,
+	right: Identity | null,
+): boolean {
+	if (left === null || right === null) return left === right;
+	return identitiesEqual(left, right);
 }
 
 export function normalizeSyncDirectory(value: unknown): Map<string, Identity> {

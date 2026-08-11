@@ -18,12 +18,16 @@ export interface IdentityResolver {
 
 	isAvailable(): boolean;
 	resolveUser(id: string, path: string): Promise<Identity | null>;
+	/** Return a cached identity synchronously when the provider maintains one. */
+	resolveUserSnapshot?(id: string, path: string): Identity | null;
 }
 
 export interface IdentityProvider extends IdentityResolver {
 	readonly id: IdentityProviderId;
 
 	getCurrentUser(path: string): Promise<Identity | null>;
+	/** Return the cached current identity synchronously when available. */
+	getCurrentUserSnapshot?(path: string): Identity | null;
 
 	/**
 	 * Notify the consumer when availability or identity data changes.

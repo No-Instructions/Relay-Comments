@@ -715,6 +715,11 @@ export default class RelayCommentsPlugin
 		if (this.identityCache.has(key)) {
 			return this.identityCache.get(key) ?? fallbackIdentity();
 		}
+		const snapshot = this.resolveCurrentIdentitySnapshot(filePath);
+		if (snapshot !== undefined) {
+			this.identityCache.set(key, snapshot);
+			return snapshot ?? fallbackIdentity();
+		}
 		this.queueIdentityRequest(key, async () => {
 			return this.resolveCurrentIdentity(filePath);
 		});
@@ -781,6 +786,20 @@ export default class RelayCommentsPlugin
 		if (this.identityCache.has(key)) {
 			return (
 				this.identityCache.get(key) ?? {
+					id: author,
+					name: unresolvedName ?? author,
+					source: "metadata",
+				}
+			);
+		}
+		const snapshot = this.resolveAuthorIdentitySnapshot(
+			author,
+			resolvedFilePath,
+		);
+		if (snapshot !== undefined) {
+			this.identityCache.set(key, snapshot);
+			return (
+				snapshot ?? {
 					id: author,
 					name: unresolvedName ?? author,
 					source: "metadata",
@@ -1307,6 +1326,20 @@ export default class RelayCommentsPlugin
 		return provider ? null : this.getLocalReviewerIdentity();
 	}
 
+	private resolveCurrentIdentitySnapshot(
+		path: string,
+	): ReviewerIdentity | null | undefined {
+		const provider = this.getSelectedIdentityProvider();
+		if (!provider) return this.getLocalReviewerIdentity();
+		if (!provider.getCurrentUserSnapshot) return undefined;
+		try {
+			const identity = provider.getCurrentUserSnapshot(path);
+			return identity ? providerIdentity(identity, provider.id) : null;
+		} catch {
+			return undefined;
+		}
+	}
+
 	private async resolveAuthorIdentity(
 		author: string,
 		path: string,
@@ -1329,6 +1362,29 @@ export default class RelayCommentsPlugin
 		const local = this.getLocalReviewerIdentity();
 		if (local?.id === author) return local;
 		return null;
+	}
+
+	private resolveAuthorIdentitySnapshot(
+		author: string,
+		path: string,
+	): ReviewerIdentity | null | undefined {
+		const provider = this.getSelectedIdentityProvider();
+		const resolvers: IdentityResolver[] = [
+			...(provider ? [provider] : []),
+			this.configuredIdentityResolver,
+		];
+		for (const resolver of resolvers) {
+			if (!resolver.isAvailable()) continue;
+			if (!resolver.resolveUserSnapshot) return undefined;
+			try {
+				const identity = resolver.resolveUserSnapshot(author, path);
+				if (identity) return providerIdentity(identity, resolver.id);
+			} catch {
+				return undefined;
+			}
+		}
+		const local = this.getLocalReviewerIdentity();
+		return local?.id === author ? local : null;
 	}
 
 	private getLocalReviewerIdentity(): ReviewerIdentity | null {

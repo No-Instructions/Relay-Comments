@@ -1,4 +1,4 @@
-import { describe, expect, it } from "@jest/globals";
+import { describe, expect, it, jest } from "@jest/globals";
 import {
 	ConfiguredIdentityResolver,
 	getRelayIdentitySupportStatus,
@@ -205,6 +205,51 @@ describe("service identity providers", () => {
 		});
 		expect(changes).toBe(changesAtUnsubscribe);
 		expect(workspace.offrefCalls).toBe(3);
+	});
+
+	it("publishes cached identity stores and retains them across Relay absence", async () => {
+		const bongo = { id: "bongo", name: "Bongo Cat" };
+		const updatedBongo = { ...bongo, name: "Bongo Cat Jr." };
+		const workspace = createTestWorkspace();
+		const relay = {
+			api: {
+				v0: {
+					getCurrentUser: () => bongo,
+					getUsers: () => [bongo],
+				},
+			},
+		};
+		const provider = new RelayIdentityProvider({
+			plugins: { plugins: { "system3-relay": relay } },
+			workspace,
+		} as never);
+		const users = jest.fn();
+		const currentUser = jest.fn();
+
+		provider.subscribe(() => {});
+		provider.users.subscribe(users);
+		provider.currentUser.subscribe(currentUser);
+
+		expect(users).toHaveBeenLastCalledWith(provider.users);
+		expect(provider.users.get("bongo")).toEqual(bongo);
+		expect(currentUser).toHaveBeenLastCalledWith(bongo);
+
+		relay.api = undefined as never;
+		workspace.emit("system3-relay:api-ready");
+		expect(provider.resolveUserSnapshot("bongo", "note.md")).toEqual(bongo);
+		expect(provider.getCurrentUserSnapshot("note.md")).toEqual(bongo);
+
+		relay.api = {
+			v0: {
+				getCurrentUser: () => updatedBongo,
+				getUsers: () => [updatedBongo],
+			},
+		};
+		workspace.emit("system3-relay:api-ready");
+		expect(provider.users.get("bongo")).toEqual(updatedBongo);
+		expect(provider.currentUser.value).toEqual(updatedBongo);
+		expect(users).toHaveBeenCalledTimes(2);
+		expect(currentUser).toHaveBeenCalledTimes(2);
 	});
 
 	it("resolves the numeric Obsidian Sync user ID through its directory", async () => {
