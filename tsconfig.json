@@ -9,7 +9,7 @@
 		"strict": true,
 		"allowSyntheticDefaultImports": true,
 		"forceConsistentCasingInFileNames": true,
-		"lib": ["DOM", "ES2018"],
+		"lib": ["DOM", "ES2019"],
 		"types": ["node"]
 	},
 	"include": ["src/**/*.ts"],

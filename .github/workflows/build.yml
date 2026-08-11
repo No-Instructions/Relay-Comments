@@ -3,7 +3,6 @@ name: Build
 on:
   push:
     branches: [main]
-    tags: ['*']
   pull_request:
 
 permissions:
@@ -12,10 +11,6 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-      attestations: write
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -23,23 +18,11 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm test
-      - run: npm run build
+      - run: npm run release
       - uses: actions/upload-artifact@v7
         with:
           name: relay-comments
           path: |
-            main.js
-            manifest.json
-            styles.css
-      # Provenance attestation so installs can be verified against this
-      # workflow (gh attestation verify main.js --repo No-Instructions/Relay-Comments).
-      # GitHub only persists attestations for public repos on our plan, and
-      # fork PRs cannot mint them — this activates when the repo goes public.
-      - uses: actions/attest-build-provenance@v4
-        if: ${{ github.event_name == 'push' && !github.event.repository.private }}
-        with:
-          subject-path: |
             main.js
             manifest.json
             styles.css

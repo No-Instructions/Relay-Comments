@@ -7,9 +7,13 @@
 		"dev": "node esbuild.config.mjs watch",
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
 		"check": "tsc -noEmit -skipLibCheck",
+		"check:no-node": "tsc -noEmit -skipLibCheck -p tsconfig.no-node.json",
+		"verify-release": "node scripts/verify-release.mjs",
+		"release": "npm run build && npm run check:no-node && npm test && npm run verify-release",
 		"test": "npm run test:unit",
 		"test:unit": "jest",
-		"test:integration": "python3 tests/integration/run.py"
+		"test:integration": "python3 tests/integration/run.py",
+		"version": "node scripts/version-bump.mjs && git add manifest.json versions.json"
 	},
 	"keywords": [
 		"obsidian",
