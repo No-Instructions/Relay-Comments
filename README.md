@@ -113,12 +113,13 @@ readable text with visible annotations.
 
 ## Installation
 
-Relay Comments is not yet in the community plugin catalog. To install
-manually:
+Install Relay Comments from its
+[Obsidian community plugin catalog page](https://community.obsidian.md/plugins/relay-comments),
+or from inside Obsidian:
 
-1. Build or download `main.js`, `manifest.json`, and `styles.css`.
-2. Copy them to `<vault>/.obsidian/plugins/relay-comments/`.
-3. Enable **Relay Comments** in Settings → Community plugins.
+1. Open **Settings → Community plugins** and select **Browse**.
+2. Search for **Relay Comments** and select **Install**.
+3. Select **Enable**.
 
 ## Development
 
