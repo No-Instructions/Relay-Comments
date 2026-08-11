@@ -11,6 +11,7 @@ import {
 	type EditorState,
 	type Extension,
 	type Range,
+	type Transaction,
 } from "@codemirror/state";
 import {
 	Decoration,
@@ -28,6 +29,7 @@ import {
 import { collectAttachedComments } from "../critic/threading";
 import type { CriticMark, DisplayMode } from "../critic/types";
 import { findCriticTaskPrefixes, type CriticTaskPrefix } from "./task-prefix";
+import { canReuseCriticStateForTrailingChanges } from "./incremental";
 
 export interface ReviewEditorController {
 	getDisplayMode(path?: string | null): DisplayMode;
@@ -120,6 +122,17 @@ export function createReviewEditorExtension(
 				livePreview === value.livePreview &&
 				controller.getRenderVersion() === value.renderVersion &&
 				readPath(tr.state) === value.path
+			) {
+				return value;
+			}
+			if (
+				tr.docChanged &&
+				livePreview &&
+				domLivePreview === value.domLivePreview &&
+				livePreview === value.livePreview &&
+				controller.getRenderVersion() === value.renderVersion &&
+				readPath(tr.state) === value.path &&
+				canReuseTrailingEdit(value, tr)
 			) {
 				return value;
 			}
@@ -351,6 +364,25 @@ export function createReviewEditorExtension(
 	);
 
 	return [Prec.highest(criticField), reviewViewPlugin, reviewEditorTheme];
+}
+
+function canReuseTrailingEdit(
+	value: CriticFieldValue,
+	tr: Transaction,
+): boolean {
+	const changes: Array<{ from: number; deleted: string; inserted: string }> = [];
+	tr.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
+		changes.push({
+			from: fromA,
+			deleted: tr.startState.sliceDoc(fromA, toA),
+			inserted: inserted.toString(),
+		});
+	});
+	const lastMarkEnd = value.marks.reduce(
+		(maximum, mark) => Math.max(maximum, mark.to),
+		0,
+	);
+	return canReuseCriticStateForTrailingChanges(lastMarkEnd, changes);
 }
 
 function readPath(state: EditorState): string | null {

@@ -1,5 +1,11 @@
 import type { CriticMark } from "./types";
 
+const markDateFormatter = new Intl.DateTimeFormat(undefined, {
+	month: "short",
+	day: "numeric",
+	year: "numeric",
+});
+
 /** Collapse runs of whitespace for one-line display contexts. */
 export function normalizeWhitespace(value: string): string {
 	return value.replace(/\s+/g, " ").trim();
@@ -57,11 +63,7 @@ export function formatMarkDate(mark: CriticMark): string | null {
 	if (!raw) return null;
 	const date = new Date(raw);
 	if (Number.isNaN(date.getTime())) return raw;
-	return new Intl.DateTimeFormat(undefined, {
-		month: "short",
-		day: "numeric",
-		year: "numeric",
-	}).format(date);
+	return markDateFormatter.format(date);
 }
 
 /**

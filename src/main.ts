@@ -158,7 +158,8 @@ export default class RelayCommentsPlugin
 	private externalCommentObserver: MutationObserver | null = null;
 	private externalCommentRefreshTimer: number | null = null;
 	private reviewSidebarOpenPromise: Promise<void> | null = null;
-	private selectionRefreshTimer: number | null = null;
+	private sidebarRefreshTimer: number | null = null;
+	private identityRefreshTimer: number | null = null;
 	private canvasPins: CanvasCommentPins | null = null;
 	private previewShowTimer: number | null = null;
 	private previewHideTimer: number | null = null;
@@ -258,9 +259,13 @@ export default class RelayCommentsPlugin
 			this.externalCommentRefreshTimer = null;
 		}
 		this.reviewSidebarOpenPromise = null;
-		if (this.selectionRefreshTimer !== null) {
-			window.clearTimeout(this.selectionRefreshTimer);
-			this.selectionRefreshTimer = null;
+		if (this.sidebarRefreshTimer !== null) {
+			window.clearTimeout(this.sidebarRefreshTimer);
+			this.sidebarRefreshTimer = null;
+		}
+		if (this.identityRefreshTimer !== null) {
+			window.clearTimeout(this.identityRefreshTimer);
+			this.identityRefreshTimer = null;
 		}
 		this.hideThreadPreview();
 		this.editorExtensions.length = 0;
@@ -270,13 +275,7 @@ export default class RelayCommentsPlugin
 	}
 
 	notifyEditorSelectionChanged(): void {
-		if (this.selectionRefreshTimer !== null) {
-			window.clearTimeout(this.selectionRefreshTimer);
-		}
-		this.selectionRefreshTimer = window.setTimeout(() => {
-			this.selectionRefreshTimer = null;
-			this.refreshReviewSidebars();
-		}, 120);
+		this.scheduleReviewSidebarRefresh(120);
 	}
 
 	getDisplayMode(path?: string | null): DisplayMode {
@@ -1297,7 +1296,7 @@ export default class RelayCommentsPlugin
 		const request = resolve()
 			.then((identity) => {
 				this.identityCache.set(key, identity);
-				this.bumpRenderVersion();
+				this.scheduleIdentityRefresh();
 			})
 			.catch(() => {
 				this.identityCache.set(key, null);
@@ -1513,6 +1512,10 @@ export default class RelayCommentsPlugin
 	}
 
 	refreshReviewSidebars(): void {
+		if (this.sidebarRefreshTimer !== null) {
+			window.clearTimeout(this.sidebarRefreshTimer);
+			this.sidebarRefreshTimer = null;
+		}
 		for (const leaf of this.app.workspace.getLeavesOfType(
 			VIEW_TYPE_CRITIC_REVIEW,
 		)) {
@@ -1663,7 +1666,7 @@ export default class RelayCommentsPlugin
 			this.app.workspace.on("editor-change", () => {
 				this.captureActiveMarkdownPath();
 				this.hideThreadPreview();
-				this.refreshReviewSidebars();
+				this.scheduleReviewSidebarRefresh(100);
 			}),
 		);
 		this.registerEvent(
@@ -1739,6 +1742,26 @@ export default class RelayCommentsPlugin
 		this.externalCommentRefreshTimer = window.setTimeout(() => {
 			this.externalCommentRefreshTimer = null;
 			this.refreshReviewSidebars();
+		}, 50);
+	}
+
+	private scheduleReviewSidebarRefresh(delayMs: number): void {
+		if (this.sidebarRefreshTimer !== null) {
+			window.clearTimeout(this.sidebarRefreshTimer);
+		}
+		this.sidebarRefreshTimer = window.setTimeout(() => {
+			this.sidebarRefreshTimer = null;
+			this.refreshReviewSidebars();
+		}, delayMs);
+	}
+
+	private scheduleIdentityRefresh(): void {
+		if (this.identityRefreshTimer !== null) {
+			window.clearTimeout(this.identityRefreshTimer);
+		}
+		this.identityRefreshTimer = window.setTimeout(() => {
+			this.identityRefreshTimer = null;
+			this.bumpRenderVersion();
 		}, 50);
 	}
 
