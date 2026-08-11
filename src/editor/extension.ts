@@ -28,8 +28,15 @@ import {
 } from "../critic/display";
 import { collectAttachedComments } from "../critic/threading";
 import type { CriticMark, DisplayMode } from "../critic/types";
+import {
+	mapCommentDraftAnchor,
+	type CommentDraftAnchor,
+} from "./comment-draft-anchor";
 import { findCriticTaskPrefixes, type CriticTaskPrefix } from "./task-prefix";
 import { canReuseCriticStateForTrailingChanges } from "./incremental";
+
+export const setCommentDraftAnchor =
+	StateEffect.define<CommentDraftAnchor | null>();
 
 export interface ReviewEditorController {
 	getDisplayMode(path?: string | null): DisplayMode;
@@ -47,6 +54,14 @@ export interface ReviewEditorController {
 	notifyEditorSelectionChanged(): void;
 	startCommentDraft(
 		path: string | null,
+		from: number,
+		to: number,
+		selectedText: string,
+		editorView?: EditorView,
+	): void;
+	updateCommentDraftAnchor(
+		id: number,
+		filePath: string,
 		from: number,
 		to: number,
 		selectedText: string,
@@ -146,6 +161,27 @@ export function createReviewEditorExtension(
 		],
 	});
 
+	const commentDraftAnchorField = StateField.define<CommentDraftAnchor | null>({
+		create() {
+			return null;
+		},
+		update(value, tr) {
+			for (const effect of tr.effects) {
+				if (effect.is(setCommentDraftAnchor)) {
+					value = effect.value;
+				}
+			}
+			if (
+				!value ||
+				!tr.docChanged ||
+				readPath(tr.state) !== value.filePath
+			) {
+				return value;
+			}
+			return mapCommentDraftAnchor(value, tr.changes);
+		},
+	});
+
 	const reviewViewPlugin = ViewPlugin.fromClass(
 		class {
 			private commentButton: HTMLButtonElement;
@@ -209,6 +245,20 @@ export function createReviewEditorExtension(
 
 			update(update: ViewUpdate): void {
 				this.observeSourceView();
+				const draftAnchor = update.state.field(commentDraftAnchorField);
+				if (
+					update.docChanged &&
+					draftAnchor &&
+					readPath(update.state) === draftAnchor.filePath
+				) {
+					controller.updateCommentDraftAnchor(
+						draftAnchor.id,
+						draftAnchor.filePath,
+						draftAnchor.from,
+						draftAnchor.to,
+						update.state.sliceDoc(draftAnchor.from, draftAnchor.to),
+					);
+				}
 				if (update.selectionSet) {
 					controller.notifyEditorSelectionChanged();
 				}
@@ -295,6 +345,7 @@ export function createReviewEditorExtension(
 						selection.from,
 						selection.to,
 						this.view.state.sliceDoc(selection.from, selection.to),
+						this.view,
 					);
 				});
 				return button;
@@ -363,7 +414,12 @@ export function createReviewEditorExtension(
 		},
 	);
 
-	return [Prec.highest(criticField), reviewViewPlugin, reviewEditorTheme];
+	return [
+		Prec.highest(criticField),
+		commentDraftAnchorField,
+		reviewViewPlugin,
+		reviewEditorTheme,
+	];
 }
 
 function canReuseTrailingEdit(

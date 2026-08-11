@@ -51,9 +51,11 @@ import {
 } from "./editor/commands";
 import {
 	createReviewEditorExtension,
+	setCommentDraftAnchor,
 	type ReviewEditorController,
 } from "./editor/extension";
 import { ADD_COMMENT_HOTKEYS } from "./editor/hotkeys";
+import { buildCommentDraftInsertion } from "./editor/comment-draft-anchor";
 import { createReviewPostProcessor } from "./preview/postprocessor";
 import {
 	resolveSettings,
@@ -96,6 +98,7 @@ export interface ActiveReviewState {
 }
 
 export interface CommentDraft {
+	id: number;
 	filePath: string;
 	from: number;
 	to: number;
@@ -153,6 +156,8 @@ export default class RelayCommentsPlugin
 	settings!: RelayCommentsSettings;
 	private renderVersion = 0;
 	private commentDraft: CommentDraft | null = null;
+	private commentDraftSequence = 0;
+	private commentDraftEditorView: CodeMirrorEditorView | null = null;
 	private lastMarkdownPath: string | null = null;
 	private lastContentLeaf: WorkspaceLeaf | null = null;
 	private externalCommentObserver: MutationObserver | null = null;
@@ -1037,6 +1042,7 @@ export default class RelayCommentsPlugin
 		from: number,
 		to: number,
 		selectedText: string,
+		editorView?: CodeMirrorEditorView,
 	): void {
 		const activeFile = this.app.workspace.getActiveFile();
 		const filePath = path ?? activeFile?.path;
@@ -1058,9 +1064,36 @@ export default class RelayCommentsPlugin
 			return;
 		}
 		this.lastMarkdownPath = filePath;
-		this.commentDraft = { filePath, from, to, selectedText };
+		this.clearCommentDraftAnchor();
+		const draft: CommentDraft = {
+			id: ++this.commentDraftSequence,
+			filePath,
+			from,
+			to,
+			selectedText,
+		};
+		this.commentDraft = draft;
+		this.commentDraftEditorView = editorView ?? null;
+		this.commentDraftEditorView?.dispatch({
+			effects: setCommentDraftAnchor.of({ id: draft.id, filePath, from, to }),
+		});
 		void this.openReviewSidebar();
 		this.refreshReviewSidebars();
+	}
+
+	updateCommentDraftAnchor(
+		id: number,
+		filePath: string,
+		from: number,
+		to: number,
+		selectedText: string,
+	): void {
+		const draft = this.commentDraft;
+		if (!draft || draft.id !== id || draft.filePath !== filePath) return;
+		draft.from = from;
+		draft.to = to;
+		draft.selectedText = selectedText;
+		this.scheduleReviewSidebarRefresh(100);
 	}
 
 	startCommentDraftFromEditor(
@@ -1076,7 +1109,14 @@ export default class RelayCommentsPlugin
 			new Notice("Select text to comment on.");
 			return;
 		}
-		this.startCommentDraft(info?.file?.path ?? null, from, to, selectedText);
+		this.startCommentDraft(
+			info?.file?.path ?? null,
+			from,
+			to,
+			selectedText,
+			(this.getCodeMirrorEditor(editor) as CodeMirrorEditorView | null) ??
+				undefined,
+		);
 	}
 
 	async commitCommentDraft(comment: string): Promise<void> {
@@ -1089,10 +1129,6 @@ export default class RelayCommentsPlugin
 			new Notice("Open the commented note before saving this comment.");
 			return;
 		}
-		if (draft.from === draft.to || draft.selectedText.trim().length === 0) {
-			new Notice("Select text to comment on.");
-			return;
-		}
 		const identity = await this.getCurrentReviewerIdentityAsync(draft.filePath);
 		// Identity lookup may involve the network. Recheck that the same draft
 		// and editor are still active before applying its source edit.
@@ -1103,21 +1139,33 @@ export default class RelayCommentsPlugin
 			new Notice("Open the commented note before saving this comment.");
 			return;
 		}
+		const currentText = refreshedEditor
+			.getValue()
+			.slice(draft.from, draft.to);
 		const commentMarkup = this.formatAttachedCommentMarkup(comment, identity);
-		const insertion = `{==${draft.selectedText}==}${commentMarkup}`;
+		const insertion = buildCommentDraftInsertion(currentText, commentMarkup);
+		this.commentDraft = null;
+		this.clearCommentDraftAnchor();
 		refreshedEditor.replaceRange(
 			insertion,
 			refreshedEditor.offsetToPos(draft.from),
 			refreshedEditor.offsetToPos(draft.to),
 			"relay-comments",
 		);
-		this.commentDraft = null;
 		this.bumpRenderVersion();
 	}
 
 	cancelCommentDraft(): void {
 		this.commentDraft = null;
+		this.clearCommentDraftAnchor();
 		this.refreshReviewSidebars();
+	}
+
+	private clearCommentDraftAnchor(): void {
+		const editorView = this.commentDraftEditorView;
+		this.commentDraftEditorView = null;
+		if (!editorView?.dom.isConnected) return;
+		editorView.dispatch({ effects: setCommentDraftAnchor.of(null) });
 	}
 
 	locateMark(mark: CriticMark): void {

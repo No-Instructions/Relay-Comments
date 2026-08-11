@@ -38,6 +38,7 @@ import {
 	reconcileDraftTarget,
 	type DraftTarget,
 } from "./draft-reconciliation";
+import { commentDraftKey } from "../editor/comment-draft-anchor";
 
 export const VIEW_TYPE_CRITIC_REVIEW = "relay-comments-review-sidebar";
 
@@ -526,9 +527,7 @@ export class ReviewSidebarView extends ItemView {
 	}
 
 	private syncDraftFocus(draft: CommentDraft | null): void {
-		const draftKey = draft
-			? `${draft.filePath}:${draft.from}:${draft.to}`
-			: null;
+		const draftKey = draft ? commentDraftKey(draft) : null;
 		if (draftKey !== this.lastDraftKey) {
 			this.draftText = "";
 			if (draftKey) {
@@ -577,7 +576,7 @@ export class ReviewSidebarView extends ItemView {
 	}
 
 	private renderDraft(parent: HTMLElement, draft: CommentDraft): void {
-		const draftKey = `${draft.filePath}:${draft.from}:${draft.to}`;
+		const draftKey = commentDraftKey(draft);
 		const card = parent.createDiv({
 			cls: "critic-card critic-draft-card critic-composer-shell",
 		});
