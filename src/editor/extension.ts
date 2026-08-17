@@ -34,6 +34,10 @@ import {
 } from "./comment-draft-anchor";
 import { findCriticTaskPrefixes, type CriticTaskPrefix } from "./task-prefix";
 import { canReuseCriticStateForTrailingChanges } from "./incremental";
+import {
+	isSelectionTrusted,
+	readDomSelectionFacts,
+} from "./selection-trust";
 
 export const setCommentDraftAnchor =
 	StateEffect.define<CommentDraftAnchor | null>();
@@ -340,6 +344,11 @@ export function createReviewEditorExtension(
 					event.stopPropagation();
 					const selection = this.view.state.selection.main;
 					if (selection.empty) return;
+					// A selection inside an uneditable widget leaves this range describing the
+					// previous one, so an untrusted range would comment on text the user has
+					// since selected away from.
+					if (!this.selectionIsTrusted()) return;
+
 					controller.startCommentDraft(
 						readPath(this.view.state),
 						selection.from,
@@ -358,13 +367,26 @@ export function createReviewEditorExtension(
 				});
 			}
 
+			/** Whether the state selection still describes the on-screen selection. */
+			private selectionIsTrusted(): boolean {
+				const selection = this.view.state.selection.main;
+				return isSelectionTrusted(
+					readDomSelectionFacts(
+						this.view.dom.ownerDocument.getSelection(),
+						this.view.contentDOM,
+						this.view.state.sliceDoc(selection.from, selection.to),
+					),
+				);
+			}
+
 			private measureCommentButton(): CommentButtonPlacement | null {
 				const selection = this.view.state.selection.main;
 				const fieldValue = this.view.state.field(criticField);
 				if (
 					!controller.shouldShowInlineActions() ||
 					!fieldValue.livePreview ||
-					selection.empty
+					selection.empty ||
+					!this.selectionIsTrusted()
 				) {
 					return null;
 				}
