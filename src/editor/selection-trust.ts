@@ -53,6 +53,22 @@ export function isSelectionTrusted(facts: DomSelectionFacts): boolean {
 	return selectionTrust(facts) === "trusted";
 }
 
+/**
+ * Whether this editor is one Obsidian mounted inside another to edit a fragment.
+ *
+ * Editing a table cell, and other embedded blocks, gets its own CodeMirror view whose whole
+ * document is that fragment - `"1.8.26"` for one cell. Editor extensions are installed in it too,
+ * so anything that assumes one view per note gets a second instance working on a different
+ * document: a duplicate floating button inside the table, and decorations computed against text
+ * Obsidian's own renderer has already marked up.
+ *
+ * Nesting is the test rather than a table-specific class, so callouts and embeds are covered by
+ * the same check.
+ */
+export function isFragmentEditor(editorDOM: HTMLElement): boolean {
+	return !!editorDOM.parentElement?.closest(".cm-editor");
+}
+
 /** Read the facts `selectionTrust` needs from a live document selection. */
 export function readDomSelectionFacts(
 	selection: Selection | null,

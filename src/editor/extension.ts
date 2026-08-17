@@ -35,6 +35,7 @@ import {
 import { findCriticTaskPrefixes, type CriticTaskPrefix } from "./task-prefix";
 import { canReuseCriticStateForTrailingChanges } from "./incremental";
 import {
+	isFragmentEditor,
 	isSelectionTrusted,
 	readDomSelectionFacts,
 } from "./selection-trust";
@@ -188,12 +189,22 @@ export function createReviewEditorExtension(
 
 	const reviewViewPlugin = ViewPlugin.fromClass(
 		class {
-			private commentButton: HTMLButtonElement;
+			private commentButton: HTMLButtonElement | null = null;
 			private sourceViewEl: HTMLElement | null = null;
 			private sourceViewObserver: MutationObserver | null = null;
 			private livePreviewPollId: number | null = null;
 			private lastDomSignal: boolean | null = null;
 			private destroyed = false;
+			/**
+			 * A per-fragment editor (a table cell, an embed) carries no UI of its own.
+			 *
+			 * Recomputed rather than cached in the constructor: Obsidian attaches the fragment
+			 * editor's DOM into the host editor after the view plugin is built, so a
+			 * constructor-time check sees an unparented element and reports false.
+			 */
+			private get fragment(): boolean {
+				return isFragmentEditor(this.view.dom);
+			}
 			private handleClick = (event: MouseEvent): void => {
 				const target = event.target as HTMLElement | null;
 				const anchor = target?.closest<HTMLElement>(
@@ -233,8 +244,6 @@ export function createReviewEditorExtension(
 			};
 
 			constructor(private view: EditorView) {
-				this.commentButton = this.createCommentButton();
-				this.view.dom.appendChild(this.commentButton);
 				this.view.dom.addEventListener("click", this.handleClick);
 				this.view.dom.addEventListener("pointerover", this.handlePointerOver);
 				this.view.dom.addEventListener("pointerout", this.handlePointerOut);
@@ -245,6 +254,25 @@ export function createReviewEditorExtension(
 					500,
 				);
 				this.scheduleCommentButtonUpdate();
+			}
+
+			/**
+			 * The floating button, created on first use so the fragment check runs after Obsidian
+			 * has attached this editor. A fragment editor never gets one: the host editor already
+			 * shows a button for the same note, and a second one appears inside the table.
+			 */
+			private ensureCommentButton(): HTMLButtonElement | null {
+				if (this.fragment) {
+					this.commentButton?.remove();
+					this.commentButton = null;
+					return null;
+				}
+				if (!this.commentButton) {
+					this.commentButton = this.createCommentButton();
+					this.view.dom.appendChild(this.commentButton);
+				}
+
+				return this.commentButton;
 			}
 
 			update(update: ViewUpdate): void {
@@ -289,7 +317,7 @@ export function createReviewEditorExtension(
 				this.view.dom.removeEventListener("pointerover", this.handlePointerOver);
 				this.view.dom.removeEventListener("pointerout", this.handlePointerOut);
 				controller.hideThreadPreview();
-				this.commentButton.remove();
+				this.commentButton?.remove();
 			}
 
 			private observeSourceView(): void {
@@ -313,9 +341,15 @@ export function createReviewEditorExtension(
 
 			private syncDomLivePreview(): void {
 				const sourceView = this.view.dom.closest(".markdown-source-view");
-				const domSignal = sourceView
-					? sourceView.classList.contains("is-live-preview")
-					: null;
+				// A fragment editor's document is the fragment, not the note, and Obsidian renders
+				// that markup itself - decorating here double-renders the mark against offsets that
+				// are not the note's. Reporting "not live preview" is how a view plugin tells the
+				// state field to build nothing.
+				const domSignal = this.fragment
+					? false
+					: sourceView
+						? sourceView.classList.contains("is-live-preview")
+						: null;
 				if (domSignal === this.lastDomSignal) return;
 				this.lastDomSignal = domSignal;
 				queueMicrotask(() => {
@@ -425,15 +459,18 @@ export function createReviewEditorExtension(
 			private applyCommentButtonPlacement(
 				placement: CommentButtonPlacement | null,
 			): void {
+				const button = this.ensureCommentButton();
+				if (!button) return;
+
 				if (!placement) {
-					this.commentButton.classList.remove("is-visible");
+					button.classList.remove("is-visible");
 					return;
 				}
-				this.commentButton.setCssStyles({
+				button.setCssStyles({
 					left: `${placement.left}px`,
 					top: `${placement.top}px`,
 				});
-				this.commentButton.classList.add("is-visible");
+				button.classList.add("is-visible");
 			}
 		},
 	);
