@@ -1539,7 +1539,11 @@ export default class RelayCommentsPlugin
 		identity: ReviewerIdentity,
 	): string {
 		const content = sanitizeCommentText(comment);
-		return formatAuthoredComment(content, identity.id);
+		return formatAuthoredComment(
+			content,
+			identity.id,
+			identity.source === "fallback" ? undefined : identity.name,
+		);
 	}
 
 	private formatAttachedCommentMarkup(
