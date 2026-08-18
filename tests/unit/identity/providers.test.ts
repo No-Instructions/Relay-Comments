@@ -7,7 +7,68 @@ import {
 	ObsidianSyncIdentityProvider,
 	RelayIdentityProvider,
 	selectIdentityProvider,
+	withConfiguredDecoration,
 } from "src/identity/providers";
+
+describe("configured decoration", () => {
+	it("supplies the appearance a provider does not carry", () => {
+		expect(
+			withConfiguredDecoration(
+				{ id: "u1", name: "Sarah Rilling" },
+				{
+					id: "u1",
+					name: "whatever the directory calls them",
+					picture: "https://example.com/sarah.jpg",
+					color: "#30bced",
+					colorLight: "#30bced33",
+				},
+			),
+		).toEqual({
+			id: "u1",
+			// The provider stays authoritative about who this is.
+			name: "Sarah Rilling",
+			picture: "https://example.com/sarah.jpg",
+			color: "#30bced",
+			colorLight: "#30bced33",
+		});
+	});
+
+	it("never overrides appearance a provider does carry", () => {
+		expect(
+			withConfiguredDecoration(
+				{ id: "u1", name: "Sarah", picture: "provider.jpg", color: "#111111" },
+				{
+					id: "u1",
+					name: "Sarah",
+					picture: "configured.jpg",
+					color: "#222222",
+				},
+			),
+		).toMatchObject({ picture: "provider.jpg", color: "#111111" });
+	});
+
+	it("leaves an identity alone when the directory has no entry", () => {
+		const identity = { id: "u1", name: "Sarah" };
+
+		expect(withConfiguredDecoration(identity, null)).toEqual(identity);
+	});
+
+	it("fills each field independently", () => {
+		// A directory entry that only sets a colour must not blank out a picture, and vice versa.
+		expect(
+			withConfiguredDecoration(
+				{ id: "u1", name: "Sarah", picture: "provider.jpg" },
+				{ id: "u1", name: "Sarah", color: "#30bced" },
+			),
+		).toEqual({
+			id: "u1",
+			name: "Sarah",
+			picture: "provider.jpg",
+			color: "#30bced",
+			colorLight: undefined,
+		});
+	});
+});
 
 describe("configured identity directory", () => {
 	it("resolves other authors without acting as the current user", async () => {

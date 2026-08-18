@@ -68,6 +68,33 @@ export class ConfiguredIdentityResolver implements IdentityResolver {
 	}
 }
 
+/**
+ * Fill a resolved identity's missing appearance from the configured directory.
+ *
+ * Who an ID belongs to and what they look like come from different places. A live provider knows
+ * the first; whether it knows the second depends on the account it signed in with - Relay carries
+ * a picture only when the OAuth provider supplied one, and a colour only for the local user. The
+ * configured directory is where someone records what a provider cannot tell them.
+ *
+ * So a provider wins on identity while the directory fills the gaps, rather than the first
+ * resolver with any answer at all taking the whole record. Otherwise directory entries are ignored
+ * for exactly the people a provider already recognises, which is normally all of them - and the
+ * setting appears to do nothing.
+ */
+export function withConfiguredDecoration(
+	identity: Identity,
+	configured: Identity | null,
+): Identity {
+	if (!configured) return identity;
+
+	return {
+		...identity,
+		picture: identity.picture ?? configured.picture,
+		color: identity.color ?? configured.color,
+		colorLight: identity.colorLight ?? configured.colorLight,
+	};
+}
+
 export type RelayIdentitySupportStatus =
 	| "not-installed"
 	| "unsupported"
