@@ -531,26 +531,24 @@ Open policy questions for the CRDT store:
 
 ### Persisting Author Identity
 
-Relay Comments writes exactly one identity property: `author`.
+Relay Comments may write a durable provider ID and a portable display name:
 
 ```text
-{{author="Bongo Cat">>Comment text<<}}
+{{authorId="service-user-id" author="Bongo Cat">>Comment text<<}}
 ```
 
-The value may be a literal display name, as in the example, or an opaque
-user ID issued by the active identity provider. Relay Comments first
-offers the value to the selected provider and then to the configured
-identity directory; if it is not resolved, it displays the value
-literally. This preserves ordinary authored CriticMarkup such as
-`author="Bongo Cat"` while allowing service IDs to expand into names,
-avatars, and colors.
+When both values are available, `authorId` is the opaque user ID issued by the
+active identity provider and `author` is the person's display name. Relay
+Comments resolves `authorId` through the selected provider and then the local
+identity directory. If resolution is unavailable, it displays `author` as a
+portable fallback.
 
-Relay Comments does not add a parallel `authorId`, provider name,
-picture, color, email, date, or generated short ID to CriticMarkup.
+When only one identity value is available, Relay Comments stores it in
+`author` and omits `authorId`. This preserves ordinary authored CriticMarkup
+such as `author="Bongo Cat"` and existing marks whose `author` is a service ID.
 
-Early and imported metadata such as `authorId` or `date` may still be
-read for compatibility. A display-name `author` remains fully supported;
-new comments simply avoid writing any additional identity properties.
+Relay Comments does not add a provider name, picture, color, email, date, or
+generated short ID to CriticMarkup. Those details are resolved at display time.
 
 Suggestion marks without an attached authored comment do not require an
 author. A provider that implements `getAuthorForRange` may enhance their

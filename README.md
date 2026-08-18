@@ -97,16 +97,18 @@ Notes stay portable because review state is plain text in the
 | Highlight | `{==marked text==}` |
 | Comment | `{>>comment text<<}` |
 
-Authored comments use the established `author` metadata field:
+Authored comments can store a provider identity alongside a portable display
+name:
 
 ```
-{==the passage==}{{author="Bongo Cat">>Can we ground this sooner?<<}}
+{==the passage==}{{authorId="service-user-id" author="Bongo Cat">>Can we ground this sooner?<<}}
 ```
 
-`author` may be a display name or an ID understood by the selected
-identity provider or the local identity directory. When it is an ID,
-names, avatars, and colors are resolved when the note is displayed and
-are not duplicated into its Markdown.
+`authorId` is the opaque ID issued by the selected identity provider. `author`
+is the display name that remains useful when that provider is unavailable.
+When only one identity value is available, Relay Comments stores it in
+`author` and omits `authorId`. Avatars, colors, and other profile details are
+resolved when the note is displayed and are not duplicated into its Markdown.
 
 Any CriticMarkup-aware tool still reads the note; plain-Markdown tools see
 readable text with visible annotations.
