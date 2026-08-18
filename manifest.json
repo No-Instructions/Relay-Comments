@@ -1,7 +1,7 @@
 {
 	"id": "relay-comments",
 	"name": "Relay Comments",
-	"version": "0.1.1",
+	"version": "0.1.2",
 	"minAppVersion": "1.7.2",
 	"description": "Add Relay-aware comments and suggestions to Markdown notes.",
 	"author": "System 3",
