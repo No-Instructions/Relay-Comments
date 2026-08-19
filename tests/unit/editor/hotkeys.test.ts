@@ -1,5 +1,20 @@
 import { describe, expect, it } from "@jest/globals";
-import { ADD_COMMENT_HOTKEYS } from "src/editor/hotkeys";
+import {
+	ADD_COMMENT_HOTKEYS,
+	getAddCommentTarget,
+} from "src/editor/hotkeys";
+
+describe("getAddCommentTarget", () => {
+	it("routes Markdown and Canvas through one add-comment command", () => {
+		expect(getAddCommentTarget("markdown")).toBe("markdown");
+		expect(getAddCommentTarget("canvas")).toBe("canvas");
+	});
+
+	it("does not claim the hotkey in unrelated views", () => {
+		expect(getAddCommentTarget("empty")).toBeNull();
+		expect(getAddCommentTarget(null)).toBeNull();
+	});
+});
 
 describe("ADD_COMMENT_HOTKEYS", () => {
 	it("binds the standard comment chord", () => {

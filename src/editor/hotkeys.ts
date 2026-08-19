@@ -1,5 +1,14 @@
 import type { Hotkey } from "obsidian";
 
+export type AddCommentTarget = "markdown" | "canvas";
+
+export function getAddCommentTarget(
+	viewType: string | null | undefined,
+): AddCommentTarget | null {
+	if (viewType === "markdown" || viewType === "canvas") return viewType;
+	return null;
+}
+
 /**
  * The standard "add a comment" chord (as in Google Docs): Ctrl+Alt+M on
  * Windows/Linux, Command+Option+M on macOS.

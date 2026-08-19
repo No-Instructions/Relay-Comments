@@ -54,7 +54,10 @@ import {
 	setCommentDraftAnchor,
 	type ReviewEditorController,
 } from "./editor/extension";
-import { ADD_COMMENT_HOTKEYS } from "./editor/hotkeys";
+import {
+	ADD_COMMENT_HOTKEYS,
+	getAddCommentTarget,
+} from "./editor/hotkeys";
 import { buildCommentDraftInsertion } from "./editor/comment-draft-anchor";
 import { createReviewPostProcessor } from "./preview/postprocessor";
 import {
@@ -1665,13 +1668,31 @@ export default class RelayCommentsPlugin
 		this.addCommand({
 			id: "add-canvas-comment",
 			name: "Add comment to canvas (click to place)",
-			// Same chord as the editor's add-comment: the check limits it
-			// to canvas views, so the two commands never collide.
-			hotkeys: ADD_COMMENT_HOTKEYS,
 			checkCallback: (checking) => {
 				const view = this.app.workspace.getActiveViewOfType(ItemView);
 				if (view?.getViewType() !== "canvas") return false;
 				if (!checking) this.canvasPins?.beginPlacement(view);
+				return true;
+			},
+		});
+		this.addCommand({
+			id: "add-comment",
+			name: "Add comment",
+			hotkeys: ADD_COMMENT_HOTKEYS,
+			checkCallback: (checking) => {
+				const view = this.app.workspace.getActiveViewOfType(ItemView);
+				const target = getAddCommentTarget(view?.getViewType());
+				if (target === "canvas") {
+					if (!checking && view) this.canvasPins?.beginPlacement(view);
+					return true;
+				}
+				if (target !== "markdown" || !(view instanceof MarkdownView)) {
+					return false;
+				}
+				if (!checking) {
+					this.startCommentDraftFromEditor(view.editor, view);
+					this.refreshReviewSidebars();
+				}
 				return true;
 			},
 		});
@@ -1688,12 +1709,6 @@ export default class RelayCommentsPlugin
 		);
 		this.addEditorCommand("add-substitution", "Mark selection as substitution", (editor) =>
 			addSubstitution(this.app, editor),
-		);
-		this.addEditorCommand(
-			"add-comment",
-			"Add comment",
-			(editor) => this.startCommentDraftFromEditor(editor),
-			ADD_COMMENT_HOTKEYS,
 		);
 		this.addEditorCommand("add-highlight", "Highlight selection", (editor) =>
 			wrapSelection(editor, "highlight"),
