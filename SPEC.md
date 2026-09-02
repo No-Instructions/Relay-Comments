@@ -143,10 +143,13 @@ Sidebar/editor synchronization:
 Comment creation:
 
 1. Selecting text should show an inline comment affordance near the selection.
-2. Right-clicking selected editor text should include "Add comment".
-3. Choosing Add comment opens the review sidebar, creates a draft card, and focuses its textarea.
-4. Saving the draft writes `{==selected text==}{>>comment<<}` into the Markdown via a normal editor transaction.
-5. Canceling the draft leaves the Markdown unchanged.
+2. Render comment bodies with Obsidian's Markdown renderer on every review
+   surface. Resolve links and embeds relative to the note that stores the
+   comment, and unload renderer children whenever that surface is replaced.
+3. Right-clicking selected editor text should include "Add comment".
+4. Choosing Add comment opens the review sidebar, creates a draft card, and focuses its textarea.
+5. Saving the draft writes `{==selected text==}{>>comment<<}` into the Markdown via a normal editor transaction.
+6. Canceling the draft leaves the Markdown unchanged.
 
 MVP constraint: the sidebar does not store independent comment threads or resolved states outside the Markdown document. A review card exists because a CriticMarkup mark exists. Resolving a suggestion removes or rewrites that mark.
 

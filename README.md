@@ -15,7 +15,8 @@ Select text and comment — `Ctrl+Alt+M` (`Cmd+Opt+M` on macOS), the margin
 button, or the right-click menu. Replies stack into a thread anchored to
 the passage, and collaborators' comments land in your note as they write
 them. Hover any commented passage to read the thread in place; the
-preview's links reply or open the full thread.
+preview's links reply or open the full thread. Comment bodies use Obsidian's
+Markdown renderer, including formatting, lists, code, links, and embeds.
 
 ![A comment arrives in a daily note, is read from the hover preview, and gets a reply](docs/comment-thread.gif)
 

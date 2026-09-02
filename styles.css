@@ -606,29 +606,41 @@
 	overflow-wrap: anywhere;
 }
 
-/* Links inside comment bodies — sidebar messages, canvas cards, and the
-   hover popover all render through the same comment-body helper. */
-a.critic-comment-link {
+/* Obsidian's Markdown renderer supplies the body structure and link classes.
+   Keep its block layout compact inside cards and transient previews. */
+.critic-comment-markdown {
+	white-space: normal;
+}
+
+.critic-comment-markdown > :first-child {
+	margin-block-start: 0;
+}
+
+.critic-comment-markdown > :last-child {
+	margin-block-end: 0;
+}
+
+.critic-comment-markdown a.internal-link {
 	color: var(--link-color);
 	text-decoration-line: var(--link-decoration);
 	cursor: var(--cursor-link);
 }
 
-a.critic-comment-link:hover {
+.critic-comment-markdown a.internal-link:hover {
 	color: var(--link-color-hover);
 	text-decoration-line: var(--link-decoration-hover);
 }
 
-a.critic-comment-link.external-link {
+.critic-comment-markdown a.external-link {
 	color: var(--link-external-color);
 	text-decoration-line: var(--link-external-decoration);
 }
 
-a.critic-comment-link.external-link:hover {
+.critic-comment-markdown a.external-link:hover {
 	color: var(--link-external-color-hover);
 }
 
-a.critic-comment-link.is-unresolved {
+.critic-comment-markdown a.internal-link.is-unresolved {
 	color: var(--link-unresolved-color);
 	opacity: var(--link-unresolved-opacity);
 	filter: var(--link-unresolved-filter);

@@ -1,4 +1,5 @@
 import {
+	Component,
 	ItemView,
 	Menu,
 	Modal,
@@ -98,6 +99,7 @@ export class ReviewSidebarView extends ItemView {
 	private removeOutsideClickListener: (() => void) | null = null;
 	private composerSubmits = new WeakMap<HTMLTextAreaElement, () => void>();
 	private composerHintId = 0;
+	private commentRenderScope: Component | null = null;
 
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -161,6 +163,7 @@ export class ReviewSidebarView extends ItemView {
 	}
 
 	protected async onClose(): Promise<void> {
+		this.clearCommentRenderScope();
 		this.removeOutsideClickListener?.();
 		this.removeOutsideClickListener = null;
 	}
@@ -297,6 +300,7 @@ export class ReviewSidebarView extends ItemView {
 
 	private renderContent(): void {
 		const root = this.contentEl;
+		this.resetCommentRenderScope();
 		root.empty();
 		root.addClass("critic-sidebar");
 
@@ -781,9 +785,32 @@ export class ReviewSidebarView extends ItemView {
 			renderCommentBody(
 				message.createDiv({ cls: "critic-message-text" }),
 				comment.content,
-				{ app: this.app, sourcePath: filePath, hoverParent: this },
+				{
+					app: this.app,
+					component: this.getCommentRenderScope(),
+					sourcePath: filePath,
+					hoverParent: this,
+				},
 			);
 		}
+	}
+
+	private resetCommentRenderScope(): void {
+		this.clearCommentRenderScope();
+		this.commentRenderScope = this.addChild(new Component());
+	}
+
+	private clearCommentRenderScope(): void {
+		if (!this.commentRenderScope) return;
+		this.removeChild(this.commentRenderScope);
+		this.commentRenderScope = null;
+	}
+
+	private getCommentRenderScope(): Component {
+		if (!this.commentRenderScope) {
+			this.commentRenderScope = this.addChild(new Component());
+		}
+		return this.commentRenderScope;
 	}
 
 	private renderCommentHeader(

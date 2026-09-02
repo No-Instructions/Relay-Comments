@@ -1,4 +1,5 @@
 import {
+	Component,
 	Menu,
 	Platform,
 	setIcon,
@@ -915,6 +916,8 @@ export class CanvasCommentPins {
 		});
 
 		const identity = this.host.getIdentity();
+		const renderScope = new Component();
+		renderScope.load();
 		const list = card.createDiv({ cls: "critic-canvas-card-comments" });
 		for (const comment of thread.comments) {
 			const item = list.createDiv({ cls: "critic-canvas-card-comment" });
@@ -948,6 +951,7 @@ export class CanvasCommentPins {
 				comment.text,
 				{
 					app: this.host.app,
+					component: renderScope,
 					sourcePath: view.file?.path ?? "",
 					// In-place navigation would replace the canvas leaf itself,
 					// destroying the card and any unsent reply draft.
@@ -1093,6 +1097,7 @@ export class CanvasCommentPins {
 		document.addEventListener("keydown", onKeyDown, true);
 		card.dataset.criticCleanup = "true";
 		this.cardCleanup = () => {
+			renderScope.unload();
 			popScope();
 			resizeWatcher.disconnect();
 			window.clearTimeout(settleTimer);

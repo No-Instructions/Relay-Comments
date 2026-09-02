@@ -1,10 +1,11 @@
 import {
 	Keymap,
-	parseLinktext,
+	MarkdownRenderChild,
+	MarkdownRenderer,
 	type App,
+	type Component,
 	type HoverParent,
 } from "obsidian";
-import { parseCommentLinks } from "../critic/comment-links";
 
 /** Registered with the Page preview plugin so hover previews on comment
     links follow the user's per-source settings. */
@@ -12,6 +13,9 @@ export const COMMENT_LINK_HOVER_SOURCE = "relay-comments";
 
 export interface CommentBodyContext {
 	app: App;
+	/** Short-lived owner for embeds and postprocessors created by Obsidian's
+	    Markdown renderer. The surface must unload it when replaced. */
+	component: Component;
 	/** Path of the file the comment lives in; resolves relative links. */
 	sourcePath: string;
 	/** Owner of page-preview popovers spawned from these links. Omit on
@@ -27,69 +31,78 @@ export interface CommentBodyContext {
 	onNavigate?: () => void;
 }
 
-/**
- * Render a comment body into `container`: plain text verbatim (the
- * containers are pre-wrap, so text nodes keep newlines), [[wikilinks]] as
- * internal links that open in the workspace, and web links as external
- * anchors. Shared by every surface that shows comment text — sidebar
- * thread messages, canvas cards, and the hover popover.
- */
+/** Render comment Markdown through Obsidian's own renderer. */
 export function renderCommentBody(
 	container: HTMLElement,
 	text: string,
 	ctx: CommentBodyContext,
 ): void {
-	for (const segment of parseCommentLinks(text)) {
-		if (segment.kind === "text") {
-			container.appendText(segment.text);
-		} else if (segment.kind === "wikilink") {
-			appendInternalLink(container, segment.target, segment.display, ctx);
-		} else {
-			appendExternalLink(container, segment.href, segment.display, ctx);
-		}
-	}
+	container.addClass("markdown-rendered");
+	container.addClass("critic-comment-markdown");
+	const child = ctx.component.addChild(new MarkdownRenderChild(container));
+	wireCommentLinks(container, child, ctx);
+	void MarkdownRenderer.render(
+		ctx.app,
+		text,
+		container,
+		ctx.sourcePath,
+		child,
+	).catch(() => {
+		// A third-party Markdown postprocessor can fail independently of the
+		// comment. Keep the authored text visible instead of leaving a blank card.
+		if (!container.isConnected) return;
+		container.empty();
+		container.appendText(text);
+	});
 }
 
-function appendInternalLink(
+function wireCommentLinks(
 	container: HTMLElement,
-	target: string,
-	display: string,
+	child: MarkdownRenderChild,
 	ctx: CommentBodyContext,
 ): void {
-	const anchor = container.createEl("a", {
-		cls: "internal-link critic-comment-link",
-		text: display,
-		attr: { href: target, "data-href": target, rel: "noopener nofollow" },
-	});
-	const { path } = parseLinktext(target);
-	// An empty path is a same-file subpath link ([[#Heading]]) — resolved.
-	if (
-		path.length > 0 &&
-		!ctx.app.metadataCache.getFirstLinkpathDest(path, ctx.sourcePath)
-	) {
-		anchor.addClass("is-unresolved");
+	if (ctx.openInNewTab || ctx.onNavigate) {
+		const open = (event: MouseEvent): void => {
+			const anchor = eventAnchor(container, event);
+			if (!anchor) return;
+			if (anchor.classList.contains("internal-link")) {
+				const target =
+					anchor.getAttribute("data-href") ?? anchor.getAttribute("href");
+				if (!target) return;
+				event.preventDefault();
+				event.stopPropagation();
+				const paneType =
+					ctx.openInNewTab ||
+					Keymap.isModEvent(event) ||
+					event.type === "auxclick"
+						? "tab"
+						: false;
+				void ctx.app.workspace.openLinkText(target, ctx.sourcePath, paneType);
+				ctx.onNavigate?.();
+				return;
+			}
+			// Keep a card-level click handler out of external links. Let the
+			// browser perform Obsidian's rendered anchor action before dismissing
+			// a transient surface.
+			event.stopPropagation();
+			if (ctx.onNavigate) {
+				window.setTimeout(() => ctx.onNavigate?.(), 0);
+			}
+		};
+		child.registerDomEvent(container, "click", open, { capture: true });
+		child.registerDomEvent(container, "auxclick", (event) => {
+			if (event.button === 1) open(event);
+		}, { capture: true });
 	}
-	const open = (event: MouseEvent) => {
-		// The anchor's href is a link target, not a URL, and card-level
-		// click handlers (thread selection, canvas fencing) are not part
-		// of following a link.
-		event.preventDefault();
-		event.stopPropagation();
-		const paneType =
-			Keymap.isModEvent(event) ||
-			(event.type === "auxclick" || ctx.openInNewTab === true
-				? "tab"
-				: false);
-		void ctx.app.workspace.openLinkText(target, ctx.sourcePath, paneType);
-		ctx.onNavigate?.();
-	};
-	anchor.addEventListener("click", open);
-	anchor.addEventListener("auxclick", (event) => {
-		if (event.button === 1) open(event);
-	});
+
 	const hoverParent = ctx.hoverParent;
 	if (hoverParent) {
-		anchor.addEventListener("mouseover", (event) => {
+		child.registerDomEvent(container, "mouseover", (event) => {
+			const anchor = eventAnchor(container, event);
+			if (!anchor?.classList.contains("internal-link")) return;
+			const target =
+				anchor.getAttribute("data-href") ?? anchor.getAttribute("href");
+			if (!target) return;
 			ctx.app.workspace.trigger("hover-link", {
 				event,
 				source: COMMENT_LINK_HOVER_SOURCE,
@@ -102,20 +115,11 @@ function appendInternalLink(
 	}
 }
 
-function appendExternalLink(
+function eventAnchor(
 	container: HTMLElement,
-	href: string,
-	display: string,
-	ctx: CommentBodyContext,
-): void {
-	const anchor = container.createEl("a", {
-		cls: "external-link critic-comment-link",
-		text: display,
-		attr: { href, rel: "noopener nofollow", target: "_blank" },
-	});
-	// Following the link is the whole click; keep card-level handlers out.
-	anchor.addEventListener("click", (event) => {
-		event.stopPropagation();
-		ctx.onNavigate?.();
-	});
+	event: MouseEvent,
+): HTMLAnchorElement | null {
+	const target = event.target as Element | null;
+	const anchor = target?.closest?.("a") as HTMLAnchorElement | null;
+	return anchor && container.contains(anchor) ? anchor : null;
 }

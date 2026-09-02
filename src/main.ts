@@ -1,4 +1,5 @@
 import {
+	Component,
 	ItemView,
 	MarkdownView,
 	Notice,
@@ -25,6 +26,7 @@ import {
 import type { Extension } from "@codemirror/state";
 import { EditorView as CodeMirrorEditorView } from "@codemirror/view";
 import { parseCriticMarkup } from "./critic/parse";
+import { sanitizeCommentText } from "./critic/comment-text";
 import {
 	CRITIC_SECTION_SEPARATOR,
 	collectAttachedComments,
@@ -416,18 +418,25 @@ export default class RelayCommentsPlugin
 		const data = this.buildThreadPreviewData(filePath, from, to);
 		if (!data) return false;
 		this.hideThreadPreview();
+		const renderScope = new Component();
+		renderScope.load();
 
-		const element = this.renderThreadPreview(data, options.role, {
-			open: (opts) => this.activateCommentThread(filePath, from, to, opts),
-			resolve: () => {
-				this.hideThreadPreview();
-				this.resolveThreadAtRange(filePath, from, to);
+		const element = this.renderThreadPreview(
+			data,
+			options.role,
+			{
+				open: (opts) => this.activateCommentThread(filePath, from, to, opts),
+				resolve: () => {
+					this.hideThreadPreview();
+					this.resolveThreadAtRange(filePath, from, to);
+				},
+				apply: (action) => {
+					this.hideThreadPreview();
+					this.applySuggestionActionAtRange(filePath, from, to, action);
+				},
 			},
-			apply: (action) => {
-				this.hideThreadPreview();
-				this.applySuggestionActionAtRange(filePath, from, to, action);
-			},
-		});
+			renderScope,
+		);
 		document.body.appendChild(element);
 		this.positionThreadPreview(element, anchorRect);
 		const previousTitle = options.anchor?.getAttribute("title") ?? null;
@@ -503,6 +512,7 @@ export default class RelayCommentsPlugin
 			originalAriaDescribedBy: previousDescribedBy,
 			returnFocus: options.returnFocus,
 			cleanup: () => {
+				renderScope.unload();
 				element.removeEventListener("pointerenter", cancelDismiss);
 				element.removeEventListener("pointerleave", onPointerLeave);
 				document.removeEventListener(
@@ -545,6 +555,7 @@ export default class RelayCommentsPlugin
 			resolve: () => void;
 			apply: (action: CriticAction) => void;
 		},
+		renderScope: Component,
 	): HTMLElement {
 		// The popover is for reading; everything else is a CTA — reply,
 		// resolve, accept/reject, or follow the breadcrumb to the full
@@ -599,6 +610,7 @@ export default class RelayCommentsPlugin
 		if (data.kind === "thread") {
 			renderCommentBody(message, data.snippet, {
 				app: this.app,
+				component: renderScope,
 				sourcePath: data.sourcePath,
 				onNavigate: () => this.hideThreadPreview(),
 			});
@@ -902,7 +914,9 @@ export default class RelayCommentsPlugin
 				visibleComments.length > 1
 					? `${visibleComments.length} comments`
 					: "",
-			snippet: clampPreviewSnippet(firstComment.content),
+			// Keep the Markdown source intact. CSS clamps the rendered preview;
+			// truncating first can split a link, code fence, or emphasis marker.
+			snippet: firstComment.content,
 			sourcePath: filePath,
 			moreLabel:
 				visibleComments.length > 1
@@ -2021,17 +2035,6 @@ function providerIdentity(
 		...identity,
 		source,
 	};
-}
-
-function sanitizeCommentText(value: string): string {
-	return value
-		.replace(/\r\n?/g, "\n")
-		// Blank lines would split the note into separate Markdown sections
-		// around an inline comment; keep single line breaks.
-		.replace(/[\t ]*\n[\t ]*\n[\t \n]*/g, "\n")
-		// "<<}" inside a comment body would close the mark early.
-		.replace(/<<(?=\})/g, "<< ")
-		.trim();
 }
 
 function fallbackIdentity(): ReviewerIdentity {
