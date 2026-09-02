@@ -4,7 +4,12 @@ import {
 } from "obsidian";
 import { parseCriticMarkup } from "../critic/parse";
 import { renderDisplaySegments, renderSliceSegments } from "../critic/render";
-import type { DisplayMode, RenderSegment } from "../critic/types";
+import type { CriticMark, DisplayMode, RenderSegment } from "../critic/types";
+import {
+	commentFootnoteOrdinals,
+	isCommentOnlySection,
+	renderedElementSourceRange,
+} from "./sections";
 
 export interface PreviewDisplayController {
 	getDisplayMode(path?: string | null): DisplayMode;
@@ -20,14 +25,67 @@ const SKIP_TAGS = new Set([
 ]);
 const SOURCE_PATTERN = /\{(?:\+\+|--|~~|>>|==)|\{\{[^\n}]*>>/;
 const DOM_REMNANT_PATTERN = /[{}]|~>|<<|>>|\+\+|--|==|~~/;
-const SOURCE_RENDER_SELECTOR =
-	"p, li, blockquote, h1, h2, h3, h4, h5, h6, td, th";
+const SOURCE_RENDER_TAGS = [
+	"p",
+	"li",
+	"blockquote",
+	"h1",
+	"h2",
+	"h3",
+	"h4",
+	"h5",
+	"h6",
+	"td",
+	"th",
+];
+const SOURCE_RENDER_SELECTOR = SOURCE_RENDER_TAGS.join(", ");
+const EMBEDDED_SOURCE_RENDER_SELECTOR = SOURCE_RENDER_TAGS.map(
+	(tag) => `.cm-embed-block ${tag}`,
+).join(", ");
+
+/** Clean multiline CriticMarkup out of Markdown blocks that Obsidian embeds
+ * directly in Live Preview (notably callouts). Those embedded renderers do
+ * not consistently run registered Markdown postprocessors, so the editor
+ * extension applies the same source-backed rewrite after their DOM appears. */
+export function rewriteMultilineCriticMarkupInRenderedBlocks(
+	root: HTMLElement,
+	text: string,
+	mode: DisplayMode,
+	marks: readonly CriticMark[],
+): void {
+	const multilineMarks = marks.filter(
+		(mark) => mark.valid && mark.raw.includes("\n"),
+	);
+	if (multilineMarks.length === 0) return;
+
+	const candidates = Array.from(
+		root.querySelectorAll<HTMLElement>(EMBEDDED_SOURCE_RENDER_SELECTOR),
+	);
+	for (const candidate of candidates) {
+		if (shouldSkip(candidate)) continue;
+		const range = selectMatchingSourceLineRange(candidate, text);
+		if (!range) continue;
+		if (
+			!multilineMarks.some(
+				(mark) => mark.from < range.to && mark.to > range.from,
+			)
+		) {
+			continue;
+		}
+		if (!elementCoversSource(candidate, text.slice(range.from, range.to))) {
+			continue;
+		}
+		rewriteElementFromSourceRange(candidate, text, range, mode);
+	}
+}
 
 export function createReviewPostProcessor(
 	controller: PreviewDisplayController,
 ) {
 	return (el: HTMLElement, ctx: MarkdownPostProcessorContext): void => {
 		const mode = controller.getDisplayMode(ctx.sourcePath);
+		if (hideCommentFootnotes(el, ctx)) return;
+		if (hideCommentOnlySection(el, ctx)) return;
 		rewriteSourceBackedElements(el, ctx, mode);
 
 		const walker = el.ownerDocument.createTreeWalker(
@@ -54,6 +112,44 @@ export function createReviewPostProcessor(
 			replaceTextNode(node, mode);
 		}
 	};
+}
+
+function hideCommentFootnotes(
+	el: HTMLElement,
+	ctx: MarkdownPostProcessorContext,
+): boolean {
+	const footnotes = el.matches("section.footnotes")
+		? el
+		: el.querySelector<HTMLElement>("section.footnotes");
+	if (!footnotes) return false;
+	const section = ctx.getSectionInfo(el);
+	if (!section) return false;
+	const hiddenOrdinals = commentFootnoteOrdinals(section.text);
+	if (hiddenOrdinals.size === 0) return false;
+
+	for (const item of Array.from(
+		footnotes.querySelectorAll<HTMLElement>("li[data-footnote-id]"),
+	)) {
+		const id = item.dataset.footnoteId ?? "";
+		const ordinal = Number(/^fn-(\d+)(?:-|$)/.exec(id)?.[1]);
+		if (hiddenOrdinals.has(ordinal)) item.remove();
+	}
+	footnotes.addClass("critic-preview-filtered-footnotes");
+	if (footnotes.querySelector("li[data-footnote-id]")) return false;
+	el.replaceChildren();
+	el.addClass("critic-preview-hidden-comment-section");
+	return true;
+}
+
+function hideCommentOnlySection(
+	el: HTMLElement,
+	ctx: MarkdownPostProcessorContext,
+): boolean {
+	const section = ctx.getSectionInfo(el);
+	if (!section || !isCommentOnlySection(section)) return false;
+	el.replaceChildren();
+	el.addClass("critic-preview-hidden-comment-section");
+	return true;
 }
 
 function rewriteSourceBackedElements(
@@ -94,23 +190,14 @@ function rewriteMultilineSlice(
 	section: MarkdownSectionInformation,
 	mode: DisplayMode,
 ): boolean {
-	// Only plain paragraphs: other blocks (lists, quotes, headings) carry
-	// per-line Markdown prefixes that offset-based slicing can't honor.
-	if (el.tagName !== "P") return false;
-
 	const text = section.text;
-	const lines = text.split("\n");
-	if (section.lineStart >= lines.length) return false;
-	let from = 0;
-	for (let i = 0; i < section.lineStart; i += 1) {
-		from += lines[i].length + 1;
-	}
-	let to = from;
-	const lastLine = Math.min(section.lineEnd, lines.length - 1);
-	for (let i = section.lineStart; i <= lastLine; i += 1) {
-		to += lines[i].length + 1;
-	}
-	to = Math.min(to - 1, text.length);
+	const range = renderedElementSourceRange(
+		section,
+		el.tagName,
+		el.textContent ?? "",
+	);
+	if (!range) return false;
+	const { from, to } = range;
 
 	const crossesLines = parseCriticMarkup(text).some(
 		(mark) =>
@@ -175,6 +262,35 @@ function selectSourceTextForElement(
 	return bestScore > 0 ? bestLine : null;
 }
 
+function selectMatchingSourceLineRange(
+	el: HTMLElement,
+	text: string,
+): { from: number; to: number } | null {
+	const domText = el.textContent ?? "";
+	if (!DOM_REMNANT_PATTERN.test(domText)) return null;
+	const domWords = words(domText);
+	if (domWords.length === 0) return null;
+
+	const lines = text.split("\n");
+	let bestLine = -1;
+	let bestScore = 0;
+	for (let line = 0; line < lines.length; line += 1) {
+		if (!SOURCE_PATTERN.test(lines[line])) continue;
+		const sourceWords = words(lines[line]);
+		const score = sourceWords.filter((word) => domWords.includes(word)).length;
+		if (score > bestScore) {
+			bestLine = line;
+			bestScore = score;
+		}
+	}
+	if (bestLine < 0) return null;
+	return renderedElementSourceRange(
+		{ text, lineStart: bestLine, lineEnd: bestLine },
+		el.tagName,
+		domText,
+	);
+}
+
 function elementCoversSource(el: HTMLElement, source: string): boolean {
 	const domWords = words(el.textContent ?? "");
 	const sourceWords = words(`${source} ${getRenderedSearchText(source)}`);
@@ -233,10 +349,30 @@ function rewriteElementFromSource(
 	el.addClass("critic-preview-source-rendered");
 }
 
+function rewriteElementFromSourceRange(
+	el: HTMLElement,
+	text: string,
+	range: { from: number; to: number },
+	mode: DisplayMode,
+): void {
+	const segments = renderSliceSegments(text, range.from, range.to, mode);
+	const fragment = createFragment();
+	for (const segment of segments) {
+		appendSegment(fragment, segment);
+	}
+	el.replaceChildren(fragment);
+	el.addClass("critic-preview-source-rendered");
+}
+
 function shouldSkip(el: HTMLElement): boolean {
 	let current: HTMLElement | null = el;
 	while (current) {
-		if (SKIP_TAGS.has(current.tagName)) return true;
+		if (
+			SKIP_TAGS.has(current.tagName) ||
+			current.matches(".critic-preview-filtered-footnotes")
+		) {
+			return true;
+		}
 		current = current.parentElement;
 	}
 	return false;

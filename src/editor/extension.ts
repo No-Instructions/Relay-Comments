@@ -34,6 +34,7 @@ import {
 } from "./comment-draft-anchor";
 import { findCriticTaskPrefixes, type CriticTaskPrefix } from "./task-prefix";
 import { canReuseCriticStateForTrailingChanges } from "./incremental";
+import { rewriteMultilineCriticMarkupInRenderedBlocks } from "../preview/postprocessor";
 
 export const setCommentDraftAnchor =
 	StateEffect.define<CommentDraftAnchor | null>();
@@ -185,6 +186,8 @@ export function createReviewEditorExtension(
 	const reviewViewPlugin = ViewPlugin.fromClass(
 		class {
 			private commentButton: HTMLButtonElement;
+			private renderedBlockObserver: MutationObserver;
+			private renderedBlockRewriteQueued = false;
 			private sourceViewEl: HTMLElement | null = null;
 			private sourceViewObserver: MutationObserver | null = null;
 			private livePreviewPollId: number | null = null;
@@ -230,10 +233,19 @@ export function createReviewEditorExtension(
 
 			constructor(private view: EditorView) {
 				this.commentButton = this.createCommentButton();
+				this.renderedBlockObserver = new MutationObserver((records) => {
+					if (mutationTouchesEmbeddedBlock(records)) {
+						this.scheduleRenderedBlockRewrite();
+					}
+				});
 				this.view.dom.appendChild(this.commentButton);
 				this.view.dom.addEventListener("click", this.handleClick);
 				this.view.dom.addEventListener("pointerover", this.handlePointerOver);
 				this.view.dom.addEventListener("pointerout", this.handlePointerOut);
+				this.renderedBlockObserver.observe(this.view.contentDOM, {
+					childList: true,
+					subtree: true,
+				});
 				this.observeSourceView();
 				this.syncDomLivePreview();
 				this.livePreviewPollId = window.setInterval(
@@ -241,6 +253,7 @@ export function createReviewEditorExtension(
 					500,
 				);
 				this.scheduleCommentButtonUpdate();
+				this.scheduleRenderedBlockRewrite();
 			}
 
 			update(update: ViewUpdate): void {
@@ -271,10 +284,14 @@ export function createReviewEditorExtension(
 				) {
 					this.scheduleCommentButtonUpdate();
 				}
+				if (update.docChanged || update.viewportChanged) {
+					this.scheduleRenderedBlockRewrite();
+				}
 			}
 
 			destroy(): void {
 				this.destroyed = true;
+				this.renderedBlockObserver.disconnect();
 				this.sourceViewObserver?.disconnect();
 				this.sourceViewObserver = null;
 				if (this.livePreviewPollId !== null) {
@@ -286,6 +303,21 @@ export function createReviewEditorExtension(
 				this.view.dom.removeEventListener("pointerout", this.handlePointerOut);
 				controller.hideThreadPreview();
 				this.commentButton.remove();
+			}
+
+			private scheduleRenderedBlockRewrite(): void {
+				if (this.renderedBlockRewriteQueued) return;
+				this.renderedBlockRewriteQueued = true;
+				queueMicrotask(() => {
+					this.renderedBlockRewriteQueued = false;
+					if (this.destroyed || !this.lastDomSignal) return;
+					rewriteMultilineCriticMarkupInRenderedBlocks(
+						this.view.contentDOM,
+						this.view.state.doc.toString(),
+						controller.getDisplayMode(readPath(this.view.state)),
+						this.view.state.field(criticField).marks,
+					);
+				});
 			}
 
 			private observeSourceView(): void {
@@ -422,6 +454,24 @@ export function createReviewEditorExtension(
 		reviewViewPlugin,
 		reviewEditorTheme,
 	];
+}
+
+function mutationTouchesEmbeddedBlock(records: MutationRecord[]): boolean {
+	for (const record of records) {
+		const target = record.target as HTMLElement;
+		if (target.closest?.(".cm-embed-block")) return true;
+		for (const node of Array.from(record.addedNodes)) {
+			if (node.nodeType !== 1) continue;
+			const element = node as HTMLElement;
+			if (
+				element.matches(".cm-embed-block") ||
+				element.querySelector(".cm-embed-block")
+			) {
+				return true;
+			}
+		}
+	}
+	return false;
 }
 
 function canReuseTrailingEdit(

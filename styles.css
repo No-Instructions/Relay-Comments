@@ -24,6 +24,10 @@
    Inline marks (Live Preview + Reading mode)
    ============================================================ */
 
+.critic-preview-hidden-comment-section {
+	display: none;
+}
+
 .cm-critic-addition,
 .critic-preview-addition {
 	color: var(--color-green);
