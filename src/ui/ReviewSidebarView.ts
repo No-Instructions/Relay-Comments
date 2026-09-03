@@ -13,7 +13,6 @@ import {
 	type WorkspaceLeaf,
 } from "obsidian";
 import { renderCommentBody } from "./comment-body";
-import { collectAttachedComments } from "../critic/threading";
 import {
 	formatMarkDate,
 	isSuggestionMark,
@@ -27,6 +26,16 @@ import {
 } from "./composer-keys";
 import { replacementForMark, type CriticAction } from "../critic/transform";
 import type { CriticMark, CriticMarkType } from "../critic/types";
+import {
+	buildReviewRuns,
+	reviewAnchorFrom,
+	reviewAnchorId,
+	reviewAnchorLine,
+	reviewAnchorRaw,
+	reviewAnchorTo,
+	reviewAnchorType,
+	type ReviewAnchor,
+} from "../critic/review-runs";
 import type RelayCommentsPlugin from "../main";
 import type { CommentDraft, ReviewerIdentity } from "../main";
 import {
@@ -40,6 +49,12 @@ import {
 	type DraftTarget,
 } from "./draft-reconciliation";
 import { commentDraftKey } from "../editor/comment-draft-anchor";
+import {
+	highlightColorClass,
+	highlightPresentation,
+	type HighlightColor,
+	type NativeHighlight,
+} from "../markdown/highlights";
 
 export const VIEW_TYPE_CRITIC_REVIEW = "relay-comments-review-sidebar";
 
@@ -48,9 +63,18 @@ type ReviewItem =
 			kind: "anchored-comment";
 			id: string;
 			type: CriticMarkType;
-			anchor: CriticMark;
+			anchor: ReviewAnchor;
 			comment: CriticMark;
 			comments: CriticMark[];
+			from: number;
+			to: number;
+			line: number;
+	  }
+	| {
+			kind: "native-highlight";
+			id: string;
+			type: "highlight";
+			highlight: NativeHighlight;
 			from: number;
 			to: number;
 			line: number;
@@ -183,12 +207,13 @@ export class ReviewSidebarView extends ItemView {
 		const validMarks = state.marks
 			.filter((mark) => mark.valid)
 			.sort((a, b) => a.from - b.from || a.to - b.to);
-		const item = buildReviewItems(validMarks, state.editor.getValue()).find(
+		const item = buildReviewItems(
+			validMarks,
+			state.nativeHighlights,
+			state.editor.getValue(),
+		).find(
 			(candidate) => {
-				const target =
-					candidate.kind === "anchored-comment"
-						? candidate.anchor
-						: candidate.mark;
+				const target = getItemTargetRange(candidate);
 				return target.from === from && target.to === to;
 			},
 		);
@@ -321,7 +346,11 @@ export class ReviewSidebarView extends ItemView {
 		const validMarks = state.marks
 			.filter((mark) => mark.valid)
 			.sort((a, b) => a.from - b.from || a.to - b.to);
-		const items = buildReviewItems(validMarks, state.editor.getValue());
+		const items = buildReviewItems(
+			validMarks,
+			state.nativeHighlights,
+			state.editor.getValue(),
+		);
 		this.reconcileReplyDraft(items);
 		if (items.length > 0) {
 			root.createDiv({
@@ -704,6 +733,23 @@ export class ReviewSidebarView extends ItemView {
 			this.renderAnchoredThread(card, item, isThreadSelected, filePath);
 			return isThreadSelected;
 		}
+		if (item.kind === "native-highlight") {
+			const toolbar = card.createDiv({ cls: "critic-thread-toolbar" });
+			this.addCardActions(toolbar, item);
+			this.renderTypeEyebrow(card, "highlight");
+			this.renderHighlightQuote(
+				card,
+				item.highlight.text,
+				item.highlight.color,
+			);
+			this.renderReplyComposer(
+				card,
+				item,
+				item.highlight,
+				isThreadSelected,
+			);
+			return isThreadSelected;
+		}
 
 		const toolbar = card.createDiv({ cls: "critic-thread-toolbar" });
 		this.addCardActions(toolbar, item);
@@ -726,21 +772,26 @@ export class ReviewSidebarView extends ItemView {
 		const toolbar = card.createDiv({ cls: "critic-thread-toolbar" });
 		this.addCardActions(toolbar, item);
 
-		if (item.anchor.type === "highlight") {
-			const quote = normalizeQuoteText(item.anchor.content);
-			if (quote.length > 0) {
-				card.createDiv({ cls: "critic-card-quote", text: quote });
-			}
-		} else if (isSuggestionMark(item.anchor)) {
-			this.renderTypeEyebrow(card, item.anchor.type);
+		if (reviewAnchorType(item.anchor) === "highlight") {
+			const presentation = reviewAnchorHighlight(item.anchor);
+			this.renderHighlightQuote(
+				card,
+				presentation.text,
+				presentation.color,
+			);
+		} else if (
+			item.anchor.kind === "critic" &&
+			isSuggestionMark(item.anchor.mark)
+		) {
+			this.renderTypeEyebrow(card, item.anchor.mark.type);
 			const identity = this.plugin.getReviewerIdentityForMark(
-				item.anchor,
+				item.anchor.mark,
 				filePath,
 			);
 			if (identity.source !== "fallback") {
-				this.renderCommentHeader(card, { identity, mark: item.anchor });
+				this.renderCommentHeader(card, { identity, mark: item.anchor.mark });
 			}
-			this.renderMarkBody(card, item.anchor);
+			this.renderMarkBody(card, item.anchor.mark);
 		}
 
 		this.renderThreadMessages(card, item.comments, filePath, item);
@@ -748,7 +799,7 @@ export class ReviewSidebarView extends ItemView {
 			this.renderReplyComposer(
 				card,
 				item,
-				item.comments[item.comments.length - 1] ?? item.anchor,
+				item.comments[item.comments.length - 1] ?? reviewAnchorTarget(item.anchor),
 				selected,
 			);
 		}
@@ -862,10 +913,8 @@ export class ReviewSidebarView extends ItemView {
 
 	private renderMarkBody(card: HTMLElement, mark: CriticMark): void {
 		if (mark.type === "highlight") {
-			const quote = normalizeQuoteText(mark.content);
-			if (quote.length > 0) {
-				card.createDiv({ cls: "critic-card-quote", text: quote });
-			}
+			const presentation = highlightPresentation(mark.content);
+			this.renderHighlightQuote(card, presentation.text, presentation.color);
 			return;
 		}
 
@@ -896,6 +945,19 @@ export class ReviewSidebarView extends ItemView {
 			default:
 				body.setText(mark.content);
 		}
+	}
+
+	private renderHighlightQuote(
+		card: HTMLElement,
+		text: string,
+		color: HighlightColor,
+	): void {
+		const quote = normalizeQuoteText(text);
+		if (quote.length === 0) return;
+		card.createDiv({
+			cls: `critic-card-quote ${highlightColorClass(color)}`,
+			text: quote,
+		});
 	}
 
 	private addCardActions(parent: HTMLElement, item: ReviewItem): void {
@@ -933,10 +995,11 @@ export class ReviewSidebarView extends ItemView {
 			const menu = new Menu();
 			const suggestion =
 				item.kind === "anchored-comment"
-					? isSuggestionMark(item.anchor)
-						? item.anchor
+					? item.anchor.kind === "critic" &&
+						isSuggestionMark(item.anchor.mark)
+						? item.anchor.mark
 						: null
-					: isSuggestionMark(item.mark)
+					: item.kind === "mark" && isSuggestionMark(item.mark)
 						? item.mark
 						: null;
 			if (suggestion) {
@@ -1227,7 +1290,7 @@ export class ReviewSidebarView extends ItemView {
 	private renderReplyComposer(
 		card: HTMLElement,
 		item: ReviewItem,
-		mark: CriticMark,
+		mark: CriticMark | NativeHighlight,
 		selected: boolean,
 	): void {
 		if (!selected) {
@@ -1301,7 +1364,7 @@ export class ReviewSidebarView extends ItemView {
 
 	private async commitThreadReply(
 		item: ReviewItem,
-		mark: CriticMark,
+		mark: CriticMark | NativeHighlight,
 		textarea: HTMLTextAreaElement,
 	): Promise<void> {
 		const value = textarea.value.trim();
@@ -1336,15 +1399,25 @@ export class ReviewSidebarView extends ItemView {
 	private resolveThread(
 		item: Extract<ReviewItem, { kind: "anchored-comment" }>,
 	): void {
-		if (item.anchor.type === "comment") {
+		if (item.anchor.kind === "native-highlight") {
+			this.plugin.replaceReviewRangeFromSidebar(
+				item.anchor.highlight.to,
+				item.to,
+				"",
+			);
+		} else if (item.anchor.mark.type === "comment") {
 			this.plugin.replaceReviewRangeFromSidebar(item.from, item.to, "");
-		} else if (isSuggestionMark(item.anchor)) {
-			this.plugin.replaceReviewRangeFromSidebar(item.anchor.to, item.to, "");
+		} else if (isSuggestionMark(item.anchor.mark)) {
+			this.plugin.replaceReviewRangeFromSidebar(
+				item.anchor.mark.to,
+				item.to,
+				"",
+			);
 		} else {
 			this.plugin.replaceReviewRangeFromSidebar(
 				item.from,
 				item.to,
-				item.anchor.content,
+				replacementForMark(item.anchor.mark, "accept"),
 			);
 		}
 		this.render();
@@ -1353,6 +1426,13 @@ export class ReviewSidebarView extends ItemView {
 	private resolveReviewItem(item: ReviewItem): void {
 		if (item.kind === "anchored-comment") {
 			this.resolveThread(item);
+		} else if (item.kind === "native-highlight") {
+			this.plugin.replaceReviewRangeFromSidebar(
+				item.highlight.from,
+				item.highlight.to,
+				item.highlight.text,
+			);
+			this.render();
 		} else {
 			this.applyMark(item.mark, "accept");
 		}
@@ -1360,13 +1440,19 @@ export class ReviewSidebarView extends ItemView {
 
 	private applySuggestionAction(item: ReviewItem, action: CriticAction): void {
 		if (item.kind === "anchored-comment") {
+			if (
+				item.anchor.kind !== "critic" ||
+				!isSuggestionMark(item.anchor.mark)
+			) {
+				return;
+			}
 			this.plugin.replaceReviewRangeFromSidebar(
 				item.from,
 				item.to,
-				replacementForMark(item.anchor, action),
+				replacementForMark(item.anchor.mark, action),
 			);
 			this.render();
-		} else {
+		} else if (item.kind === "mark") {
 			this.applyMark(item.mark, action);
 		}
 	}
@@ -1443,71 +1529,89 @@ class DiscardDraftModal extends Modal {
 
 function getItemTargetRange(item: ReviewItem): { from: number; to: number } {
 	if (item.kind === "anchored-comment") {
-		return { from: item.anchor.from, to: item.anchor.to };
+		return {
+			from: reviewAnchorFrom(item.anchor),
+			to: reviewAnchorTo(item.anchor),
+		};
+	}
+	if (item.kind === "native-highlight") {
+		return { from: item.highlight.from, to: item.highlight.to };
 	}
 	return { from: item.mark.from, to: item.mark.to };
 }
 
 function toDraftTarget(item: ReviewItem): DraftTarget {
-	const anchor = item.kind === "anchored-comment" ? item.anchor : item.mark;
+	const type =
+		item.kind === "anchored-comment"
+			? reviewAnchorType(item.anchor)
+			: item.type;
+	const raw =
+		item.kind === "anchored-comment"
+			? reviewAnchorRaw(item.anchor)
+			: item.kind === "native-highlight"
+				? item.highlight.raw
+				: item.mark.raw;
 	return {
 		id: item.id,
-		signature: `${item.kind}\u0000${anchor.type}\u0000${anchor.raw}`,
+		signature: `${item.kind}\u0000${type}\u0000${raw}`,
 		from: item.from,
 	};
 }
 
-function buildReviewItems(marks: CriticMark[], text: string): ReviewItem[] {
+function buildReviewItems(
+	marks: CriticMark[],
+	nativeHighlights: NativeHighlight[],
+	text: string,
+): ReviewItem[] {
 	const items: ReviewItem[] = [];
-	const consumed = new Set<string>();
 
-	for (let index = 0; index < marks.length; index += 1) {
-		const mark = marks[index];
-		if (consumed.has(mark.id)) continue;
-
-		const attached = collectAttachedComments(marks, text, index, consumed, {
-			allowCommentAnchor: true,
-		}).comments;
-		consumed.add(mark.id);
-		for (const comment of attached) {
-			consumed.add(comment.id);
-		}
-
+	for (const run of buildReviewRuns(text, marks, nativeHighlights)) {
 		// Empty comments never render anywhere; the run's full extent is still
 		// used for ranges so resolving a thread removes the markup completely.
-		const run = mark.type === "comment" ? [mark, ...attached] : attached;
-		const visible = run.filter(
+		const visible = run.comments.filter(
 			(comment) => comment.content.trim().length > 0,
 		);
-		const last = run[run.length - 1] ?? mark;
 
 		if (visible.length > 0) {
 			items.push({
 				kind: "anchored-comment",
-				id: `thread:${mark.id}`,
-				type: mark.type,
-				anchor: mark,
+				id: `thread:${reviewAnchorId(run.anchor)}`,
+				type: reviewAnchorType(run.anchor),
+				anchor: run.anchor,
 				comment: visible[0],
 				comments: visible,
-				from: mark.from,
-				to: Math.max(mark.to, last.to),
-				line: mark.line,
+				from: run.from,
+				to: run.to,
+				line: reviewAnchorLine(run.anchor),
 			});
 			continue;
 		}
-		if (mark.type === "comment") {
+		if (run.anchor.kind === "critic" && run.anchor.mark.type === "comment") {
 			// A run of only-empty comments: invisible markup, nothing to show.
+			continue;
+		}
+		if (run.anchor.kind === "native-highlight") {
+			const { highlight } = run.anchor;
+			items.push({
+				kind: "native-highlight",
+				id: highlight.id,
+				type: "highlight",
+				highlight,
+				from: highlight.from,
+				to: highlight.to,
+				line: highlight.line,
+			});
 			continue;
 		}
 
 		items.push({
 			kind: "mark",
-			id: mark.id,
-			type: mark.type,
-			mark,
-			from: mark.from,
-			to: mark.to,
-			line: mark.line,
+			id: run.anchor.mark.id,
+			type: run.anchor.mark.type,
+			mark: run.anchor.mark,
+			from: run.anchor.mark.from,
+			to: run.anchor.mark.to,
+			line: run.anchor.mark.line,
 		});
 	}
 
@@ -1518,16 +1622,21 @@ function isSelected(item: ReviewItem, activeMarkId: string | null): boolean {
 	if (!activeMarkId) return false;
 	if (item.kind === "anchored-comment") {
 		return (
-			item.anchor.id === activeMarkId ||
+			reviewAnchorId(item.anchor) === activeMarkId ||
 			item.comments.some((comment) => comment.id === activeMarkId)
 		);
+	}
+	if (item.kind === "native-highlight") {
+		return item.highlight.id === activeMarkId;
 	}
 	return item.mark.id === activeMarkId;
 }
 
 function itemHasSecondaryActions(item: ReviewItem): boolean {
 	return (
-		(item.kind === "anchored-comment" && isSuggestionMark(item.anchor)) ||
+		(item.kind === "anchored-comment" &&
+			item.anchor.kind === "critic" &&
+			isSuggestionMark(item.anchor.mark)) ||
 		(item.kind === "mark" && isSuggestionMark(item.mark))
 	);
 }
@@ -1536,7 +1645,11 @@ function itemContainsComment(item: ReviewItem, commentId: string): boolean {
 	if (item.kind === "anchored-comment") {
 		return item.comments.some((comment) => comment.id === commentId);
 	}
-	return item.mark.type === "comment" && item.mark.id === commentId;
+	return (
+		item.kind === "mark" &&
+		item.mark.type === "comment" &&
+		item.mark.id === commentId
+	);
 }
 
 function bindSubmitToContent(
@@ -1561,10 +1674,14 @@ function formatCounts(items: ReviewItem[]): string {
 	const suggestions = items.filter(
 		(item) =>
 			(item.kind === "mark" && isSuggestionMark(item.mark)) ||
-			(item.kind === "anchored-comment" && isSuggestionMark(item.anchor)),
+			(item.kind === "anchored-comment" &&
+				item.anchor.kind === "critic" &&
+				isSuggestionMark(item.anchor.mark)),
 	).length;
 	const highlights = items.filter(
-		(item) => item.kind === "mark" && item.type === "highlight",
+		(item) =>
+			(item.kind === "mark" && item.type === "highlight") ||
+			item.kind === "native-highlight",
 	).length;
 	const parts: string[] = [];
 	if (comments > 0) parts.push(`${comments} ${comments === 1 ? "comment" : "comments"}`);
@@ -1575,6 +1692,24 @@ function formatCounts(items: ReviewItem[]): string {
 		parts.push(`${highlights} ${highlights === 1 ? "highlight" : "highlights"}`);
 	}
 	return parts.join(" · ");
+}
+
+function reviewAnchorTarget(anchor: ReviewAnchor): CriticMark | NativeHighlight {
+	return anchor.kind === "critic" ? anchor.mark : anchor.highlight;
+}
+
+function reviewAnchorHighlight(anchor: ReviewAnchor): {
+	text: string;
+	color: HighlightColor;
+} {
+	if (anchor.kind === "native-highlight") {
+		return {
+			text: anchor.highlight.text,
+			color: anchor.highlight.color,
+		};
+	}
+	const presentation = highlightPresentation(anchor.mark.content);
+	return { text: presentation.text, color: presentation.color };
 }
 
 function initials(name: string): string {

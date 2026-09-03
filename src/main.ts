@@ -27,10 +27,15 @@ import type { Extension } from "@codemirror/state";
 import { EditorView as CodeMirrorEditorView } from "@codemirror/view";
 import { parseCriticMarkup } from "./critic/parse";
 import { sanitizeCommentText } from "./critic/comment-text";
+import { CRITIC_SECTION_SEPARATOR } from "./critic/threading";
 import {
-	CRITIC_SECTION_SEPARATOR,
-	collectAttachedComments,
-} from "./critic/threading";
+	buildReviewRuns,
+	reviewAnchorContentFrom,
+	reviewAnchorContentTo,
+	reviewAnchorFrom,
+	reviewAnchorTo,
+	type ReviewAnchor,
+} from "./critic/review-runs";
 import {
 	replacementForMark,
 	type CriticAction,
@@ -93,11 +98,18 @@ import {
 	type ExternalCommentComponent,
 	type ExternalCommentState,
 } from "./dom/comment-components";
+import {
+	findNativeHighlightAtOffset,
+	findNativeHighlightForSelection,
+	parseNativeHighlights,
+	type NativeHighlight,
+} from "./markdown/highlights";
 
 export interface ActiveReviewState {
 	file: TFile;
 	editor: Editor;
 	marks: CriticMark[];
+	nativeHighlights: NativeHighlight[];
 	activeMarkId: string | null;
 	commentDraft: CommentDraft | null;
 }
@@ -108,6 +120,7 @@ export interface CommentDraft {
 	from: number;
 	to: number;
 	selectedText: string;
+	nativeHighlight: boolean;
 }
 
 export interface ReviewerIdentity {
@@ -832,7 +845,7 @@ export default class RelayCommentsPlugin
 		from: number,
 		to: number,
 	): {
-		mark: CriticMark;
+		anchor: ReviewAnchor;
 		visibleComments: CriticMark[];
 		runFrom: number;
 		runTo: number;
@@ -841,32 +854,23 @@ export default class RelayCommentsPlugin
 		const editor = view?.editor;
 		if (!view?.file || view.file.path !== filePath || !editor) return null;
 		const text = editor.getValue();
-		const marks = parseCriticMarkup(text)
-			.filter((mark) => mark.valid)
-			.sort((a, b) => a.from - b.from || a.to - b.to);
-		const consumed = new Set<string>();
+		const marks = parseCriticMarkup(text);
+		const nativeHighlights = parseNativeHighlights(text, marks);
 
-		for (let index = 0; index < marks.length; index += 1) {
-			const mark = marks[index];
-			if (consumed.has(mark.id)) continue;
-			const attached = collectAttachedComments(marks, text, index, consumed, {
-				allowCommentAnchor: true,
-			}).comments;
-			consumed.add(mark.id);
-			for (const comment of attached) {
-				consumed.add(comment.id);
+		for (const run of buildReviewRuns(text, marks, nativeHighlights)) {
+			if (
+				reviewAnchorFrom(run.anchor) !== from ||
+				reviewAnchorTo(run.anchor) !== to
+			) {
+				continue;
 			}
-			if (mark.from !== from || mark.to !== to) continue;
-
-			const run = mark.type === "comment" ? [mark, ...attached] : attached;
-			const last = run[run.length - 1] ?? mark;
 			return {
-				mark,
-				visibleComments: run.filter(
+				anchor: run.anchor,
+				visibleComments: run.comments.filter(
 					(comment) => comment.content.trim().length > 0,
 				),
-				runFrom: mark.from,
-				runTo: Math.max(mark.to, last.to),
+				runFrom: run.from,
+				runTo: run.to,
 			};
 		}
 		return null;
@@ -879,12 +883,13 @@ export default class RelayCommentsPlugin
 	): ThreadPreviewData | null {
 		const found = this.findMarkRunAtRange(filePath, from, to);
 		if (!found) return null;
-		const { mark, visibleComments } = found;
+		const { anchor, visibleComments } = found;
 
 		if (visibleComments.length === 0) {
-			const parts = getSuggestionPreviewParts(mark);
+			if (anchor.kind !== "critic") return null;
+			const parts = getSuggestionPreviewParts(anchor.mark);
 			if (!parts) return null;
-			const identity = this.getReviewerIdentityForMark(mark, filePath);
+			const identity = this.getReviewerIdentityForMark(anchor.mark, filePath);
 			return {
 				kind: "suggestion",
 				label: parts.label,
@@ -893,21 +898,24 @@ export default class RelayCommentsPlugin
 				sourcePath: filePath,
 				moreLabel: null,
 				author: identity.source === "fallback" ? null : identity.name,
-				date: formatMarkDate(mark),
+				date: formatMarkDate(anchor.mark),
 				resolved: false,
 			};
 		}
 
 		const firstComment = visibleComments[0];
 		const identity = this.getReviewerIdentityForMark(firstComment, filePath);
-		const resolved = [mark, ...visibleComments].some(
+		const resolved = [
+			...(anchor.kind === "critic" ? [anchor.mark] : []),
+			...visibleComments,
+		].some(
 			(candidate) => candidate.metadata?.resolved === "true",
 		);
 		return {
 			kind: "thread",
 			label: resolved
 				? "Resolved comment"
-				: isSuggestionMark(mark)
+				: anchor.kind === "critic" && isSuggestionMark(anchor.mark)
 					? "Comment on suggestion"
 					: "Comment",
 			countLabel:
@@ -935,13 +943,19 @@ export default class RelayCommentsPlugin
 	resolveThreadAtRange(filePath: string, from: number, to: number): void {
 		const found = this.findMarkRunAtRange(filePath, from, to);
 		if (!found || found.visibleComments.length === 0) return;
-		const { mark, runFrom, runTo } = found;
-		if (mark.type === "comment") {
+		const { anchor, runFrom, runTo } = found;
+		if (anchor.kind === "native-highlight") {
+			this.replaceReviewRangeFromSidebar(anchor.highlight.to, runTo, "");
+		} else if (anchor.mark.type === "comment") {
 			this.replaceReviewRangeFromSidebar(runFrom, runTo, "");
-		} else if (isSuggestionMark(mark)) {
-			this.replaceReviewRangeFromSidebar(mark.to, runTo, "");
+		} else if (isSuggestionMark(anchor.mark)) {
+			this.replaceReviewRangeFromSidebar(anchor.mark.to, runTo, "");
 		} else {
-			this.replaceReviewRangeFromSidebar(runFrom, runTo, mark.content);
+			this.replaceReviewRangeFromSidebar(
+				runFrom,
+				runTo,
+				replacementForMark(anchor.mark, "accept"),
+			);
 		}
 		this.refreshReviewSidebars();
 	}
@@ -953,16 +967,22 @@ export default class RelayCommentsPlugin
 		action: CriticAction,
 	): void {
 		const found = this.findMarkRunAtRange(filePath, from, to);
-		if (!found || !isSuggestionMark(found.mark)) return;
+		if (
+			!found ||
+			found.anchor.kind !== "critic" ||
+			!isSuggestionMark(found.anchor.mark)
+		) {
+			return;
+		}
 		if (found.visibleComments.length > 0) {
 			this.replaceReviewRangeFromSidebar(
 				found.runFrom,
 				found.runTo,
-				replacementForMark(found.mark, action),
+				replacementForMark(found.anchor.mark, action),
 			);
 			this.refreshReviewSidebars();
 		} else {
-			this.applyMarkActionFromSidebar(found.mark, action);
+			this.applyMarkActionFromSidebar(found.anchor.mark, action);
 		}
 	}
 
@@ -972,25 +992,54 @@ export default class RelayCommentsPlugin
 			new Notice("Open a Markdown note to preview comments.");
 			return;
 		}
+		const text = editor.getValue();
+		const marks = parseCriticMarkup(text);
 		const mark = getCurrentMark(editor);
-		if (!mark?.valid) {
+		const cursorOffset = editor.posToOffset(editor.getCursor("from"));
+		const nativeHighlight = findNativeHighlightAtOffset(
+			parseNativeHighlights(text, marks),
+			cursorOffset,
+		);
+		const reviewAnchor: ReviewAnchor | null = mark?.valid
+			? { kind: "critic", mark }
+			: nativeHighlight
+				? { kind: "native-highlight", highlight: nativeHighlight }
+				: null;
+		if (!reviewAnchor) {
 			new Notice("No comment thread at the cursor.");
 			return;
 		}
 		const cm = this.getCodeMirrorEditor(editor);
-		const anchor = cm ? this.getRenderedRangeElement(cm, mark.from, mark.to) : null;
+		const anchor = cm
+			? this.getRenderedRangeElement(
+					cm,
+					reviewAnchorFrom(reviewAnchor),
+					reviewAnchorTo(reviewAnchor),
+				)
+			: null;
 		const rect =
 			anchor?.getBoundingClientRect() ??
-			this.getEditorOffsetRect(editor, mark.contentFrom, mark.contentTo, cm);
+			this.getEditorOffsetRect(
+				editor,
+				reviewAnchorContentFrom(reviewAnchor),
+				reviewAnchorContentTo(reviewAnchor),
+				cm,
+			);
 		if (!rect) {
 			new Notice("No visible comment anchor at the cursor.");
 			return;
 		}
-		const shown = this.showThreadPreview(file.path, mark.from, mark.to, rect, {
-			anchor,
-			returnFocus: () => editor.focus(),
-			role: "dialog",
-		});
+		const shown = this.showThreadPreview(
+			file.path,
+			reviewAnchorFrom(reviewAnchor),
+			reviewAnchorTo(reviewAnchor),
+			rect,
+			{
+				anchor,
+				returnFocus: () => editor.focus(),
+				role: "dialog",
+			},
+		);
 		if (!shown) {
 			new Notice("No comment thread at the cursor.");
 		}
@@ -1039,13 +1088,21 @@ export default class RelayCommentsPlugin
 		const editor = view?.editor;
 		if (!file || !editor) return null;
 
-		const marks = parseCriticMarkup(editor.getValue());
+		const text = editor.getValue();
+		const marks = parseCriticMarkup(text);
+		const nativeHighlights = parseNativeHighlights(text, marks);
 		const activeMark = getCurrentMark(editor);
+		const cursorOffset = editor.posToOffset(editor.getCursor("from"));
+		const activeNativeHighlight = findNativeHighlightAtOffset(
+			nativeHighlights,
+			cursorOffset,
+		);
 		return {
 			file,
 			editor,
 			marks,
-			activeMarkId: activeMark?.id ?? null,
+			nativeHighlights,
+			activeMarkId: activeMark?.id ?? activeNativeHighlight?.id ?? null,
 			commentDraft:
 				this.commentDraft?.filePath === file.path ? this.commentDraft : null,
 		};
@@ -1095,9 +1152,10 @@ export default class RelayCommentsPlugin
 		}
 		// CriticMarkup can't express overlapping marks.
 		const editorText = this.getMarkdownViewByPath(filePath)?.editor.getValue();
+		const marks = editorText ? parseCriticMarkup(editorText) : [];
 		if (
 			editorText &&
-			parseCriticMarkup(editorText).some(
+			marks.some(
 				(mark) => mark.from < to && mark.to > from,
 			)
 		) {
@@ -1105,6 +1163,26 @@ export default class RelayCommentsPlugin
 				"That selection already contains a suggestion or comment.",
 			);
 			return;
+		}
+		const nativeHighlights = editorText
+			? parseNativeHighlights(editorText, marks)
+			: [];
+		const nativeHighlight = findNativeHighlightForSelection(
+			nativeHighlights,
+			from,
+			to,
+		);
+		const overlappingNativeHighlight = nativeHighlights.some(
+			(highlight) => highlight.from < to && highlight.to > from,
+		);
+		if (overlappingNativeHighlight && !nativeHighlight) {
+			new Notice("Select the entire highlighted passage to comment on it.");
+			return;
+		}
+		if (nativeHighlight) {
+			from = nativeHighlight.contentFrom;
+			to = nativeHighlight.contentTo;
+			selectedText = nativeHighlight.text;
 		}
 		this.lastMarkdownPath = filePath;
 		this.clearCommentDraftAnchor();
@@ -1114,6 +1192,7 @@ export default class RelayCommentsPlugin
 			from,
 			to,
 			selectedText,
+			nativeHighlight: nativeHighlight !== null,
 		};
 		this.commentDraft = draft;
 		this.commentDraftEditorView = editorView ?? null;
@@ -1182,20 +1261,47 @@ export default class RelayCommentsPlugin
 			new Notice("Open the commented note before saving this comment.");
 			return;
 		}
-		const currentText = refreshedEditor
-			.getValue()
-			.slice(draft.from, draft.to);
+		const documentText = refreshedEditor.getValue();
 		const commentMarkup = this.formatAttachedCommentMarkup(comment, identity);
-		const insertion = buildCommentDraftInsertion(currentText, commentMarkup);
+		const marks = parseCriticMarkup(documentText);
+		const nativeHighlights = parseNativeHighlights(documentText, marks);
+		const nativeHighlight = draft.nativeHighlight
+			? findNativeHighlightForSelection(
+					nativeHighlights,
+					draft.from,
+					draft.to,
+				)
+			: null;
 		this.commentDraft = null;
 		this.clearCommentDraftAnchor();
-		refreshedEditor.replaceRange(
-			insertion,
-			refreshedEditor.offsetToPos(draft.from),
-			refreshedEditor.offsetToPos(draft.to),
-			"relay-comments",
-		);
-		this.bumpRenderVersion();
+		if (nativeHighlight) {
+			const run = buildReviewRuns(
+				documentText,
+				marks,
+				nativeHighlights,
+			).find(
+				(candidate) =>
+					candidate.anchor.kind === "native-highlight" &&
+					candidate.anchor.highlight.id === nativeHighlight.id,
+			);
+			const insertionOffset = run?.to ?? nativeHighlight.to;
+			refreshedEditor.replaceRange(
+				commentMarkup,
+				refreshedEditor.offsetToPos(insertionOffset),
+				undefined,
+				"relay-comments",
+			);
+		} else {
+			const currentText = documentText.slice(draft.from, draft.to);
+			const insertion = buildCommentDraftInsertion(currentText, commentMarkup);
+			refreshedEditor.replaceRange(
+				insertion,
+				refreshedEditor.offsetToPos(draft.from),
+				refreshedEditor.offsetToPos(draft.to),
+				"relay-comments",
+			);
+		}
+		this.refreshReviewSidebars();
 	}
 
 	cancelCommentDraft(): void {
@@ -1507,7 +1613,10 @@ export default class RelayCommentsPlugin
 		this.bumpRenderVersion();
 	}
 
-	async insertReplyToMark(mark: CriticMark, reply: string): Promise<boolean> {
+	async insertReplyToMark(
+		mark: CriticMark | NativeHighlight,
+		reply: string,
+	): Promise<boolean> {
 		const view = this.getCurrentMarkdownView();
 		const editor = view?.editor;
 		const path = view?.file?.path;

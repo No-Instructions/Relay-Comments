@@ -22,11 +22,11 @@ import {
 	type ViewUpdate,
 } from "@codemirror/view";
 import { parseCriticMarkup } from "../critic/parse";
+import { buildReviewRuns, type ReviewRun } from "../critic/review-runs";
 import {
 	findPrecedingWordRange,
 	isSuggestionMark,
 } from "../critic/display";
-import { collectAttachedComments } from "../critic/threading";
 import type { CriticMark, DisplayMode } from "../critic/types";
 import {
 	mapCommentDraftAnchor,
@@ -35,6 +35,12 @@ import {
 import { findCriticTaskPrefixes, type CriticTaskPrefix } from "./task-prefix";
 import { canReuseCriticStateForTrailingChanges } from "./incremental";
 import { rewriteMultilineCriticMarkupInRenderedBlocks } from "../preview/postprocessor";
+import {
+	highlightColorClass,
+	highlightPresentation,
+	parseNativeHighlights,
+	type NativeHighlight,
+} from "../markdown/highlights";
 
 export const setCommentDraftAnchor =
 	StateEffect.define<CommentDraftAnchor | null>();
@@ -78,6 +84,7 @@ interface CriticFieldValue {
 	decorations: DecorationSet;
 	atomics: DecorationSet;
 	marks: CriticMark[];
+	lastReviewRangeEnd: number;
 	livePreview: boolean;
 	domLivePreview: boolean | null;
 	renderVersion: number;
@@ -99,7 +106,7 @@ export function createReviewEditorExtension(
 			domLivePreview ?? state.field(editorLivePreviewField, false) ?? false;
 		const renderVersion = controller.getRenderVersion();
 		const path = readPath(state);
-		const { decorations, atomics, marks } = buildDecorations(
+		const { decorations, atomics, marks, lastReviewRangeEnd } = buildDecorations(
 			state,
 			livePreview,
 			controller,
@@ -108,6 +115,7 @@ export function createReviewEditorExtension(
 			decorations,
 			atomics,
 			marks,
+			lastReviewRangeEnd,
 			livePreview,
 			domLivePreview,
 			renderVersion,
@@ -486,11 +494,10 @@ function canReuseTrailingEdit(
 			inserted: inserted.toString(),
 		});
 	});
-	const lastMarkEnd = value.marks.reduce(
-		(maximum, mark) => Math.max(maximum, mark.to),
-		0,
+	return canReuseCriticStateForTrailingChanges(
+		value.lastReviewRangeEnd,
+		changes,
 	);
-	return canReuseCriticStateForTrailingChanges(lastMarkEnd, changes);
 }
 
 function readPath(state: EditorState): string | null {
@@ -502,29 +509,52 @@ function buildDecorations(
 	state: EditorState,
 	livePreview: boolean,
 	controller: ReviewEditorController,
-): { decorations: DecorationSet; atomics: DecorationSet; marks: CriticMark[] } {
+): {
+	decorations: DecorationSet;
+	atomics: DecorationSet;
+	marks: CriticMark[];
+	lastReviewRangeEnd: number;
+} {
 	if (!livePreview) {
-		return { decorations: Decoration.none, atomics: Decoration.none, marks: [] };
+		return {
+			decorations: Decoration.none,
+			atomics: Decoration.none,
+			marks: [],
+			lastReviewRangeEnd: 0,
+		};
 	}
 	try {
 		return buildDecorationsInner(state, controller);
 	} catch (error) {
 		console.error("[Relay Comments] decoration build failed", error);
-		return { decorations: Decoration.none, atomics: Decoration.none, marks: [] };
+		return {
+			decorations: Decoration.none,
+			atomics: Decoration.none,
+			marks: [],
+			lastReviewRangeEnd: 0,
+		};
 	}
 }
 
 function buildDecorationsInner(
 	state: EditorState,
 	controller: ReviewEditorController,
-): { decorations: DecorationSet; atomics: DecorationSet; marks: CriticMark[] } {
+): {
+	decorations: DecorationSet;
+	atomics: DecorationSet;
+	marks: CriticMark[];
+	lastReviewRangeEnd: number;
+} {
 	const text = state.doc.toString();
 	const path = readPath(state);
 	const mode = controller.getDisplayMode(path);
 	const ranges: Array<Range<Decoration>> = [];
 	const atomRanges: Array<Range<Decoration>> = [];
 	const marks = parseCriticMarkup(text);
-	const anchoredComments = findAnchoredComments(marks, text);
+	const nativeHighlights = parseNativeHighlights(text, marks);
+	const anchoredComments = findAnchoredComments(
+		buildReviewRuns(text, marks, nativeHighlights),
+	);
 
 	for (const mark of marks) {
 		if (!mark.valid) {
@@ -594,12 +624,38 @@ function buildDecorationsInner(
 		}
 	}
 
+	for (const run of anchoredComments.nativeThreads) {
+		const highlight = run.anchor.highlight;
+		if (mode !== "clean") {
+			addMark(
+				ranges,
+				highlight.contentFrom,
+				highlight.contentTo,
+				`cm-relay-native-highlight cm-critic-thread-anchor ${highlightColorClass(highlight.color)}`,
+				undefined,
+				rangeAttributes(highlight),
+			);
+		}
+		hideRanges(text, run.separatorRanges, ranges, atomRanges);
+		for (const comment of run.comments) {
+			addReplace(ranges, comment.from, comment.to, comment.raw.includes("\n"));
+			addAtom(atomRanges, comment.from, comment.to);
+		}
+	}
+
 	ranges.sort((a, b) => a.from - b.from || a.to - b.to);
 	atomRanges.sort((a, b) => a.from - b.from || a.to - b.to);
 	return {
 		decorations: Decoration.set(ranges, true),
 		atomics: Decoration.set(atomRanges, true),
 		marks,
+		lastReviewRangeEnd: Math.max(
+			marks.reduce((maximum, mark) => Math.max(maximum, mark.to), 0),
+			nativeHighlights.reduce(
+				(maximum, highlight) => Math.max(maximum, highlight.to),
+				0,
+			),
+		),
 	};
 }
 
@@ -659,16 +715,29 @@ function decorateReview(
 				);
 			}
 			break;
-		case "highlight":
+		case "highlight": {
+			const presentation = highlightPresentation(mark.content);
+			if (presentation.prefixLength > 0) {
+				addReplace(
+					ranges,
+					mark.contentFrom,
+					mark.contentFrom + presentation.prefixLength,
+				);
+			}
 			addContentMarks(
 				ranges,
-				mark.contentFrom,
+				mark.contentFrom + presentation.prefixLength,
 				mark.contentTo,
-				attributeClass("cm-critic-highlight", threadAttrs, anchorClass),
+				attributeClass(
+					`cm-critic-highlight ${highlightColorClass(presentation.color)}`,
+					threadAttrs,
+					anchorClass,
+				),
 				threadAttrs,
 				taskPrefixes,
 			);
 			break;
+		}
 		case "comment":
 			// Comment roots are handled in buildDecorationsInner().
 			break;
@@ -682,10 +751,22 @@ function decorateClean(
 ): void {
 	switch (mark.type) {
 		case "addition":
-		case "highlight":
 			hideDelimiters(mark, ranges);
 			addCriticTaskPrefixDecorations(text, mark, ranges);
 			break;
+		case "highlight": {
+			hideDelimiters(mark, ranges);
+			const presentation = highlightPresentation(mark.content);
+			if (presentation.prefixLength > 0) {
+				addReplace(
+					ranges,
+					mark.contentFrom,
+					mark.contentFrom + presentation.prefixLength,
+				);
+			}
+			addCriticTaskPrefixDecorations(text, mark, ranges);
+			break;
+		}
 		case "deletion":
 		case "comment":
 			addReplace(ranges, mark.from, mark.to, mark.raw.includes("\n"));
@@ -707,34 +788,51 @@ function decorateClean(
 }
 
 function findAnchoredComments(
-	marks: CriticMark[],
-	text: string,
+	runs: readonly ReviewRun[],
 ): {
 	commentIds: Set<string>;
 	byAnchorId: Map<string, CriticMark[]>;
 	separatorRangesByAnchorId: Map<string, Array<[number, number]>>;
+	nativeThreads: Array<ReviewRun & { anchor: { kind: "native-highlight"; highlight: NativeHighlight } }>;
 } {
 	const commentIds = new Set<string>();
 	const byAnchorId = new Map<string, CriticMark[]>();
 	const separatorRangesByAnchorId = new Map<string, Array<[number, number]>>();
-	for (let index = 0; index < marks.length; index += 1) {
-		const mark = marks[index];
-		if (!mark.valid || commentIds.has(mark.id)) continue;
-
-		const attached = collectAttachedComments(marks, text, index, commentIds, {
-			allowCommentAnchor: true,
-		});
-		if (attached.comments.length > 0) {
-			for (const comment of attached.comments) {
+	const nativeThreads: Array<
+		ReviewRun & { anchor: { kind: "native-highlight"; highlight: NativeHighlight } }
+	> = [];
+	for (const run of runs) {
+		const attached =
+			run.anchor.kind === "critic" && run.anchor.mark.type === "comment"
+				? run.comments.slice(1)
+				: run.comments;
+		if (attached.length > 0) {
+			for (const comment of attached) {
 				commentIds.add(comment.id);
 			}
-			byAnchorId.set(mark.id, attached.comments);
-			if (attached.separatorRanges.length > 0) {
-				separatorRangesByAnchorId.set(mark.id, attached.separatorRanges);
+			if (run.anchor.kind === "native-highlight") {
+				nativeThreads.push(
+					run as ReviewRun & {
+						anchor: { kind: "native-highlight"; highlight: NativeHighlight };
+					},
+				);
+			} else {
+				byAnchorId.set(run.anchor.mark.id, attached);
+				if (run.separatorRanges.length > 0) {
+					separatorRangesByAnchorId.set(
+						run.anchor.mark.id,
+						run.separatorRanges,
+					);
+				}
 			}
 		}
 	}
-	return { commentIds, byAnchorId, separatorRangesByAnchorId };
+	return {
+		commentIds,
+		byAnchorId,
+		separatorRangesByAnchorId,
+		nativeThreads,
+	};
 }
 
 function hideRanges(
@@ -869,7 +967,7 @@ class CriticTaskCheckboxWidget extends WidgetType {
 // No native title here either: these anchors get the rich hover preview,
 // and a title would double it with the browser's own tooltip. (Reading
 // mode, which has no preview, keeps its title in critic/render.ts.)
-function rangeAttributes(mark: CriticMark): Record<string, string> {
+function rangeAttributes(mark: { from: number; to: number }): Record<string, string> {
 	return {
 		"data-critic-from": String(mark.from),
 		"data-critic-to": String(mark.to),
