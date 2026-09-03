@@ -23,17 +23,28 @@ export function collectAttachedComments(
 	) {
 		return { comments: [], separatorRanges: [] };
 	}
+	return collectAttachedCommentsAfter(marks, text, anchor.to, consumed);
+}
 
+export function collectAttachedCommentsAfter(
+	marks: readonly CriticMark[],
+	text: string,
+	anchorTo: number,
+	consumed?: ReadonlySet<string>,
+): AttachedComments {
 	const comments: CriticMark[] = [];
 	const separatorRanges: Array<[number, number]> = [];
-	let nextFrom = anchor.to;
+	let nextFrom = anchorTo;
+	let low = 0;
+	let high = marks.length;
+	while (low < high) {
+		const middle = (low + high) >>> 1;
+		if (marks[middle].from < anchorTo) low = middle + 1;
+		else high = middle;
+	}
 
-	for (
-		let candidateIndex = anchorIndex + 1;
-		candidateIndex < marks.length;
-		candidateIndex += 1
-	) {
-		const candidate = marks[candidateIndex];
+	for (let index = low; index < marks.length; index += 1) {
+		const candidate = marks[index];
 		if (
 			!candidate.valid ||
 			consumed?.has(candidate.id) ||

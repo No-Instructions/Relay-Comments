@@ -40,6 +40,20 @@ describe("findCriticTaskPrefix", () => {
 		});
 	});
 
+	it("detects a task after a highlight color marker", () => {
+		const text = "{==🔵- [ ] Colored task==}";
+		const [mark] = parseCriticMarkup(text);
+
+		expect(findCriticTaskPrefix(text, mark)).toMatchObject({
+			markerFrom: 5,
+			markerTo: 11,
+			checkboxFrom: 8,
+			checkboxTo: 9,
+			bodyFrom: 11,
+			checked: false,
+		});
+	});
+
 	it("detects nested task markers inside a multiline mark", () => {
 		const text = "{==- [x] Parent\n  - [ ] child\n    - [x] grandchild==}";
 		const [mark] = parseCriticMarkup(text);

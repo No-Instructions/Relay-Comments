@@ -73,6 +73,39 @@ describe("renderDisplaySegments (review mode)", () => {
 		]);
 	});
 
+	it("renders native colored highlights without the color marker", () => {
+		const segments = renderDisplaySegments(
+			"A ==🔵blue phrase== and ==plain phrase==.",
+			"review",
+		);
+
+		expect(segments).toEqual([
+			{ kind: "text", text: "A " },
+			{ kind: "highlight", text: "blue phrase", color: "blue" },
+			{ kind: "text", text: " and " },
+			{ kind: "highlight", text: "plain phrase" },
+			{ kind: "text", text: "." },
+		]);
+	});
+
+	it("keeps a native highlight while hiding its attached comments", () => {
+		const segments = renderDisplaySegments(
+			'==🟣passage=={{author="Bongo Cat">>threaded<<}} after',
+			"review",
+		);
+
+		expect(segments).toEqual([
+			{ kind: "highlight", text: "passage", color: "purple" },
+			{ kind: "text", text: " after" },
+		]);
+	});
+
+	it("colors CriticMarkup highlights without displaying the marker", () => {
+		expect(renderDisplaySegments("{==🔴important==}", "review")).toEqual([
+			{ kind: "highlight", text: "important", color: "red" },
+		]);
+	});
+
 	it("hides the legacy single-newline separator inside a thread", () => {
 		const segments = renderDisplaySegments(
 			'{==hi==}\n{{author="A" date="2026-01-01">>threaded<<}}',
@@ -111,6 +144,14 @@ describe("renderDisplaySegments (clean mode)", () => {
 		expect(segments.map((segment) => segment.text).join("")).toBe(
 			"Change new.",
 		);
+	});
+
+	it("removes a CriticMarkup highlight's color marker when finalizing", () => {
+		expect(renderDisplaySegments("A {==🟢kept==}.", "clean")).toEqual([
+			{ kind: "text", text: "A " },
+			{ kind: "text", text: "kept" },
+			{ kind: "text", text: "." },
+		]);
 	});
 });
 

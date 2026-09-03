@@ -1,6 +1,11 @@
 import { parseCriticMarkup } from "./parse";
-import { collectAttachedComments } from "./threading";
+import { buildReviewRuns } from "./review-runs";
 import type { CriticMark, DisplayMode, RenderSegment } from "./types";
+import {
+	highlightPresentation,
+	parseNativeHighlights,
+	type NativeHighlight,
+} from "../markdown/highlights";
 
 export function renderDisplaySegments(
 	text: string,
@@ -21,26 +26,53 @@ export function renderSliceSegments(
 	mode: DisplayMode,
 ): RenderSegment[] {
 	const marks = parseCriticMarkup(text);
-	const anchored = findAnchoredCommentMarkup(marks, text);
+	const nativeHighlights = parseNativeHighlights(text, marks);
+	const runs = buildReviewRuns(text, marks, nativeHighlights);
+	const anchored = findAnchoredCommentMarkup(runs);
+	const entries: Array<
+		| { kind: "critic"; from: number; to: number; mark: CriticMark }
+		| { kind: "native"; from: number; to: number; highlight: NativeHighlight }
+	> = [
+		...marks.map((mark) => ({
+			kind: "critic" as const,
+			from: mark.from,
+			to: mark.to,
+			mark,
+		})),
+		...nativeHighlights.map((highlight) => ({
+			kind: "native" as const,
+			from: highlight.from,
+			to: highlight.to,
+			highlight,
+		})),
+	].sort((left, right) => left.from - right.from || left.to - right.to);
 	const segments: RenderSegment[] = [];
 	let cursor = from;
 
-	for (const mark of marks) {
-		if (mark.to <= cursor) continue;
-		if (mark.from >= to) break;
-		const markStart = Math.max(mark.from, from);
-		if (markStart > cursor) {
+	for (const entry of entries) {
+		if (entry.to <= cursor) continue;
+		if (entry.from >= to) break;
+		const entryStart = Math.max(entry.from, from);
+		if (entryStart > cursor) {
 			const separatorEnd = anchored.separatorEndByStart.get(cursor);
-			if (separatorEnd !== mark.from) {
-				segments.push({ kind: "text", text: text.slice(cursor, markStart) });
+			if (separatorEnd !== entry.from) {
+				segments.push({ kind: "text", text: text.slice(cursor, entryStart) });
 			}
 		}
-		if (mark.valid && anchored.commentIds.has(mark.id)) {
+		if (
+			entry.kind === "critic" &&
+			entry.mark.valid &&
+			anchored.commentIds.has(entry.mark.id)
+		) {
 			// Anchored comment bodies belong in the review sidebar, not inline text.
+		} else if (entry.kind === "critic") {
+			segments.push(
+				...clipMarkSegments(text, entry.mark, mode, from, to),
+			);
 		} else {
-			segments.push(...clipMarkSegments(text, mark, mode, from, to));
+			segments.push(...clipNativeHighlight(entry.highlight, from, to));
 		}
-		cursor = Math.min(mark.to, to);
+		cursor = Math.min(entry.to, to);
 	}
 
 	if (cursor < to) {
@@ -107,12 +139,23 @@ function clipMarkSegments(
 	}
 
 	const content = clipRange([mark.contentFrom, mark.contentTo]);
+	const highlight =
+		mark.type === "highlight" ? highlightPresentation(mark.content) : null;
+	const highlightContent = highlight
+		? clipRange([
+				mark.contentFrom + highlight.prefixLength,
+				mark.contentTo,
+			])
+		: "";
 
 	if (mode === "clean") {
 		switch (mark.type) {
 			case "addition":
-			case "highlight":
 				return content ? [{ kind: "text", text: content }] : [];
+			case "highlight":
+				return highlightContent
+					? [{ kind: "text", text: highlightContent }]
+					: [];
 			case "deletion":
 			case "comment":
 				return [];
@@ -129,7 +172,17 @@ function clipMarkSegments(
 		case "deletion":
 			return content ? [{ kind: "deletion", text: content }] : [];
 		case "highlight":
-			return content ? [{ kind: "highlight", text: content }] : [];
+			return highlightContent
+				? [
+						{
+							kind: "highlight",
+							text: highlightContent,
+							...(highlight?.color !== "default"
+								? { color: highlight?.color }
+								: {}),
+						},
+					]
+				: [];
 		case "comment":
 			// Indicator appears only where the comment starts.
 			return mark.from >= from
@@ -146,26 +199,41 @@ function clipMarkSegments(
 	}
 }
 
+function clipNativeHighlight(
+	highlight: NativeHighlight,
+	from: number,
+	to: number,
+): RenderSegment[] {
+	const start = Math.max(highlight.contentFrom, from);
+	const end = Math.min(highlight.contentTo, to);
+	if (end <= start) return [];
+	const offset = start - highlight.contentFrom;
+	return [
+		{
+			kind: "highlight",
+			text: highlight.text.slice(offset, offset + (end - start)),
+			...(highlight.color !== "default" ? { color: highlight.color } : {}),
+		},
+	];
+}
+
 function findAnchoredCommentMarkup(
-	marks: CriticMark[],
-	text: string,
+	runs: ReturnType<typeof buildReviewRuns>,
 ): {
 	commentIds: Set<string>;
 	separatorEndByStart: Map<number, number>;
 } {
 	const commentIds = new Set<string>();
 	const separatorEndByStart = new Map<number, number>();
-	for (let index = 0; index < marks.length; index += 1) {
-		const mark = marks[index];
-		if (!mark.valid || commentIds.has(mark.id)) continue;
-
-		const attached = collectAttachedComments(marks, text, index, commentIds, {
-			allowCommentAnchor: true,
-		});
-		for (const comment of attached.comments) {
+	for (const run of runs) {
+		const comments =
+			run.anchor.kind === "critic" && run.anchor.mark.type === "comment"
+				? run.comments.slice(1)
+				: run.comments;
+		for (const comment of comments) {
 			commentIds.add(comment.id);
 		}
-		for (const [from, to] of attached.separatorRanges) {
+		for (const [from, to] of run.separatorRanges) {
 			separatorEndByStart.set(from, to);
 		}
 	}

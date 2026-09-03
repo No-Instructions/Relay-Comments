@@ -26,6 +26,13 @@ describe("replacementForMark", () => {
 			"",
 		]);
 	});
+
+	it("unwraps a colored highlight without retaining its color marker", () => {
+		const [mark] = parseCriticMarkup("{==🟠highlighted==}");
+
+		expect(replacementForMark(mark, "accept")).toBe("highlighted");
+		expect(replacementForMark(mark, "reject")).toBe("highlighted");
+	});
 });
 
 describe("applyMarkAction", () => {

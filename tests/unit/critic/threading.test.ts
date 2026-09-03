@@ -2,6 +2,7 @@ import { describe, expect, it } from "@jest/globals";
 import { parseCriticMarkup } from "src/critic/parse";
 import {
 	collectAttachedComments,
+	collectAttachedCommentsAfter,
 	isCriticSectionSeparator,
 } from "src/critic/threading";
 
@@ -55,5 +56,16 @@ describe("collectAttachedComments", () => {
 				allowCommentAnchor: true,
 			}).comments.map((mark) => mark.content),
 		).toEqual(["reply"]);
+	});
+
+	it("collects comments after a non-CriticMarkup source range", () => {
+		const text = "==subject=={>>first<<}{>>second<<}";
+		const marks = parseCriticMarkup(text);
+
+		expect(
+			collectAttachedCommentsAfter(marks, text, "==subject==".length).comments.map(
+				(mark) => mark.content,
+			),
+		).toEqual(["first", "second"]);
 	});
 });

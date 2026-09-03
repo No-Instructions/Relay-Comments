@@ -1,4 +1,5 @@
 import type { CriticMark } from "../critic/types";
+import { highlightPresentation } from "../markdown/highlights";
 
 export interface CriticTaskPrefix {
 	lineFrom: number;
@@ -38,11 +39,16 @@ export function findCriticTaskPrefixes(
 
 	const prefixes: CriticTaskPrefix[] = [];
 	let lineFrom = text.lastIndexOf("\n", Math.max(0, mark.contentFrom - 1)) + 1;
-	let segmentFrom = mark.contentFrom;
+	const highlightPrefixLength =
+		mark.type === "highlight"
+			? highlightPresentation(mark.content).prefixLength
+			: 0;
+	let segmentFrom = mark.contentFrom + highlightPrefixLength;
 
 	while (segmentFrom < mark.contentTo) {
 		const lineEnd = findLineEnd(text, segmentFrom, mark.contentTo);
-		const isOpeningLine = segmentFrom === mark.contentFrom;
+		const isOpeningLine =
+			segmentFrom === mark.contentFrom + highlightPrefixLength;
 		if (
 			!isOpeningLine ||
 			LEADING_WHITESPACE.test(text.slice(lineFrom, mark.from))

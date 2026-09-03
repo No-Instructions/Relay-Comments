@@ -60,11 +60,36 @@
 .cm-critic-highlight,
 .cm-critic-comment-anchor,
 .critic-preview-highlight {
-	background-color: color-mix(in srgb, var(--color-yellow) 26%, transparent);
-	border-bottom: 2px solid color-mix(in srgb, var(--color-yellow) 60%, transparent);
+	--critic-highlight-color: var(--color-yellow);
+	background-color: color-mix(in srgb, var(--critic-highlight-color) 26%, transparent);
+	border-bottom: 2px solid color-mix(in srgb, var(--critic-highlight-color) 60%, transparent);
 	border-radius: 1px;
 	color: inherit;
 	transition: background-color 120ms ease;
+}
+
+.critic-highlight-color-red {
+	--critic-highlight-color: var(--color-red);
+}
+
+.critic-highlight-color-orange {
+	--critic-highlight-color: var(--color-orange);
+}
+
+.critic-highlight-color-green {
+	--critic-highlight-color: var(--color-green);
+}
+
+.critic-highlight-color-blue {
+	--critic-highlight-color: var(--color-blue);
+}
+
+.critic-highlight-color-purple {
+	--critic-highlight-color: var(--color-purple);
+}
+
+.critic-highlight-color-default {
+	--critic-highlight-color: var(--color-yellow);
 }
 
 /* Obsidian parses the CriticMarkup `{==...==}` delimiters as native
@@ -86,7 +111,14 @@
 
 .cm-critic-highlight.cm-critic-thread-anchor:hover,
 .cm-critic-comment-anchor:hover {
-	background-color: color-mix(in srgb, var(--color-yellow) 42%, transparent);
+	background-color: color-mix(in srgb, var(--critic-highlight-color) 42%, transparent);
+}
+
+/* Obsidian owns the background of native ==highlights==. Relay Comments
+   adds only the thread affordance so its color and inline swatch remain native. */
+.cm-relay-native-highlight.cm-critic-thread-anchor {
+	border-bottom: 2px solid color-mix(in srgb, var(--critic-highlight-color) 60%, transparent);
+	border-radius: 1px;
 }
 
 .cm-critic-invalid {
@@ -513,7 +545,7 @@
 	white-space: nowrap;
 	margin: 2px 0 10px;
 	padding: 1px 0 1px 9px;
-	border-left: 2px solid color-mix(in srgb, var(--color-yellow) 55%, transparent);
+	border-left: 2px solid color-mix(in srgb, var(--critic-highlight-color, var(--color-yellow)) 55%, transparent);
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
 	line-height: 1.4;

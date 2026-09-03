@@ -7,7 +7,7 @@ Draft for discussion. This project is an Obsidian community plugin named Relay C
 ## Goals
 
 1. Add first-class CriticMarkup support to Obsidian's CodeMirror 6 editor.
-2. Keep the Markdown file as the standalone source of truth when Relay is absent. Suggestions, deletions, comments, and highlights are stored as plain CriticMarkup text in non-Relay mode.
+2. Keep the Markdown file as the standalone source of truth when Relay is absent. Suggestions and comments are stored as plain CriticMarkup text; Obsidian native highlights remain native Markdown.
 3. Hide raw CriticMarkup delimiters in Obsidian Live Preview and Reading mode. Raw CriticMarkup is visible only in Obsidian Source mode.
 4. Provide review commands for creating, accepting, rejecting, and navigating CriticMarkup marks.
 5. Integrate with Relay through a small, stable TypeScript API so this plugin can show who created comments and suggestions without depending on Relay internals.
@@ -47,6 +47,20 @@ The parser must recognize the five standard mark types:
 | Comment | `{>>comment<<}` | Plain text comment attached to nearby text |
 | Highlight | `{==marked text==}` | Highlighted passage, often followed by a comment |
 
+Highlights may begin with one of Obsidian's color markers: `🔴`, `🟠`, `🟢`,
+`🔵`, or `🟣`. The marker is source metadata, not visible passage text. Relay
+Comments preserves it in the note and removes it when a CriticMarkup highlight
+is accepted, rejected, resolved, or finalized.
+
+The plugin must also recognize Obsidian's native `==marked text==` syntax,
+including the same optional color marker. A native highlight is not parsed as
+a CriticMarkup mark. It remains a native highlight when a CriticMarkup comment
+thread is attached immediately after it:
+
+```markdown
+==🔵passage=={{authorId="service-user-id" author="Bongo Cat">>Comment<<}}
+```
+
 MVP caveats:
 
 1. Support same-line marks for the MVP.
@@ -73,6 +87,8 @@ Review rendering policy:
 3. Render substitutions as old text plus new text.
 4. Render comments as unobtrusive comment indicators or popovers.
 5. Render highlights as highlighted text.
+6. Use the color selected by a leading Obsidian highlight emoji without
+   displaying the emoji as part of the passage.
 
 The plugin should provide:
 
@@ -121,7 +137,7 @@ Sidebar content:
 
 1. Header with the active note name and counts for suggestions and comments.
 2. A draft card for new comments when the user is adding a comment to the current selection.
-3. A document-ordered list of review cards. Each card represents one CriticMarkup mark, or one highlight plus immediately following comment when they form a standard highlighted-comment pair.
+3. A document-ordered list of review cards. Each card represents one CriticMarkup mark or one native Obsidian highlight. A highlight plus immediately following CriticMarkup comments forms one thread card.
 4. Card body showing the proposed text change or comment text without raw delimiters.
 5. Card metadata showing mark type, document location, and provider-resolved author when available.
 6. Inline card actions:
@@ -148,10 +164,10 @@ Comment creation:
    comment, and unload renderer children whenever that surface is replaced.
 3. Right-clicking selected editor text should include "Add comment".
 4. Choosing Add comment opens the review sidebar, creates a draft card, and focuses its textarea.
-5. Saving the draft writes `{==selected text==}{>>comment<<}` into the Markdown via a normal editor transaction.
+5. Saving a draft around ordinary text writes `{==selected text==}{>>comment<<}` into the Markdown via a normal editor transaction. Saving a draft on a complete native highlight preserves its `==...==` source and appends only the comment markup.
 6. Canceling the draft leaves the Markdown unchanged.
 
-MVP constraint: the sidebar does not store independent comment threads or resolved states outside the Markdown document. A review card exists because a CriticMarkup mark exists. Resolving a suggestion removes or rewrites that mark.
+MVP constraint: the sidebar does not store independent comment threads or resolved states outside the Markdown document. A review card exists because a CriticMarkup mark or native highlight exists. Resolving a thread on a native highlight removes the CriticMarkup comments and leaves the highlight intact; resolving a standalone native highlight unwraps it to plain text.
 
 ## Architecture
 
@@ -167,6 +183,9 @@ src/
     types.ts
     transform.ts
     render.ts
+    review-runs.ts
+  markdown/
+    highlights.ts
   editor/
     extension.ts
     decorations.ts

@@ -1,4 +1,5 @@
 import type { CriticMark } from "./types";
+import { highlightPresentation } from "../markdown/highlights";
 
 export type CriticAction = "accept" | "reject";
 
@@ -18,7 +19,7 @@ export function replacementForMark(
 		case "comment":
 			return "";
 		case "highlight":
-			return mark.content;
+			return highlightPresentation(mark.content).text;
 	}
 }
 

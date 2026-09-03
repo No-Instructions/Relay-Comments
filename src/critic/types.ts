@@ -1,3 +1,5 @@
+import type { HighlightColor } from "../markdown/highlights";
+
 export type CriticMarkType =
 	| "addition"
 	| "deletion"
@@ -37,4 +39,5 @@ export interface RenderSegment {
 	kind: "text" | "addition" | "deletion" | "comment" | "highlight";
 	text: string;
 	title?: string;
+	color?: HighlightColor;
 }

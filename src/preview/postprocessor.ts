@@ -10,6 +10,7 @@ import {
 	isCommentOnlySection,
 	renderedElementSourceRange,
 } from "./sections";
+import { highlightColorClass } from "../markdown/highlights";
 
 export interface PreviewDisplayController {
 	getDisplayMode(path?: string | null): DisplayMode;
@@ -410,6 +411,9 @@ function appendSegment(parent: DocumentFragment, segment: RenderSegment): void {
 					: "span";
 	const el = createEl(tag);
 	el.className = `critic-preview-${segment.kind}`;
+	if (segment.kind === "highlight" && segment.color) {
+		el.addClass(highlightColorClass(segment.color));
+	}
 	el.textContent = segment.text;
 	if (segment.title) el.title = segment.title;
 	parent.append(el);
