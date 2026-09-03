@@ -44,10 +44,10 @@ import {
 
 export const setCommentDraftAnchor =
 	StateEffect.define<CommentDraftAnchor | null>();
+export const refreshReviewEditorUi = StateEffect.define<null>();
 
 export interface ReviewEditorController {
 	getDisplayMode(path?: string | null): DisplayMode;
-	getRenderVersion(): number;
 	shouldShowInlineActions(): boolean;
 	activateCommentThread(path: string | null, from: number, to: number): void;
 	queueThreadPreview(
@@ -87,7 +87,6 @@ interface CriticFieldValue {
 	lastReviewRangeEnd: number;
 	livePreview: boolean;
 	domLivePreview: boolean | null;
-	renderVersion: number;
 	path: string | null;
 }
 
@@ -104,7 +103,6 @@ export function createReviewEditorExtension(
 	): CriticFieldValue => {
 		const livePreview =
 			domLivePreview ?? state.field(editorLivePreviewField, false) ?? false;
-		const renderVersion = controller.getRenderVersion();
 		const path = readPath(state);
 		const { decorations, atomics, marks, lastReviewRangeEnd } = buildDecorations(
 			state,
@@ -118,7 +116,6 @@ export function createReviewEditorExtension(
 			lastReviewRangeEnd,
 			livePreview,
 			domLivePreview,
-			renderVersion,
 			path,
 		};
 	};
@@ -144,7 +141,6 @@ export function createReviewEditorExtension(
 				!tr.docChanged &&
 				domLivePreview === value.domLivePreview &&
 				livePreview === value.livePreview &&
-				controller.getRenderVersion() === value.renderVersion &&
 				readPath(tr.state) === value.path
 			) {
 				return value;
@@ -154,7 +150,6 @@ export function createReviewEditorExtension(
 				livePreview &&
 				domLivePreview === value.domLivePreview &&
 				livePreview === value.livePreview &&
-				controller.getRenderVersion() === value.renderVersion &&
 				readPath(tr.state) === value.path &&
 				canReuseTrailingEdit(value, tr)
 			) {
@@ -266,6 +261,11 @@ export function createReviewEditorExtension(
 
 			update(update: ViewUpdate): void {
 				this.observeSourceView();
+				const refreshUi = update.transactions.some((transaction) =>
+					transaction.effects.some((effect) =>
+						effect.is(refreshReviewEditorUi),
+					),
+				);
 				const draftAnchor = update.state.field(commentDraftAnchorField);
 				if (
 					update.docChanged &&
@@ -284,6 +284,7 @@ export function createReviewEditorExtension(
 					controller.notifyEditorSelectionChanged();
 				}
 				if (
+					refreshUi ||
 					update.selectionSet ||
 					update.docChanged ||
 					update.viewportChanged ||

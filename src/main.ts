@@ -58,6 +58,7 @@ import {
 } from "./editor/commands";
 import {
 	createReviewEditorExtension,
+	refreshReviewEditorUi,
 	setCommentDraftAnchor,
 	type ReviewEditorController,
 } from "./editor/extension";
@@ -172,7 +173,6 @@ export default class RelayCommentsPlugin
 	implements ReviewEditorController
 {
 	settings!: RelayCommentsSettings;
-	private renderVersion = 0;
 	private commentDraft: CommentDraft | null = null;
 	private commentDraftSequence = 0;
 	private commentDraftEditorView: CodeMirrorEditorView | null = null;
@@ -236,8 +236,6 @@ export default class RelayCommentsPlugin
 			}
 		}
 		void this.refreshCurrentIdentity();
-		this.queueEditorExtensionRefresh(0);
-		this.queueEditorExtensionRefresh(250);
 
 		this.canvasPins = new CanvasCommentPins({
 			app: this.app,
@@ -269,8 +267,6 @@ export default class RelayCommentsPlugin
 			this.captureActiveContentLeaf(
 				this.app.workspace.getActiveViewOfType(ItemView)?.leaf ?? null,
 			);
-			this.queueEditorExtensionRefresh(0);
-			this.queueEditorExtensionRefresh(250);
 			this.refreshReviewSidebars();
 			this.canvasPins?.start();
 		});
@@ -297,7 +293,6 @@ export default class RelayCommentsPlugin
 		this.hideThreadPreview();
 		this.editorExtensions.length = 0;
 		this.app.workspace.updateOptions();
-		this.refreshOpenEditors();
 	}
 
 	notifyEditorSelectionChanged(): void {
@@ -306,10 +301,6 @@ export default class RelayCommentsPlugin
 
 	getDisplayMode(path?: string | null): DisplayMode {
 		return "review";
-	}
-
-	getRenderVersion(): number {
-		return this.renderVersion;
 	}
 
 	shouldShowInlineActions(): boolean {
@@ -1065,21 +1056,28 @@ export default class RelayCommentsPlugin
 		};
 	}
 
-	async saveSettingsAndRefresh(): Promise<void> {
+	async saveSettingsAndRefresh(
+		options: { editorUi?: boolean } = {},
+	): Promise<void> {
 		await this.saveData(this.settings);
 		this.identityRevision += 1;
 		this.identityCache.clear();
 		void this.refreshCurrentIdentity();
-		this.bumpRenderVersion();
+		if (options.editorUi) this.refreshOpenEditorUi();
+		this.refreshReviewSidebars();
 	}
 
 	async onExternalSettingsChange(): Promise<void> {
+		const previousInlineActions = this.settings.showInlineActions;
 		await this.loadSettings();
 		this.identityRevision += 1;
 		this.identityCache.clear();
 		this.settingsTab?.refreshIdentityProviderState();
 		void this.refreshCurrentIdentity();
-		this.bumpRenderVersion();
+		if (this.settings.showInlineActions !== previousInlineActions) {
+			this.refreshOpenEditorUi();
+		}
+		this.refreshReviewSidebars();
 	}
 
 	getActiveReviewState(): ActiveReviewState | null {
@@ -1425,7 +1423,7 @@ export default class RelayCommentsPlugin
 			this.app.workspace.getActiveFile()?.path ?? this.lastMarkdownPath;
 		if (!path) return;
 		await this.getCurrentReviewerIdentityAsync(path);
-		this.bumpRenderVersion();
+		this.refreshReviewSidebars();
 	}
 
 	private getSelectedIdentityProvider(): IdentityProvider | null {
@@ -1593,7 +1591,6 @@ export default class RelayCommentsPlugin
 		if (!editor) return;
 		replaceMark(editor, mark, action);
 		this.refreshReviewSidebars();
-		this.bumpRenderVersion();
 	}
 
 	replaceReviewRangeFromSidebar(
@@ -1610,7 +1607,7 @@ export default class RelayCommentsPlugin
 			editor.offsetToPos(toOffset),
 			"relay-comments",
 		);
-		this.bumpRenderVersion();
+		this.refreshReviewSidebars();
 	}
 
 	async insertReplyToMark(
@@ -1633,7 +1630,7 @@ export default class RelayCommentsPlugin
 			undefined,
 			"relay-comments",
 		);
-		this.bumpRenderVersion();
+		this.refreshReviewSidebars();
 		if (typeof scrollTop === "number" && cm?.scrollDOM) {
 			window.requestAnimationFrame(() => {
 				if (cm.scrollDOM) {
@@ -1656,7 +1653,7 @@ export default class RelayCommentsPlugin
 			editor.offsetToPos(range[1]),
 			"relay-comments",
 		);
-		this.bumpRenderVersion();
+		this.refreshReviewSidebars();
 		return true;
 	}
 
@@ -1838,23 +1835,18 @@ export default class RelayCommentsPlugin
 		);
 		this.addEditorCommand("accept-current", "Accept current comment or suggestion", (editor) => {
 			applyCurrentMarkAction(editor, "accept");
-			this.bumpRenderVersion();
 		});
 		this.addEditorCommand("reject-current", "Reject current comment or suggestion", (editor) => {
 			applyCurrentMarkAction(editor, "reject");
-			this.bumpRenderVersion();
 		});
 		this.addEditorCommand("accept-all", "Accept all comments and suggestions", (editor) => {
 			applyAllInEditor(editor, "accept");
-			this.bumpRenderVersion();
 		});
 		this.addEditorCommand("reject-all", "Reject all comments and suggestions", (editor) => {
 			applyAllInEditor(editor, "reject");
-			this.bumpRenderVersion();
 		});
 		this.addEditorCommand("finalize-for-publish", "Finalize for publish", (editor) => {
 			applyAllInEditor(editor, "accept");
-			this.bumpRenderVersion();
 		});
 	}
 
@@ -1925,7 +1917,6 @@ export default class RelayCommentsPlugin
 		this.registerEvent(
 			this.app.workspace.on("active-leaf-change", (leaf) => {
 				this.hideThreadPreview();
-				this.queueEditorExtensionRefresh(0);
 				// Clicking into the sidebar activates its leaf; rebuilding it
 				// for that lands between mousedown and mouseup and swallows
 				// the very button press being made (resolve took two clicks).
@@ -1933,7 +1924,7 @@ export default class RelayCommentsPlugin
 				if (leaf?.view instanceof ReviewSidebarView) return;
 				this.captureActiveContentLeaf(leaf);
 				this.captureActiveMarkdownPath();
-				this.refreshReviewSidebars();
+				this.scheduleReviewSidebarRefresh(0);
 			}),
 		);
 		this.registerEvent(
@@ -1943,8 +1934,7 @@ export default class RelayCommentsPlugin
 				);
 				this.captureActiveMarkdownPath();
 				this.hideThreadPreview();
-				this.queueEditorExtensionRefresh(0);
-				this.refreshReviewSidebars();
+				this.scheduleReviewSidebarRefresh(0);
 				void this.refreshCurrentIdentity();
 			}),
 		);
@@ -2016,7 +2006,7 @@ export default class RelayCommentsPlugin
 		}
 		this.identityRefreshTimer = window.setTimeout(() => {
 			this.identityRefreshTimer = null;
-			this.bumpRenderVersion();
+			this.refreshReviewSidebars();
 		}, 50);
 	}
 
@@ -2024,7 +2014,7 @@ export default class RelayCommentsPlugin
 		this.identityRevision += 1;
 		this.identityCache.clear();
 		this.settingsTab?.refreshIdentityProviderState();
-		this.bumpRenderVersion();
+		this.refreshReviewSidebars();
 		void this.refreshCurrentIdentity();
 	}
 
@@ -2097,31 +2087,12 @@ export default class RelayCommentsPlugin
 		return found;
 	}
 
-	private bumpRenderVersion(): void {
-		this.renderVersion += 1;
-		this.refreshOpenEditors();
-		this.refreshReviewSidebars();
-		this.app.workspace.updateOptions();
-	}
-
-	private queueEditorExtensionRefresh(delayMs: number): void {
-		const timer = window.setTimeout(() => {
-			this.app.workspace.updateOptions();
-			this.refreshOpenEditors();
-		}, delayMs);
-		this.register(() => window.clearTimeout(timer));
-	}
-
-	private refreshOpenEditors(): void {
+	private refreshOpenEditorUi(): void {
 		this.app.workspace.iterateAllLeaves((leaf) => {
 			if (!(leaf.view instanceof MarkdownView)) return;
-			const editor = leaf.view.editor;
-			const cm = (editor as unknown as { cm?: { dispatch(spec?: object): void } }).cm;
-			if (cm?.dispatch) {
-				cm.dispatch({});
-			} else {
-				editor.refresh();
-			}
+			this.getCodeMirrorEditor(leaf.view.editor)?.dispatch({
+				effects: refreshReviewEditorUi.of(null),
+			});
 		});
 	}
 }

@@ -64,7 +64,7 @@ export class RelayCommentsSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.showInlineActions)
 					.onChange(async (value) => {
 						this.plugin.settings.showInlineActions = value;
-						await this.plugin.saveSettingsAndRefresh();
+						await this.plugin.saveSettingsAndRefresh({ editorUi: true });
 					});
 			});
 
