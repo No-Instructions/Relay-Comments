@@ -148,13 +148,16 @@ export class RelayCommentsSettingTab extends PluginSettingTab {
 	private renderVersionLabel(containerEl: HTMLElement): void {
 		const version = RELAY_COMMENTS_VERSION || "0.0.0";
 		const buildId = RELAY_COMMENTS_BUILD_ID || "dev";
-		const label = `${version} · ${buildId}`;
+		const hasDistinctBuildId = buildId !== version;
+		const label = hasDistinctBuildId ? `${version} · ${buildId}` : version;
 
 		containerEl.createDiv({
 			cls: "relay-comments-settings-version",
 			text: label,
 			attr: {
-				"aria-label": `Relay Comments version ${version}, build ${buildId}`,
+				"aria-label": hasDistinctBuildId
+					? `Relay Comments version ${version}, build ${buildId}`
+					: `Relay Comments version ${version}`,
 				title: `Relay Comments ${label}`,
 			},
 		});
