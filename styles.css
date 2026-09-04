@@ -565,8 +565,7 @@
 	display: flex;
 	flex-wrap: wrap;
 	align-items: baseline;
-	row-gap: 4px;
-	column-gap: 6px;
+	gap: 4px 6px;
 	white-space: normal;
 }
 
@@ -1018,7 +1017,6 @@
 	font-size: 13px;
 	font-weight: 600;
 	cursor: pointer;
-	pointer-events: auto;
 	user-select: none;
 }
 
