@@ -67,6 +67,13 @@ import {
 	getAddCommentTarget,
 } from "./editor/hotkeys";
 import { buildCommentDraftInsertion } from "./editor/comment-draft-anchor";
+import {
+	findCanvasEmbedEditorSurface,
+	findFocusedCanvasEmbedEditorSurface,
+	listCanvasEmbedEditorSurfaces,
+	type CanvasEmbedEditorSurface,
+	type CanvasViewLike,
+} from "./editor/surfaces";
 import { createReviewPostProcessor } from "./preview/postprocessor";
 import {
 	resolveSettings,
@@ -168,6 +175,16 @@ interface ActiveThreadPreview {
 	cleanup: () => void;
 }
 
+interface MarkdownEditorSurface {
+	kind: "markdown";
+	file: TFile;
+	editor: Editor;
+	editorView: CodeMirrorEditorView;
+	leaf: WorkspaceLeaf;
+}
+
+type ReviewEditorSurface = MarkdownEditorSurface | CanvasEmbedEditorSurface;
+
 export default class RelayCommentsPlugin
 	extends Plugin
 	implements ReviewEditorController
@@ -176,6 +193,7 @@ export default class RelayCommentsPlugin
 	private commentDraft: CommentDraft | null = null;
 	private commentDraftSequence = 0;
 	private commentDraftEditorView: CodeMirrorEditorView | null = null;
+	private lastReviewEditorView: CodeMirrorEditorView | null = null;
 	private lastMarkdownPath: string | null = null;
 	private lastContentLeaf: WorkspaceLeaf | null = null;
 	private externalCommentObserver: MutationObserver | null = null;
@@ -295,8 +313,25 @@ export default class RelayCommentsPlugin
 		this.app.workspace.updateOptions();
 	}
 
-	notifyEditorSelectionChanged(): void {
+	notifyEditorSelectionChanged(editorView?: CodeMirrorEditorView): void {
+		if (editorView) this.rememberReviewEditor(editorView);
 		this.scheduleReviewSidebarRefresh(120);
+	}
+
+	notifyRenderedCommentsChanged(): void {
+		this.scheduleExternalCommentRefresh();
+	}
+
+	resolveEditorPath(
+		editorView: CodeMirrorEditorView,
+		path: string | null,
+	): string | null {
+		const surface = this.findReviewEditorSurface(editorView);
+		if (surface) {
+			this.rememberReviewEditorSurface(surface);
+			return surface.file.path;
+		}
+		return path;
 	}
 
 	getDisplayMode(path?: string | null): DisplayMode {
@@ -311,19 +346,28 @@ export default class RelayCommentsPlugin
 		path: string | null,
 		from: number,
 		to: number,
-		options?: { focusReply?: boolean },
+		options?: {
+			focusReply?: boolean;
+			editorView?: CodeMirrorEditorView;
+		},
 	): void {
 		// The thread is opening where the preview points; keep both around
 		// and they compete for the same attention.
 		this.hideThreadPreview();
-		const filePath = path ?? this.app.workspace.getActiveFile()?.path ?? null;
+		if (options?.editorView) this.rememberReviewEditor(options.editorView);
+		const filePath =
+			options?.editorView
+				? this.findReviewEditorSurface(options.editorView)?.file.path ?? path
+				: path ?? this.app.workspace.getActiveFile()?.path ?? null;
 		if (filePath) {
 			this.lastMarkdownPath = filePath;
 		}
 
 		const activate = (leaf: WorkspaceLeaf | undefined) => {
 			if (leaf?.view instanceof ReviewSidebarView) {
-				leaf.view.activateThreadForRange(from, to, options);
+				leaf.view.activateThreadForRange(from, to, {
+					focusReply: options?.focusReply,
+				});
 			}
 		};
 
@@ -349,8 +393,10 @@ export default class RelayCommentsPlugin
 		from: number,
 		to: number,
 		anchor: HTMLElement,
+		editorView?: CodeMirrorEditorView,
 	): void {
 		if (!this.settings.showHoverPreview) return;
+		if (editorView) this.rememberReviewEditor(editorView);
 		const active = document.activeElement;
 		if (
 			active instanceof HTMLTextAreaElement &&
@@ -358,7 +404,10 @@ export default class RelayCommentsPlugin
 		) {
 			return;
 		}
-		const filePath = path ?? this.app.workspace.getActiveFile()?.path ?? null;
+		const filePath =
+			(editorView
+				? this.findReviewEditorSurface(editorView)?.file.path
+				: null) ?? path ?? this.app.workspace.getActiveFile()?.path ?? null;
 		if (!filePath || !anchor.isConnected) return;
 		const previewId = this.previewId + 1;
 		this.previewId = previewId;
@@ -369,6 +418,7 @@ export default class RelayCommentsPlugin
 				anchor,
 				returnFocus: null,
 				role: "tooltip",
+				editorView,
 			});
 		}, 300);
 	}
@@ -417,9 +467,16 @@ export default class RelayCommentsPlugin
 			anchor: HTMLElement | null;
 			returnFocus: (() => void) | null;
 			role: "tooltip" | "dialog";
+			editorView?: CodeMirrorEditorView;
 		},
 	): boolean {
-		const data = this.buildThreadPreviewData(filePath, from, to);
+		if (options.editorView) this.rememberReviewEditor(options.editorView);
+		const data = this.buildThreadPreviewData(
+			filePath,
+			from,
+			to,
+			options.editorView,
+		);
 		if (!data) return false;
 		this.hideThreadPreview();
 		const renderScope = new Component();
@@ -429,19 +486,36 @@ export default class RelayCommentsPlugin
 			data,
 			options.role,
 			{
-				open: (opts) => this.activateCommentThread(filePath, from, to, opts),
+				open: (opts) =>
+					this.activateCommentThread(filePath, from, to, {
+						...opts,
+						editorView: options.editorView,
+					}),
 				resolve: () => {
 					this.hideThreadPreview();
-					this.resolveThreadAtRange(filePath, from, to);
+					this.resolveThreadAtRange(
+						filePath,
+						from,
+						to,
+						options.editorView,
+					);
 				},
 				apply: (action) => {
 					this.hideThreadPreview();
-					this.applySuggestionActionAtRange(filePath, from, to, action);
+					this.applySuggestionActionAtRange(
+						filePath,
+						from,
+						to,
+						action,
+						options.editorView,
+					);
 				},
 			},
 			renderScope,
 		);
-		document.body.appendChild(element);
+		const ownerDocument = options.anchor?.ownerDocument ?? document;
+		const ownerWindow = ownerDocument.defaultView ?? window;
+		ownerDocument.body.appendChild(element);
 		this.positionThreadPreview(element, anchorRect);
 		const previousTitle = options.anchor?.getAttribute("title") ?? null;
 		const previousDescribedBy =
@@ -504,10 +578,10 @@ export default class RelayCommentsPlugin
 		};
 		element.addEventListener("pointerenter", cancelDismiss);
 		element.addEventListener("pointerleave", onPointerLeave);
-		document.addEventListener("pointerdown", onDocumentPointerDown, true);
-		document.addEventListener("keydown", onDocumentKeyDown, true);
-		document.addEventListener("scroll", onScroll, true);
-		window.addEventListener("resize", onResize);
+		ownerDocument.addEventListener("pointerdown", onDocumentPointerDown, true);
+		ownerDocument.addEventListener("keydown", onDocumentKeyDown, true);
+		ownerDocument.addEventListener("scroll", onScroll, true);
+		ownerWindow.addEventListener("resize", onResize);
 
 		this.activeThreadPreview = {
 			element,
@@ -519,14 +593,14 @@ export default class RelayCommentsPlugin
 				renderScope.unload();
 				element.removeEventListener("pointerenter", cancelDismiss);
 				element.removeEventListener("pointerleave", onPointerLeave);
-				document.removeEventListener(
+				ownerDocument.removeEventListener(
 					"pointerdown",
 					onDocumentPointerDown,
 					true,
 				);
-				document.removeEventListener("keydown", onDocumentKeyDown, true);
-				document.removeEventListener("scroll", onScroll, true);
-				window.removeEventListener("resize", onResize);
+				ownerDocument.removeEventListener("keydown", onDocumentKeyDown, true);
+				ownerDocument.removeEventListener("scroll", onScroll, true);
+				ownerWindow.removeEventListener("resize", onResize);
 				window.clearInterval(driftWatcher);
 				if (options.anchor) {
 					if (previousTitle === null) {
@@ -692,20 +766,24 @@ export default class RelayCommentsPlugin
 		element: HTMLElement,
 		anchorRect: ClientRectLike,
 	): void {
+		const ownerWindow = element.ownerDocument.defaultView ?? window;
 		const margin = 12;
 		const gap = 8;
-		const width = Math.min(360, Math.max(280, window.innerWidth - margin * 2));
+		const width = Math.min(
+			360,
+			Math.max(280, ownerWindow.innerWidth - margin * 2),
+		);
 		element.setCssStyles({ width: `${width}px` });
 		const previewRect = element.getBoundingClientRect();
 		let left = anchorRect.left;
-		if (left + width > window.innerWidth - margin) {
-			left = window.innerWidth - width - margin;
+		if (left + width > ownerWindow.innerWidth - margin) {
+			left = ownerWindow.innerWidth - width - margin;
 		}
 		left = Math.max(margin, left);
 
 		let top = anchorRect.bottom + gap;
 		let placedAbove = false;
-		if (top + previewRect.height > window.innerHeight - margin) {
+		if (top + previewRect.height > ownerWindow.innerHeight - margin) {
 			top = anchorRect.top - previewRect.height - gap;
 			placedAbove = true;
 		}
@@ -835,15 +913,18 @@ export default class RelayCommentsPlugin
 		filePath: string,
 		from: number,
 		to: number,
+		editorView?: CodeMirrorEditorView,
 	): {
 		anchor: ReviewAnchor;
 		visibleComments: CriticMark[];
 		runFrom: number;
 		runTo: number;
 	} | null {
-		const view = this.getMarkdownViewByPath(filePath);
-		const editor = view?.editor;
-		if (!view?.file || view.file.path !== filePath || !editor) return null;
+		const surface = editorView
+			? this.findReviewEditorSurface(editorView)
+			: this.findReviewEditorSurfaceByPath(filePath);
+		const editor = surface?.editor;
+		if (!surface || surface.file.path !== filePath || !editor) return null;
 		const text = editor.getValue();
 		const marks = parseCriticMarkup(text);
 		const nativeHighlights = parseNativeHighlights(text, marks);
@@ -871,8 +952,9 @@ export default class RelayCommentsPlugin
 		filePath: string,
 		from: number,
 		to: number,
+		editorView?: CodeMirrorEditorView,
 	): ThreadPreviewData | null {
-		const found = this.findMarkRunAtRange(filePath, from, to);
+		const found = this.findMarkRunAtRange(filePath, from, to, editorView);
 		if (!found) return null;
 		const { anchor, visibleComments } = found;
 
@@ -931,8 +1013,14 @@ export default class RelayCommentsPlugin
 
 	/** Resolve the thread at a range: same semantics as the sidebar's
 	    resolve control (comments removed; a suggestion anchor survives). */
-	resolveThreadAtRange(filePath: string, from: number, to: number): void {
-		const found = this.findMarkRunAtRange(filePath, from, to);
+	resolveThreadAtRange(
+		filePath: string,
+		from: number,
+		to: number,
+		editorView?: CodeMirrorEditorView,
+	): void {
+		if (editorView) this.rememberReviewEditor(editorView);
+		const found = this.findMarkRunAtRange(filePath, from, to, editorView);
 		if (!found || found.visibleComments.length === 0) return;
 		const { anchor, runFrom, runTo } = found;
 		if (anchor.kind === "native-highlight") {
@@ -956,8 +1044,10 @@ export default class RelayCommentsPlugin
 		from: number,
 		to: number,
 		action: CriticAction,
+		editorView?: CodeMirrorEditorView,
 	): void {
-		const found = this.findMarkRunAtRange(filePath, from, to);
+		if (editorView) this.rememberReviewEditor(editorView);
+		const found = this.findMarkRunAtRange(filePath, from, to, editorView);
 		if (
 			!found ||
 			found.anchor.kind !== "critic" ||
@@ -978,7 +1068,13 @@ export default class RelayCommentsPlugin
 	}
 
 	private showCommentPreviewAtCursor(editor: Editor): void {
-		const file = this.getCurrentMarkdownView()?.file;
+		const editorView = this.getCodeMirrorEditor(
+			editor,
+		) as CodeMirrorEditorView | null;
+		const surface = editorView
+			? this.findReviewEditorSurface(editorView)
+			: this.getCurrentReviewEditorSurface();
+		const file = surface?.file;
 		if (!file) {
 			new Notice("Open a Markdown note to preview comments.");
 			return;
@@ -1029,6 +1125,7 @@ export default class RelayCommentsPlugin
 				anchor,
 				returnFocus: () => editor.focus(),
 				role: "dialog",
+				editorView: editorView ?? undefined,
 			},
 		);
 		if (!shown) {
@@ -1081,9 +1178,9 @@ export default class RelayCommentsPlugin
 	}
 
 	getActiveReviewState(): ActiveReviewState | null {
-		const view = this.getCurrentMarkdownView();
-		const file = view?.file;
-		const editor = view?.editor;
+		const surface = this.getCurrentReviewEditorSurface();
+		const file = surface?.file;
+		const editor = surface?.editor;
 		if (!file || !editor) return null;
 
 		const text = editor.getValue();
@@ -1142,14 +1239,20 @@ export default class RelayCommentsPlugin
 		selectedText: string,
 		editorView?: CodeMirrorEditorView,
 	): void {
+		const surface = editorView
+			? this.findReviewEditorSurface(editorView)
+			: path
+				? this.findReviewEditorSurfaceByPath(path)
+				: this.getCurrentReviewEditorSurface();
+		if (surface) this.rememberReviewEditorSurface(surface);
 		const activeFile = this.app.workspace.getActiveFile();
-		const filePath = path ?? activeFile?.path;
+		const filePath = surface?.file.path ?? path ?? activeFile?.path;
 		if (!filePath) {
 			new Notice("Open a Markdown note before adding a comment.");
 			return;
 		}
 		// CriticMarkup can't express overlapping marks.
-		const editorText = this.getMarkdownViewByPath(filePath)?.editor.getValue();
+		const editorText = surface?.editor.getValue();
 		const marks = editorText ? parseCriticMarkup(editorText) : [];
 		if (
 			editorText &&
@@ -1193,7 +1296,7 @@ export default class RelayCommentsPlugin
 			nativeHighlight: nativeHighlight !== null,
 		};
 		this.commentDraft = draft;
-		this.commentDraftEditorView = editorView ?? null;
+		this.commentDraftEditorView = surface?.editorView ?? editorView ?? null;
 		this.commentDraftEditorView?.dispatch({
 			effects: setCommentDraftAnchor.of({ id: draft.id, filePath, from, to }),
 		});
@@ -1218,7 +1321,7 @@ export default class RelayCommentsPlugin
 
 	startCommentDraftFromEditor(
 		editor: Editor,
-		info?: MarkdownView | MarkdownFileInfo,
+		info?: { file?: TFile | null },
 	): void {
 		const fromPos = editor.getCursor("from");
 		const toPos = editor.getCursor("to");
@@ -1242,10 +1345,12 @@ export default class RelayCommentsPlugin
 	async commitCommentDraft(comment: string): Promise<void> {
 		if (!this.commentDraft) return;
 		const draft = this.commentDraft;
-		const view = this.getMarkdownViewByPath(draft.filePath);
-		const editor = view?.editor;
-		const file = view?.file;
-		if (!editor || !file || file.path !== draft.filePath) {
+		const initiatingEditorView = this.commentDraftEditorView;
+		const surface = initiatingEditorView
+			? this.findReviewEditorSurface(initiatingEditorView) ??
+				this.findReviewEditorSurfaceByPath(draft.filePath)
+			: this.findReviewEditorSurfaceByPath(draft.filePath);
+		if (!surface || surface.file.path !== draft.filePath) {
 			new Notice("Open the commented note before saving this comment.");
 			return;
 		}
@@ -1253,9 +1358,12 @@ export default class RelayCommentsPlugin
 		// Identity lookup may involve the network. Recheck that the same draft
 		// and editor are still active before applying its source edit.
 		if (this.commentDraft !== draft) return;
-		const refreshedView = this.getMarkdownViewByPath(draft.filePath);
-		const refreshedEditor = refreshedView?.editor;
-		if (!refreshedEditor || refreshedView.file?.path !== draft.filePath) {
+		const refreshedSurface = initiatingEditorView
+			? this.findReviewEditorSurface(initiatingEditorView) ??
+				this.findReviewEditorSurfaceByPath(draft.filePath)
+			: this.findReviewEditorSurfaceByPath(draft.filePath);
+		const refreshedEditor = refreshedSurface?.editor;
+		if (!refreshedEditor || refreshedSurface.file.path !== draft.filePath) {
 			new Notice("Open the commented note before saving this comment.");
 			return;
 		}
@@ -1324,9 +1432,10 @@ export default class RelayCommentsPlugin
 		toOffset: number,
 		options: { focusEditor?: boolean; select?: boolean } = {},
 	): void {
-		const view = this.getCurrentMarkdownView();
-		const editor = view?.editor;
+		const surface = this.getCurrentReviewEditorSurface();
+		const editor = surface?.editor;
 		if (!editor) return;
+		this.revealReviewEditorSurface(surface);
 
 		const from = editor.offsetToPos(fromOffset);
 		const to = editor.offsetToPos(toOffset);
@@ -1345,8 +1454,7 @@ export default class RelayCommentsPlugin
 		fromOffset: number,
 		toOffset: number,
 	): { top: number; bottom: number; left: number; right: number } | null {
-		const view = this.getCurrentMarkdownView();
-		const editor = view?.editor;
+		const editor = this.getCurrentReviewEditorSurface()?.editor;
 		const cm = editor ? this.getCodeMirrorEditor(editor) : null;
 		if (!cm) return null;
 
@@ -1586,8 +1694,7 @@ export default class RelayCommentsPlugin
 	}
 
 	applyMarkActionFromSidebar(mark: CriticMark, action: CriticAction): void {
-		const view = this.getCurrentMarkdownView();
-		const editor = view?.editor;
+		const editor = this.getCurrentReviewEditorSurface()?.editor;
 		if (!editor) return;
 		replaceMark(editor, mark, action);
 		this.refreshReviewSidebars();
@@ -1598,8 +1705,7 @@ export default class RelayCommentsPlugin
 		toOffset: number,
 		replacement: string,
 	): void {
-		const view = this.getCurrentMarkdownView();
-		const editor = view?.editor;
+		const editor = this.getCurrentReviewEditorSurface()?.editor;
 		if (!editor) return;
 		editor.replaceRange(
 			replacement,
@@ -1614,14 +1720,18 @@ export default class RelayCommentsPlugin
 		mark: CriticMark | NativeHighlight,
 		reply: string,
 	): Promise<boolean> {
-		const view = this.getCurrentMarkdownView();
-		const editor = view?.editor;
-		const path = view?.file?.path;
+		const surface = this.getCurrentReviewEditorSurface();
+		const editor = surface?.editor;
+		const path = surface?.file.path;
 		if (!editor || !path) return false;
+		const editorView = surface.editorView;
 		const identity = await this.getCurrentReviewerIdentityAsync(path);
-		const refreshedView = this.getCurrentMarkdownView();
-		const refreshedEditor = refreshedView?.editor;
-		if (!refreshedEditor || refreshedView.file?.path !== path) return false;
+		const refreshedSurface =
+			this.findReviewEditorSurface(editorView) ??
+			this.findReviewEditorSurfaceByPath(path);
+		const refreshedEditor = refreshedSurface?.editor;
+		if (!refreshedEditor || refreshedSurface.file.path !== path) return false;
+		this.rememberReviewEditorSurface(refreshedSurface);
 		const cm = this.getCodeMirrorEditor(refreshedEditor);
 		const scrollTop = cm?.scrollDOM?.scrollTop;
 		refreshedEditor.replaceRange(
@@ -1643,8 +1753,7 @@ export default class RelayCommentsPlugin
 
 	updateCommentTextFromSidebar(mark: CriticMark, text: string): boolean {
 		if (mark.type !== "comment") return false;
-		const view = this.getCurrentMarkdownView();
-		const editor = view?.editor;
+		const editor = this.getCurrentReviewEditorSurface()?.editor;
 		if (!editor) return false;
 		const range = mark.ranges.commentText ?? [mark.contentFrom, mark.contentTo];
 		editor.replaceRange(
@@ -1803,6 +1912,19 @@ export default class RelayCommentsPlugin
 				const view = this.app.workspace.getActiveViewOfType(ItemView);
 				const target = getAddCommentTarget(view?.getViewType());
 				if (target === "canvas") {
+					const embedded = this.findFocusedCanvasEmbedSurface(
+						view as unknown as CanvasViewLike,
+					);
+					if (embedded) {
+						if (!checking) {
+							this.rememberReviewEditorSurface(embedded);
+							this.startCommentDraftFromEditor(
+								embedded.editor,
+								{ file: embedded.file },
+							);
+						}
+						return true;
+					}
 					if (!checking && view) this.canvasPins?.beginPlacement(view);
 					return true;
 				}
@@ -1942,6 +2064,12 @@ export default class RelayCommentsPlugin
 
 	private captureActiveContentLeaf(leaf: WorkspaceLeaf | null): void {
 		if (!leaf || leaf.view instanceof ReviewSidebarView) return;
+		if (this.lastReviewEditorView) {
+			const surface = this.findReviewEditorSurface(this.lastReviewEditorView);
+			if (surface && surface.leaf !== leaf) {
+				this.lastReviewEditorView = null;
+			}
+		}
 		this.lastContentLeaf = leaf;
 		this.observeExternalComments(leaf);
 	}
@@ -2042,6 +2170,151 @@ export default class RelayCommentsPlugin
 		}
 	}
 
+	private canvasLeaves(): WorkspaceLeaf[] {
+		return this.app.workspace.getLeavesOfType("canvas");
+	}
+
+	private findFocusedCanvasEmbedSurface(
+		view?: CanvasViewLike | null,
+	): CanvasEmbedEditorSurface | null {
+		return findFocusedCanvasEmbedEditorSurface(this.canvasLeaves(), view);
+	}
+
+	private findReviewEditorSurface(
+		editorView: CodeMirrorEditorView,
+	): ReviewEditorSurface | null {
+		let markdown: MarkdownEditorSurface | null = null;
+		this.app.workspace.iterateAllLeaves((leaf) => {
+			if (markdown || !(leaf.view instanceof MarkdownView) || !leaf.view.file) {
+				return;
+			}
+			if (this.getCodeMirrorEditor(leaf.view.editor) !== editorView) return;
+			markdown = {
+				kind: "markdown",
+				file: leaf.view.file,
+				editor: leaf.view.editor,
+				editorView,
+				leaf,
+			};
+		});
+		return (
+			markdown ??
+			findCanvasEmbedEditorSurface(this.canvasLeaves(), editorView)
+		);
+	}
+
+	private findReviewEditorSurfaceByPath(
+		path: string,
+	): ReviewEditorSurface | null {
+		if (this.lastReviewEditorView) {
+			const remembered = this.findReviewEditorSurface(this.lastReviewEditorView);
+			if (remembered?.file.path === path) return remembered;
+		}
+
+		const active = this.app.workspace.getActiveViewOfType(MarkdownView);
+		if (active?.file?.path === path) {
+			const editorView = this.getCodeMirrorEditor(
+				active.editor,
+			) as CodeMirrorEditorView | null;
+			if (editorView) {
+				return {
+					kind: "markdown",
+					file: active.file,
+					editor: active.editor,
+					editorView,
+					leaf: active.leaf,
+				};
+			}
+		}
+
+		const markdown = this.getMarkdownViewByPath(path);
+		if (markdown?.file) {
+			const editorView = this.getCodeMirrorEditor(
+				markdown.editor,
+			) as CodeMirrorEditorView | null;
+			if (editorView) {
+				return {
+					kind: "markdown",
+					file: markdown.file,
+					editor: markdown.editor,
+					editorView,
+					leaf: markdown.leaf,
+				};
+			}
+		}
+
+		return (
+			listCanvasEmbedEditorSurfaces(this.canvasLeaves()).find(
+				(surface) => surface.file.path === path,
+			) ?? null
+		);
+	}
+
+	private rememberReviewEditor(editorView: CodeMirrorEditorView): void {
+		const surface = this.findReviewEditorSurface(editorView);
+		if (surface) this.rememberReviewEditorSurface(surface);
+	}
+
+	private rememberReviewEditorSurface(surface: ReviewEditorSurface): void {
+		this.lastReviewEditorView = surface.editorView;
+		this.lastMarkdownPath = surface.file.path;
+		this.lastContentLeaf = surface.leaf;
+	}
+
+	private getCurrentReviewEditorSurface(): ReviewEditorSurface | null {
+		const activeMarkdown = this.app.workspace.getActiveViewOfType(MarkdownView);
+		if (activeMarkdown?.file) {
+			const editorView = this.getCodeMirrorEditor(
+				activeMarkdown.editor,
+			) as CodeMirrorEditorView | null;
+			if (editorView) {
+				const surface: MarkdownEditorSurface = {
+					kind: "markdown",
+					file: activeMarkdown.file,
+					editor: activeMarkdown.editor,
+					editorView,
+					leaf: activeMarkdown.leaf,
+				};
+				this.rememberReviewEditorSurface(surface);
+				return surface;
+			}
+		}
+
+		const focusedEmbed = this.findFocusedCanvasEmbedSurface(
+			this.lastContentLeaf?.view as unknown as CanvasViewLike,
+		);
+		if (focusedEmbed) {
+			this.rememberReviewEditorSurface(focusedEmbed);
+			return focusedEmbed;
+		}
+
+		if (this.lastReviewEditorView) {
+			const remembered = this.findReviewEditorSurface(this.lastReviewEditorView);
+			if (remembered && remembered.leaf === this.lastContentLeaf) {
+				return remembered;
+			}
+		}
+
+		if (
+			this.lastMarkdownPath &&
+			(!this.lastContentLeaf || this.lastContentLeaf.view instanceof MarkdownView)
+		) {
+			return this.findReviewEditorSurfaceByPath(this.lastMarkdownPath);
+		}
+		return null;
+	}
+
+	private revealReviewEditorSurface(surface: ReviewEditorSurface): void {
+		if (surface.kind !== "canvas-embed") return;
+		try {
+			surface.canvas.selectOnly?.(surface.node);
+			surface.canvas.zoomToSelection?.();
+		} catch {
+			// Canvas internals are unofficial. CM6 scrolling below still works
+			// when Obsidian changes or omits these convenience methods.
+		}
+	}
+
 	private getCurrentMarkdownView(): MarkdownView | null {
 		const active = this.app.workspace.getActiveViewOfType(MarkdownView);
 		if (active?.file) {
@@ -2088,12 +2361,20 @@ export default class RelayCommentsPlugin
 	}
 
 	private refreshOpenEditorUi(): void {
+		const refreshed = new Set<CodeMirrorAdapter>();
+		const refresh = (editor: Editor) => {
+			const cm = this.getCodeMirrorEditor(editor);
+			if (!cm || refreshed.has(cm)) return;
+			refreshed.add(cm);
+			cm.dispatch({ effects: refreshReviewEditorUi.of(null) });
+		};
 		this.app.workspace.iterateAllLeaves((leaf) => {
 			if (!(leaf.view instanceof MarkdownView)) return;
-			this.getCodeMirrorEditor(leaf.view.editor)?.dispatch({
-				effects: refreshReviewEditorUi.of(null),
-			});
+			refresh(leaf.view.editor);
 		});
+		for (const surface of listCanvasEmbedEditorSurfaces(this.canvasLeaves())) {
+			refresh(surface.editor);
+		}
 	}
 }
 

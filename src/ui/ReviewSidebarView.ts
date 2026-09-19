@@ -329,14 +329,15 @@ export class ReviewSidebarView extends ItemView {
 		root.empty();
 		root.addClass("critic-sidebar");
 
-		const externalState = this.plugin.getActiveExternalCommentState();
-		if (externalState) {
-			this.renderHeader(root, externalState.title);
-			this.renderExternalComments(root, externalState);
-			return;
-		}
-
 		const state = this.plugin.getActiveReviewState();
+		if (!state) {
+			const externalState = this.plugin.getActiveExternalCommentState();
+			if (externalState) {
+				this.renderHeader(root, externalState.title);
+				this.renderExternalComments(root, externalState);
+				return;
+			}
+		}
 		this.renderHeader(root, state?.file.basename ?? "Relay Comments");
 		if (!state) {
 			this.renderEmptyState(root, "Open a Markdown note to review comments and suggestions.");

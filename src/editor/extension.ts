@@ -49,16 +49,26 @@ export const refreshReviewEditorUi = StateEffect.define<null>();
 export interface ReviewEditorController {
 	getDisplayMode(path?: string | null): DisplayMode;
 	shouldShowInlineActions(): boolean;
-	activateCommentThread(path: string | null, from: number, to: number): void;
+	resolveEditorPath(
+		editorView: EditorView,
+		path: string | null,
+	): string | null;
+	activateCommentThread(
+		path: string | null,
+		from: number,
+		to: number,
+		options?: { editorView?: EditorView },
+	): void;
 	queueThreadPreview(
 		path: string | null,
 		from: number,
 		to: number,
 		anchor: HTMLElement,
+		editorView?: EditorView,
 	): void;
 	scheduleThreadPreviewDismiss(): void;
 	hideThreadPreview(): void;
-	notifyEditorSelectionChanged(): void;
+	notifyEditorSelectionChanged(editorView?: EditorView): void;
 	startCommentDraft(
 		path: string | null,
 		from: number,
@@ -196,6 +206,12 @@ export function createReviewEditorExtension(
 			private livePreviewPollId: number | null = null;
 			private lastDomSignal: boolean | null = null;
 			private destroyed = false;
+			private currentPath(): string | null {
+				return controller.resolveEditorPath(
+					this.view,
+					readPath(this.view.state),
+				);
+			}
 			private handleClick = (event: MouseEvent): void => {
 				const target = event.target as HTMLElement | null;
 				const anchor = target?.closest<HTMLElement>(
@@ -206,9 +222,10 @@ export function createReviewEditorExtension(
 				const to = Number(anchor.dataset.criticTo);
 				if (!Number.isFinite(from) || !Number.isFinite(to)) return;
 				controller.activateCommentThread(
-					readPath(this.view.state),
+					this.currentPath(),
 					from,
 					to,
+					{ editorView: this.view },
 				);
 			};
 			private handlePointerOver = (event: PointerEvent): void => {
@@ -221,7 +238,13 @@ export function createReviewEditorExtension(
 				const to = Number(anchor.dataset.criticTo);
 				if (!Number.isFinite(from) || !Number.isFinite(to)) return;
 				if (event.buttons !== 0) return;
-				controller.queueThreadPreview(readPath(this.view.state), from, to, anchor);
+				controller.queueThreadPreview(
+					this.currentPath(),
+					from,
+					to,
+					anchor,
+					this.view,
+				);
 			};
 			private handlePointerOut = (event: PointerEvent): void => {
 				const target = event.target as HTMLElement | null;
@@ -281,7 +304,7 @@ export function createReviewEditorExtension(
 					);
 				}
 				if (update.selectionSet) {
-					controller.notifyEditorSelectionChanged();
+					controller.notifyEditorSelectionChanged(this.view);
 				}
 				if (
 					refreshUi ||
@@ -382,7 +405,7 @@ export function createReviewEditorExtension(
 					const selection = this.view.state.selection.main;
 					if (selection.empty) return;
 					controller.startCommentDraft(
-						readPath(this.view.state),
+						this.currentPath(),
 						selection.from,
 						selection.to,
 						this.view.state.sliceDoc(selection.from, selection.to),
