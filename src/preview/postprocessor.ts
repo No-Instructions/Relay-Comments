@@ -9,11 +9,14 @@ import {
 	commentFootnoteOrdinals,
 	isCommentOnlySection,
 	renderedElementSourceRange,
+	sectionSourceRange,
 } from "./sections";
 import { highlightColorClass } from "../markdown/highlights";
+import { previewCommentComponents } from "./comment-components";
 
 export interface PreviewDisplayController {
 	getDisplayMode(path?: string | null): DisplayMode;
+	notifyRenderedCommentsChanged?(): void;
 }
 
 const SKIP_TAGS = new Set([
@@ -43,6 +46,7 @@ const SOURCE_RENDER_SELECTOR = SOURCE_RENDER_TAGS.join(", ");
 const EMBEDDED_SOURCE_RENDER_SELECTOR = SOURCE_RENDER_TAGS.map(
 	(tag) => `.cm-embed-block ${tag}`,
 ).join(", ");
+let previewTargetSequence = 0;
 
 /** Clean multiline CriticMarkup out of Markdown blocks that Obsidian embeds
  * directly in Live Preview (notably callouts). Those embedded renderers do
@@ -85,8 +89,11 @@ export function createReviewPostProcessor(
 ) {
 	return (el: HTMLElement, ctx: MarkdownPostProcessorContext): void => {
 		const mode = controller.getDisplayMode(ctx.sourcePath);
-		if (hideCommentFootnotes(el, ctx)) return;
-		if (hideCommentOnlySection(el, ctx)) return;
+		if (hideCommentFootnotes(el, ctx) || hideCommentOnlySection(el, ctx)) {
+			appendSectionCommentComponents(el, ctx);
+			controller.notifyRenderedCommentsChanged?.();
+			return;
+		}
 		rewriteSourceBackedElements(el, ctx, mode);
 
 		const walker = el.ownerDocument.createTreeWalker(
@@ -112,6 +119,8 @@ export function createReviewPostProcessor(
 		for (const node of nodes) {
 			replaceTextNode(node, mode);
 		}
+		appendSectionCommentComponents(el, ctx);
+		controller.notifyRenderedCommentsChanged?.();
 	};
 }
 
@@ -176,7 +185,11 @@ function rewriteSourceBackedElements(
 		}
 		const sourceText = selectSourceTextForElement(candidate, source);
 		if (!sourceText) continue;
-		rewriteElementFromSource(candidate, normalizeSectionText(candidate, sourceText), mode);
+		rewriteElementFromSource(
+			candidate,
+			normalizeSectionText(candidate, sourceText),
+			mode,
+		);
 		rewritten.add(candidate);
 	}
 }
@@ -370,7 +383,9 @@ function shouldSkip(el: HTMLElement): boolean {
 	while (current) {
 		if (
 			SKIP_TAGS.has(current.tagName) ||
-			current.matches(".critic-preview-filtered-footnotes")
+			current.matches(
+				".critic-preview-filtered-footnotes, .critic-preview-comment-component",
+			)
 		) {
 			return true;
 		}
@@ -389,6 +404,40 @@ function replaceTextNode(node: Text, mode: DisplayMode): void {
 		appendSegment(fragment, segment);
 	}
 	node.replaceWith(fragment);
+}
+
+function appendSectionCommentComponents(
+	host: HTMLElement,
+	ctx: MarkdownPostProcessorContext,
+): void {
+	const section = ctx.getSectionInfo(host);
+	const range = section ? sectionSourceRange(section) : null;
+	if (!section || !range) return;
+	const comments = previewCommentComponents(section.text, range);
+	if (comments.length === 0) return;
+	const targetId =
+		host.id || `critic-preview-comment-target-${++previewTargetSequence}`;
+	if (!host.id) host.id = targetId;
+	for (const comment of comments) {
+		const component = host.createSpan({
+			cls: "critic-preview-comment-component",
+			attr: {
+				"data-criticmarkup-comment": "v1",
+				"data-criticmarkup-status": comment.status,
+				"data-criticmarkup-thread": `${ctx.sourcePath}:${comment.thread}`,
+				"data-criticmarkup-key": `${ctx.sourcePath}:${comment.key}`,
+				"data-criticmarkup-target": targetId,
+				"data-criticmarkup-label": ctx.sourcePath,
+				...(comment.author
+					? { "data-criticmarkup-author": comment.author }
+					: {}),
+			},
+		});
+		component.createSpan({
+			attr: { "data-criticmarkup-body": "" },
+			text: comment.body,
+		});
+	}
 }
 
 function appendSegment(parent: DocumentFragment, segment: RenderSegment): void {

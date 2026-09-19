@@ -72,34 +72,52 @@ export function collectExternalCommentComponents(
 	const components: ExternalCommentComponent[] = [];
 	const keyOccurrences = new Map<string, number>();
 
-	for (const element of Array.from(
-		root.querySelectorAll<HTMLElement>(COMMENT_COMPONENT_SELECTOR),
-	)) {
-		const bodyElement = commentBody(element);
-		if (!bodyElement) continue;
+	for (const componentRoot of commentComponentRoots(root)) {
+		for (const element of Array.from(
+			componentRoot.querySelectorAll<HTMLElement>(COMMENT_COMPONENT_SELECTOR),
+		)) {
+			const bodyElement = commentBody(element);
+			if (!bodyElement) continue;
 
-		const key = attribute(element, "data-criticmarkup-key");
-		const keyBase = key ? `key:${key}` : `comment:${components.length}`;
-		const occurrence = keyOccurrences.get(keyBase) ?? 0;
-		keyOccurrences.set(keyBase, occurrence + 1);
-		const targetId = attribute(element, "data-criticmarkup-target");
+			const key = attribute(element, "data-criticmarkup-key");
+			const keyBase = key ? `key:${key}` : `comment:${components.length}`;
+			const occurrence = keyOccurrences.get(keyBase) ?? 0;
+			keyOccurrences.set(keyBase, occurrence + 1);
+			const targetId = attribute(element, "data-criticmarkup-target");
 
-		components.push({
-			element,
-			bodyElement,
-			targetElement:
-				(targetId ? elementWithId(root, targetId) : null) ?? element,
-			author: attribute(element, "data-criticmarkup-author"),
-			status: statusFor(element),
-			thread: attribute(element, "data-criticmarkup-thread"),
-			key,
-			label: attribute(element, "data-criticmarkup-label"),
-			bodyText: normalizedBodyText(bodyElement),
-			snapshotKey: occurrence === 0 ? keyBase : `${keyBase}:${occurrence}`,
-		});
+			components.push({
+				element,
+				bodyElement,
+				targetElement:
+					(targetId ? elementWithId(componentRoot, targetId) : null) ??
+					element,
+				author: attribute(element, "data-criticmarkup-author"),
+				status: statusFor(element),
+				thread: attribute(element, "data-criticmarkup-thread"),
+				key,
+				label: attribute(element, "data-criticmarkup-label"),
+				bodyText: normalizedBodyText(bodyElement),
+				snapshotKey: occurrence === 0 ? keyBase : `${keyBase}:${occurrence}`,
+			});
+		}
 	}
 
 	return components;
+}
+
+function commentComponentRoots(root: HTMLElement): HTMLElement[] {
+	const roots = [root];
+	for (const frame of Array.from(
+		root.querySelectorAll<HTMLIFrameElement>("iframe"),
+	)) {
+		try {
+			const body = frame.contentDocument?.body;
+			if (body) roots.push(...commentComponentRoots(body));
+		} catch {
+			// Cross-origin frames are not part of the owning workspace view.
+		}
+	}
+	return roots;
 }
 
 export function groupExternalCommentComponents(

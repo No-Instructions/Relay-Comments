@@ -112,7 +112,7 @@ export function commentFootnoteOrdinals(text: string): Set<number> {
 	return ordinals;
 }
 
-function sectionSourceRange(
+export function sectionSourceRange(
 	section: SourceSection,
 ): { from: number; to: number } | null {
 	const lines = lineRanges(section.text);

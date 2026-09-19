@@ -5,11 +5,13 @@ import {
 } from "../../../src/dom/comment-components";
 
 class FakeElement {
+	tagName = "DIV";
 	parent: FakeElement | null = null;
 	children: FakeElement[] = [];
 	textContent = "";
 	isConnected = true;
 	scrollOptions: ScrollIntoViewOptions | null = null;
+	contentDocument?: { body: FakeElement };
 
 	constructor(
 		private attributes: Record<string, string> = {},
@@ -57,6 +59,7 @@ class FakeElement {
 	}
 
 	private matches(selector: string): boolean {
+		if (selector === "iframe") return this.tagName === "IFRAME";
 		if (selector === '[data-criticmarkup-comment="v1"]') {
 			return this.attributes["data-criticmarkup-comment"] === "v1";
 		}
@@ -163,6 +166,24 @@ describe("rendered CriticMarkup comment components", () => {
 		});
 		expect(groups[0].comments).toHaveLength(2);
 		expect(groups[1].comments).toHaveLength(1);
+	});
+
+	test("collects components rendered inside same-origin Canvas frames", () => {
+		const body = element().append(
+			element({ "data-criticmarkup-comment": "v1" }).append(
+				element({ "data-criticmarkup-body": "" }, "Embedded comment"),
+			),
+		);
+		const frame = element();
+		frame.tagName = "IFRAME";
+		frame.contentDocument = { body };
+		const root = element().append(frame);
+
+		expect(
+			collectExternalCommentComponents(asHtml(root)).map(
+				(comment) => comment.bodyText,
+			),
+		).toEqual(["Embedded comment"]);
 	});
 
 	test("scrolls to the declared target and falls back only while connected", () => {
