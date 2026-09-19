@@ -119,7 +119,7 @@ export class ReviewSidebarView extends ItemView {
 	private draftText = "";
 	private pendingFocus: PendingFocus | null = null;
 	private lastDraftKey: string | null = null;
-	private lastScrolledItemId: string | null = null;
+
 	private removeOutsideClickListener: (() => void) | null = null;
 	private composerSubmits = new WeakMap<HTMLTextAreaElement, () => void>();
 	private composerHintId = 0;
@@ -325,23 +325,32 @@ export class ReviewSidebarView extends ItemView {
 
 	private renderContent(): void {
 		const root = this.contentEl;
+		// Emptying the scroller collapses it and zeroes scrollTop; put it back
+		// once the new content exists so a rebuild doesn't move the viewport.
+		const scrollTop = root.scrollTop;
 		this.resetCommentRenderScope();
 		root.empty();
 		root.addClass("critic-sidebar");
+		const selectedId = this.renderBody(root);
+		root.scrollTop = scrollTop;
+		this.scrollSelectedIntoView(root, selectedId);
+	}
 
+	/** Returns the id of the visibly selected card, if any. */
+	private renderBody(root: HTMLElement): string | null {
 		const state = this.plugin.getActiveReviewState();
 		if (!state) {
 			const externalState = this.plugin.getActiveExternalCommentState();
 			if (externalState) {
 				this.renderHeader(root, externalState.title);
 				this.renderExternalComments(root, externalState);
-				return;
+				return null;
 			}
 		}
 		this.renderHeader(root, state?.file.basename ?? "Relay Comments");
 		if (!state) {
 			this.renderEmptyState(root, "Open a Markdown note to review comments and suggestions.");
-			return;
+			return null;
 		}
 
 		const validMarks = state.marks
@@ -372,7 +381,7 @@ export class ReviewSidebarView extends ItemView {
 					"No comments or suggestions in this note yet. Select text and choose “Add comment” to start a discussion.",
 				);
 			}
-			return;
+			return null;
 		}
 
 		const list = root.createDiv({ cls: "critic-sidebar-list" });
@@ -392,14 +401,16 @@ export class ReviewSidebarView extends ItemView {
 				isSelected(item, state.activeMarkId),
 				state.file.path,
 			);
-			if (selected && !visiblySelectedId) {
+			// The card the user picked wins over the one the editor cursor
+			// happens to sit in; both render as selected.
+			if (selected && (!visiblySelectedId || item.id === this.selectedItemId)) {
 				visiblySelectedId = item.id;
 			}
 		}
 		if (draft && !draftRendered) {
 			this.renderDraft(list, draft);
 		}
-		this.scrollSelectedIntoView(list, visiblySelectedId);
+		return visiblySelectedId;
 	}
 
 	private renderExternalComments(
@@ -576,15 +587,14 @@ export class ReviewSidebarView extends ItemView {
 	}
 
 	private scrollSelectedIntoView(
-		list: HTMLElement,
+		root: HTMLElement,
 		selectedId: string | null,
 	): void {
-		if (selectedId && selectedId !== this.lastScrolledItemId) {
-			list
-				.querySelector(`[data-critic-item-id="${CSS.escape(selectedId)}"]`)
-				?.scrollIntoView({ block: "nearest" });
-		}
-		this.lastScrolledItemId = selectedId;
+		if (!selectedId) return;
+
+		root
+			.querySelector(`[data-critic-item-id="${CSS.escape(selectedId)}"]`)
+			?.scrollIntoView({ block: "nearest" });
 	}
 
 	private installOutsideClickListener(): void {
