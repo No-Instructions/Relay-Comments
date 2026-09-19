@@ -29,15 +29,6 @@ the whole note at once with `Finalize for publish`.
 
 ![Hovering a suggested replacement shows Accept and Reject; accepting rewrites the text in place](docs/suggested-edits.gif)
 
-## Highlight in color
-
-Use Obsidian's highlight colors normally: `==🔴red==`, `==🟠orange==`,
-`==🟢green==`, `==🔵blue==`, or `==🟣purple==`. Relay Comments lists native
-highlights in the sidebar and keeps the color emoji out of the displayed
-text. Add a comment to a highlighted passage and the highlight stays native;
-the portable CriticMarkup thread is stored immediately after it. Resolving
-the thread removes only its comments, not the highlight.
-
 ## Review in the sidebar
 
 Every comment, suggestion, and highlight in the note, in document order,
@@ -107,11 +98,8 @@ Notes stay portable because review state is plain text in the
 | Highlight | `{==marked text==}` |
 | Comment | `{>>comment text<<}` |
 
-Obsidian's native `==marked text==` is separate from the CriticMarkup
-highlight above. Both forms accept a leading color emoji. For example,
-`==🔵native highlight==` stays native Markdown, while `{==🔵review
-highlight==}` remains CriticMarkup. Relay Comments preserves either source
-form and hides the color marker in rendered text.
+Comments can attach to Obsidian's native `==highlight==` syntax without
+converting the highlight to CriticMarkup.
 
 Authored comments can store a provider identity alongside a portable display
 name:
@@ -124,7 +112,7 @@ A comment attached to an existing native highlight uses the same comment
 markup without converting the highlight:
 
 ```markdown
-==🔵the passage=={{authorId="service-user-id" author="Bongo Cat">>Can we ground this sooner?<<}}
+==the passage=={{authorId="service-user-id" author="Bongo Cat">>Can we ground this sooner?<<}}
 ```
 
 `authorId` is the opaque ID issued by the selected identity provider. `author`
