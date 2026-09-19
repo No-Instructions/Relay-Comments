@@ -392,6 +392,15 @@
 	box-shadow: 0 3px 10px rgba(0, 0, 0, 0.14);
 }
 
+/* The card the user picked (clicked, or reached from its anchor in the note)
+   takes the accent on its spine and border. A card that is merely under the
+   editor cursor keeps the softer selected look. */
+.critic-card.critic-card-current,
+.critic-card.critic-card-current:hover {
+	--critic-rail: var(--interactive-accent);
+	border-color: var(--interactive-accent);
+}
+
 /* ---------- Card header ---------- */
 
 .critic-comment-header {

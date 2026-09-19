@@ -708,9 +708,11 @@ export class ReviewSidebarView extends ItemView {
 		const isThreadSelected =
 			selected || this.selectedItemId === item.id || this.replyDraftItemId === item.id;
 		const card = parent.createDiv({
-			cls: isThreadSelected
-				? "critic-card critic-card-selected"
-				: "critic-card",
+			cls: [
+				"critic-card",
+				...(isThreadSelected ? ["critic-card-selected"] : []),
+				...(this.selectedItemId === item.id ? ["critic-card-current"] : []),
+			],
 			attr: {
 				tabindex: "0",
 				role: "button",
