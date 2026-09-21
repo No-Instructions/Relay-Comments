@@ -37,7 +37,11 @@ import {
 	type ReviewAnchor,
 } from "../critic/review-runs";
 import type RelayCommentsPlugin from "../main";
-import type { CommentDraft, ReviewerIdentity } from "../main";
+import type {
+	ActiveReviewState,
+	CommentDraft,
+	ReviewerIdentity,
+} from "../main";
 import {
 	groupExternalCommentComponents,
 	type ExternalCommentComponent,
@@ -48,6 +52,7 @@ import {
 	reconcileDraftTarget,
 	type DraftTarget,
 } from "./draft-reconciliation";
+import { sidebarScrollTopForRender } from "./sidebar-scroll";
 import { commentDraftKey } from "../editor/comment-draft-anchor";
 import {
 	highlightColorClass,
@@ -119,6 +124,7 @@ export class ReviewSidebarView extends ItemView {
 	private draftText = "";
 	private pendingFocus: PendingFocus | null = null;
 	private lastDraftKey: string | null = null;
+	private lastRenderedSourceKey: string | null = null;
 
 	private removeOutsideClickListener: (() => void) | null = null;
 	private composerSubmits = new WeakMap<HTMLTextAreaElement, () => void>();
@@ -325,22 +331,38 @@ export class ReviewSidebarView extends ItemView {
 
 	private renderContent(): void {
 		const root = this.contentEl;
+		const state = this.plugin.getActiveReviewState();
+		const externalState = state
+			? null
+			: this.plugin.getActiveExternalCommentState();
+		const sourceKey = state
+			? `review:${state.file.path}`
+			: externalState
+				? `external:${externalState.filePath ?? externalState.title}`
+				: "empty";
 		// Emptying the scroller collapses it and zeroes scrollTop; put it back
 		// once the new content exists so a rebuild doesn't move the viewport.
-		const scrollTop = root.scrollTop;
+		const scrollTop = sidebarScrollTopForRender(
+			this.lastRenderedSourceKey,
+			sourceKey,
+			root.scrollTop,
+		);
 		this.resetCommentRenderScope();
 		root.empty();
 		root.addClass("critic-sidebar");
-		const selectedId = this.renderBody(root);
+		const selectedId = this.renderBody(root, state, externalState);
+		this.lastRenderedSourceKey = sourceKey;
 		root.scrollTop = scrollTop;
 		this.scrollSelectedIntoView(root, selectedId);
 	}
 
 	/** Returns the id of the visibly selected card, if any. */
-	private renderBody(root: HTMLElement): string | null {
-		const state = this.plugin.getActiveReviewState();
+	private renderBody(
+		root: HTMLElement,
+		state: ActiveReviewState | null,
+		externalState: ExternalCommentState | null,
+	): string | null {
 		if (!state) {
-			const externalState = this.plugin.getActiveExternalCommentState();
 			if (externalState) {
 				this.renderHeader(root, externalState.title);
 				this.renderExternalComments(root, externalState);
