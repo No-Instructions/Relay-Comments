@@ -3,74 +3,77 @@ import type { Editor, TFile, WorkspaceLeaf } from "obsidian";
 
 type EditorWithCodeMirror = Editor & { cm?: EditorView };
 
-interface CanvasEmbedChildLike {
+interface CanvasEditorChildLike {
 	file?: TFile | null;
 	editor?: EditorWithCodeMirror;
 }
 
-export interface CanvasEmbedNodeLike {
-	child?: CanvasEmbedChildLike;
+export interface CanvasEditorNodeLike {
+	child?: CanvasEditorChildLike;
 	nodeEl?: HTMLElement;
 }
 
 export interface CanvasLike {
-	nodes?: Map<string, CanvasEmbedNodeLike>;
-	selectOnly?: (node: CanvasEmbedNodeLike) => void;
+	nodes?: Map<string, CanvasEditorNodeLike>;
+	selectOnly?: (node: CanvasEditorNodeLike) => void;
 	zoomToSelection?: () => void;
 }
 
 export interface CanvasViewLike {
 	canvas?: CanvasLike;
+	file?: TFile | null;
 }
 
-export interface CanvasEmbedEditorSurface {
-	kind: "canvas-embed";
+export interface CanvasEditorSurface {
+	kind: "canvas-embed" | "canvas-text";
 	file: TFile;
 	editor: Editor;
 	editorView: EditorView;
 	leaf: WorkspaceLeaf;
 	canvas: CanvasLike;
-	node: CanvasEmbedNodeLike;
+	node: CanvasEditorNodeLike;
 }
 
 /**
- * Find the whole-note Canvas file embed that owns an exact CM6 editor.
+ * Find the Canvas node that owns an exact CM6 editor.
  *
- * Canvas file-node editors are not workspace MarkdownView leaves, and their
- * editorInfoField can be empty. The node's child is the authoritative owner.
- * Exact editor identity also keeps fragment editors (tables, hover previews,
- * footnotes) out: none of those is a Canvas node's own child editor.
+ * Canvas file embeds and native text cards are not workspace MarkdownView
+ * leaves, and their editorInfoField can be empty. The node's child is the
+ * authoritative owner. Exact editor identity also keeps fragment editors
+ * (tables, hover previews, footnotes) out: none of those is a Canvas node's
+ * own child editor.
  */
-export function findCanvasEmbedEditorSurface(
+export function findCanvasEditorSurface(
 	leaves: readonly WorkspaceLeaf[],
 	editorView: EditorView,
-): CanvasEmbedEditorSurface | null {
+): CanvasEditorSurface | null {
 	return (
-		listCanvasEmbedEditorSurfaces(leaves).find(
+		listCanvasEditorSurfaces(leaves).find(
 			(surface) => surface.editorView === editorView,
 		) ?? null
 	);
 }
 
-export function listCanvasEmbedEditorSurfaces(
+export function listCanvasEditorSurfaces(
 	leaves: readonly WorkspaceLeaf[],
-): CanvasEmbedEditorSurface[] {
-	const surfaces: CanvasEmbedEditorSurface[] = [];
+): CanvasEditorSurface[] {
+	const surfaces: CanvasEditorSurface[] = [];
 	for (const leaf of leaves) {
-		const canvas = (leaf.view as unknown as CanvasViewLike).canvas;
+		const view = leaf.view as unknown as CanvasViewLike;
+		const canvas = view.canvas;
 		if (!canvas?.nodes) continue;
 		for (const node of canvas.nodes.values()) {
 			const child = node.child;
-			if (
-				!child?.editor?.cm ||
-				!child.file ||
-				child.file.extension !== "md"
-			) {
-				continue;
-			}
+			if (!child?.editor?.cm) continue;
+			const embeddedFile =
+				child.file?.extension === "md" ? child.file : null;
+			const canvasFile =
+				child.file == null && view.file?.extension === "canvas" ? view.file : null;
+			const file = embeddedFile ?? canvasFile;
+			if (!file) continue;
 			surfaces.push({
-				kind: "canvas-embed",
-				file: child.file,
+				kind: embeddedFile ? "canvas-embed" : "canvas-text",
+				file,
 				editor: child.editor,
 				editorView: child.editor.cm,
 				leaf,
@@ -82,12 +85,12 @@ export function listCanvasEmbedEditorSurfaces(
 	return surfaces;
 }
 
-export function findFocusedCanvasEmbedEditorSurface(
+export function findFocusedCanvasEditorSurface(
 	leaves: readonly WorkspaceLeaf[],
 	owner?: CanvasViewLike | null,
-): CanvasEmbedEditorSurface | null {
+): CanvasEditorSurface | null {
 	return (
-		listCanvasEmbedEditorSurfaces(leaves).find(
+		listCanvasEditorSurfaces(leaves).find(
 			(surface) =>
 				surface.editorView.hasFocus &&
 				(!owner?.canvas || surface.canvas === owner.canvas),

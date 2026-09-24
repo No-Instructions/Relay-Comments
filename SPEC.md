@@ -285,6 +285,16 @@ no pin hides another; a freestanding pin is tip-anchored, its teardrop
 tip on the clicked canvas point. The thread card opens top-aligned with
 its pin.
 
+When a native Canvas text card or an embedded Markdown note is in edit
+mode with text selected, the editor's three range-comment entry points
+take precedence: the right-click "Add comment" item, the floating
+selection button, and Ctrl/Cmd+Alt+M all open a draft for that range. In
+a native text card, Relay Comments writes ordinary CriticMarkup into the
+node's existing Markdown `text` value; it does not add fields to the
+CriticMarkup or change the `relayComments` pin schema. With no focused
+text editor and selection, the Canvas command retains its click-to-place
+pin behavior.
+
 ### Storage format
 
 Threads live on the canvas node they belong to, in a `relayComments`

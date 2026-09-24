@@ -68,10 +68,10 @@ import {
 } from "./editor/hotkeys";
 import { buildCommentDraftInsertion } from "./editor/comment-draft-anchor";
 import {
-	findCanvasEmbedEditorSurface,
-	findFocusedCanvasEmbedEditorSurface,
-	listCanvasEmbedEditorSurfaces,
-	type CanvasEmbedEditorSurface,
+	findCanvasEditorSurface,
+	findFocusedCanvasEditorSurface,
+	listCanvasEditorSurfaces,
+	type CanvasEditorSurface,
 	type CanvasViewLike,
 } from "./editor/surfaces";
 import { createReviewPostProcessor } from "./preview/postprocessor";
@@ -183,7 +183,7 @@ interface MarkdownEditorSurface {
 	leaf: WorkspaceLeaf;
 }
 
-type ReviewEditorSurface = MarkdownEditorSurface | CanvasEmbedEditorSurface;
+type ReviewEditorSurface = MarkdownEditorSurface | CanvasEditorSurface;
 
 export default class RelayCommentsPlugin
 	extends Plugin
@@ -1912,15 +1912,15 @@ export default class RelayCommentsPlugin
 				const view = this.app.workspace.getActiveViewOfType(ItemView);
 				const target = getAddCommentTarget(view?.getViewType());
 				if (target === "canvas") {
-					const embedded = this.findFocusedCanvasEmbedSurface(
+					const canvasEditor = this.findFocusedCanvasEditorSurface(
 						view as unknown as CanvasViewLike,
 					);
-					if (embedded) {
+					if (canvasEditor) {
 						if (!checking) {
-							this.rememberReviewEditorSurface(embedded);
+							this.rememberReviewEditorSurface(canvasEditor);
 							this.startCommentDraftFromEditor(
-								embedded.editor,
-								{ file: embedded.file },
+								canvasEditor.editor,
+								{ file: canvasEditor.file },
 							);
 						}
 						return true;
@@ -2174,10 +2174,10 @@ export default class RelayCommentsPlugin
 		return this.app.workspace.getLeavesOfType("canvas");
 	}
 
-	private findFocusedCanvasEmbedSurface(
+	private findFocusedCanvasEditorSurface(
 		view?: CanvasViewLike | null,
-	): CanvasEmbedEditorSurface | null {
-		return findFocusedCanvasEmbedEditorSurface(this.canvasLeaves(), view);
+	): CanvasEditorSurface | null {
+		return findFocusedCanvasEditorSurface(this.canvasLeaves(), view);
 	}
 
 	private findReviewEditorSurface(
@@ -2199,7 +2199,7 @@ export default class RelayCommentsPlugin
 		});
 		return (
 			markdown ??
-			findCanvasEmbedEditorSurface(this.canvasLeaves(), editorView)
+			findCanvasEditorSurface(this.canvasLeaves(), editorView)
 		);
 	}
 
@@ -2244,7 +2244,7 @@ export default class RelayCommentsPlugin
 		}
 
 		return (
-			listCanvasEmbedEditorSurfaces(this.canvasLeaves()).find(
+			listCanvasEditorSurfaces(this.canvasLeaves()).find(
 				(surface) => surface.file.path === path,
 			) ?? null
 		);
@@ -2280,12 +2280,12 @@ export default class RelayCommentsPlugin
 			}
 		}
 
-		const focusedEmbed = this.findFocusedCanvasEmbedSurface(
+		const focusedCanvasEditor = this.findFocusedCanvasEditorSurface(
 			this.lastContentLeaf?.view as unknown as CanvasViewLike,
 		);
-		if (focusedEmbed) {
-			this.rememberReviewEditorSurface(focusedEmbed);
-			return focusedEmbed;
+		if (focusedCanvasEditor) {
+			this.rememberReviewEditorSurface(focusedCanvasEditor);
+			return focusedCanvasEditor;
 		}
 
 		if (this.lastReviewEditorView) {
@@ -2305,7 +2305,7 @@ export default class RelayCommentsPlugin
 	}
 
 	private revealReviewEditorSurface(surface: ReviewEditorSurface): void {
-		if (surface.kind !== "canvas-embed") return;
+		if (surface.kind === "markdown") return;
 		try {
 			surface.canvas.selectOnly?.(surface.node);
 			surface.canvas.zoomToSelection?.();
@@ -2372,7 +2372,7 @@ export default class RelayCommentsPlugin
 			if (!(leaf.view instanceof MarkdownView)) return;
 			refresh(leaf.view.editor);
 		});
-		for (const surface of listCanvasEmbedEditorSurfaces(this.canvasLeaves())) {
+		for (const surface of listCanvasEditorSurfaces(this.canvasLeaves())) {
 			refresh(surface.editor);
 		}
 	}
