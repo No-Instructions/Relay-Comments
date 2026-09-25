@@ -28,23 +28,53 @@ export function isCommentOnlySection(section: SourceSection): boolean {
 	);
 }
 
-/** Resolve the source represented by one rendered Markdown element.
- *
- * Obsidian reports the enclosing block's line range for every descendant of
- * complex blocks such as callouts. A list item inside a callout can therefore
- * receive the range for the callout title and every sibling item. Narrow list
- * items to the source line whose words best match their rendered text, then
- * skip the quote/list prefix that Obsidian already supplied structurally.
+export interface RenderedElementOptions {
+	/** Column of a table cell (`td`/`th`) within its row. */
+	cellIndex?: number;
+}
+
+/**
+ * The source slice one rendered element stands for: list items and table cells
+ * narrow to their best-matching line (cells to their column), and every kind
+ * drops the quote, heading, or list prefix Obsidian rendered structurally.
  */
 export function renderedElementSourceRange(
 	section: SourceSection,
 	tagName: string,
 	renderedText: string,
+	options: RenderedElementOptions = {},
 ): SourceRange | null {
 	const sectionRange = sectionSourceRange(section);
 	if (!sectionRange) return null;
-	if (tagName !== "LI") return sectionRange;
+	const isCell = tagName === "TD" || tagName === "TH";
 
+	let line: SourceRange | null;
+	if (tagName === "LI" || isCell) {
+		line = bestMatchingLine(section, renderedText);
+	} else if (section.lineStart === section.lineEnd) {
+		line = sectionRange;
+	} else {
+		return sectionRange;
+	}
+	if (!line) return null;
+
+	const source = section.text.slice(line.from, line.to);
+	const prefixLength = sourcePrefixLength(source, tagName);
+	if (!isCell) return { from: line.from + prefixLength, to: line.to };
+
+	const cell = tableCellRange(source.slice(prefixLength), options.cellIndex ?? 0);
+	if (!cell) return null;
+	return {
+		from: line.from + prefixLength + cell.from,
+		to: line.from + prefixLength + cell.to,
+	};
+}
+
+/** The source line inside a section whose words best match rendered text. */
+function bestMatchingLine(
+	section: SourceSection,
+	renderedText: string,
+): SourceRange | null {
 	const renderedWords = words(renderedText);
 	if (renderedWords.length === 0) return null;
 	const lines = lineRanges(section.text);
@@ -64,11 +94,33 @@ export function renderedElementSourceRange(
 			bestScore = score;
 		}
 	}
-	if (!best) return null;
+	return best;
+}
 
-	const source = section.text.slice(best.from, best.to);
-	const prefixLength = sourcePrefixLength(source, tagName);
-	return { from: best.from + prefixLength, to: best.to };
+/** The trimmed slice of one cell in a table row, splitting on unescaped pipes as Obsidian does. */
+export function tableCellRange(
+	row: string,
+	cellIndex: number,
+): SourceRange | null {
+	if (cellIndex < 0) return null;
+	const spans: SourceRange[] = [];
+	let start = 0;
+	for (let offset = 0; offset < row.length; offset += 1) {
+		if (row[offset] !== "|" || row[offset - 1] === "\\") continue;
+		spans.push({ from: start, to: offset });
+		start = offset + 1;
+	}
+	spans.push({ from: start, to: row.length });
+	// The outer pipes leave empty spans that are not cells.
+	const blank = (span: SourceRange) => row.slice(span.from, span.to).trim() === "";
+	if (spans.length > 1 && blank(spans[0])) spans.shift();
+	if (spans.length > 1 && blank(spans[spans.length - 1])) spans.pop();
+	const cell = spans[cellIndex];
+	if (!cell) return null;
+	let { from, to } = cell;
+	while (from < to && /\s/.test(row[from])) from += 1;
+	while (to > from && /\s/.test(row[to - 1])) to -= 1;
+	return { from, to };
 }
 
 /** Footnotes are moved to a generated footer whose source line points past
@@ -151,8 +203,11 @@ function sourcePrefixLength(source: string, tagName: string): number {
 		rest = rest.slice(quote[0].length);
 	}
 	if (tagName === "LI") {
-		const list = /^[\t ]*(?:[-+*]|\d+[.)])[\t ]+/.exec(rest);
+		const list = /^[\t ]*(?:[-+*]|\d+[.)])[\t ]+(?:\[[ xX]\][\t ]+)?/.exec(rest);
 		if (list) length += list[0].length;
+	} else if (/^H[1-6]$/.test(tagName)) {
+		const heading = /^[\t ]*#{1,6}[\t ]+/.exec(rest);
+		if (heading) length += heading[0].length;
 	}
 	return length;
 }

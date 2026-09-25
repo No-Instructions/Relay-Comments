@@ -1333,7 +1333,7 @@ export default class RelayCommentsPlugin
 			| null;
 		if (cm?.contentDOM && cm.state && !isEditorSelectionTrusted(cm)) {
 			new Notice(
-				"Can't comment on text inside a rendered block. Choose Edit on the block and select the text there.",
+				"Can't comment on text inside a rendered block. Open the block for editing and select the text there.",
 			);
 			return;
 		}

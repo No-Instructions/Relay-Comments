@@ -107,3 +107,115 @@ describe("commentFootnoteOrdinals", () => {
 		expect(commentFootnoteOrdinals(body).size).toBe(0);
 	});
 });
+
+import { tableCellRange } from "src/preview/sections";
+
+describe("tableCellRange", () => {
+	const row = "| relay | {==table cell==}{>>cell comment<<} here | done |";
+
+	it("narrows to the requested column, trimmed of padding", () => {
+		const cell = tableCellRange(row, 1);
+		expect(row.slice(cell?.from, cell?.to)).toBe(
+			"{==table cell==}{>>cell comment<<} here",
+		);
+		const first = tableCellRange(row, 0);
+		expect(row.slice(first?.from, first?.to)).toBe("relay");
+		const last = tableCellRange(row, 2);
+		expect(row.slice(last?.from, last?.to)).toBe("done");
+	});
+
+	it("ignores the outer pipes and handles rows without them", () => {
+		expect(tableCellRange(row, 3)).toBeNull();
+		const bare = "a | b";
+		const second = tableCellRange(bare, 1);
+		expect(bare.slice(second?.from, second?.to)).toBe("b");
+		const open = "| a | b";
+		const openSecond = tableCellRange(open, 1);
+		expect(open.slice(openSecond?.from, openSecond?.to)).toBe("b");
+	});
+
+	it("keeps an empty cell in its column", () => {
+		const sparse = "| a |  | c |";
+		const empty = tableCellRange(sparse, 1);
+		expect(empty).not.toBeNull();
+		expect(sparse.slice(empty?.from, empty?.to)).toBe("");
+		const third = tableCellRange(sparse, 2);
+		expect(sparse.slice(third?.from, third?.to)).toBe("c");
+	});
+
+	it("does not split on escaped pipes", () => {
+		const escaped = "| a \\| b | c |";
+		const first = tableCellRange(escaped, 0);
+		expect(escaped.slice(first?.from, first?.to)).toBe("a \\| b");
+	});
+});
+
+describe("renderedElementSourceRange for rendered blocks", () => {
+	it("narrows a table cell to its column within the matching row", () => {
+		const source = [
+			"| Package | Notes |",
+			"| --- | --- |",
+			"| relay | {==table cell==}{>>cell comment<<} here |",
+			"| other | plain |",
+		].join("\n");
+		const range = renderedElementSourceRange(
+			{ text: source, lineStart: 0, lineEnd: 3 },
+			"TD",
+			"{table cell} here",
+			{ cellIndex: 1 },
+		);
+		expect(source.slice(range?.from, range?.to)).toBe(
+			"{==table cell==}{>>cell comment<<} here",
+		);
+	});
+
+	it("strips the quote prefix from a callout paragraph", () => {
+		const source = "> Ship {==callout text==}{>>callout comment<<} today.";
+		const range = renderedElementSourceRange(
+			{ text: source, lineStart: 0, lineEnd: 0 },
+			"P",
+			"Ship {callout text} today.",
+		);
+		expect(source.slice(range?.from, range?.to)).toBe(
+			"Ship {==callout text==}{>>callout comment<<} today.",
+		);
+	});
+
+	it("strips nested quote prefixes and heading markers", () => {
+		const source = "> > ## Title {>>note<<}";
+		const range = renderedElementSourceRange(
+			{ text: source, lineStart: 0, lineEnd: 0 },
+			"H2",
+			"Title {>>note<<}",
+		);
+		expect(source.slice(range?.from, range?.to)).toBe("Title {>>note<<}");
+	});
+
+	it("narrows a table cell inside a callout", () => {
+		const source = [
+			"> [!note] Table",
+			"> | Package | {==Version==}{>>which one?<<} |",
+			"> | --- | --- |",
+			"> | relay | 1.8.26 |",
+		].join("\n");
+		const range = renderedElementSourceRange(
+			{ text: source, lineStart: 0, lineEnd: 3 },
+			"TH",
+			"{Version}",
+			{ cellIndex: 1 },
+		);
+		expect(source.slice(range?.from, range?.to)).toBe(
+			"{==Version==}{>>which one?<<}",
+		);
+	});
+
+	it("keeps a multi-line paragraph's full range", () => {
+		const source = "First line\nsecond line";
+		const range = renderedElementSourceRange(
+			{ text: source, lineStart: 0, lineEnd: 1 },
+			"P",
+			"First line second line",
+		);
+		expect(source.slice(range?.from, range?.to)).toBe(source);
+	});
+});

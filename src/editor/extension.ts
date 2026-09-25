@@ -34,7 +34,7 @@ import {
 } from "./comment-draft-anchor";
 import { findCriticTaskPrefixes, type CriticTaskPrefix } from "./task-prefix";
 import { canReuseCriticStateForTrailingChanges } from "./incremental";
-import { rewriteMultilineCriticMarkupInRenderedBlocks } from "../preview/postprocessor";
+import { rewriteCriticMarkupInRenderedBlocks } from "../preview/postprocessor";
 import {
 	highlightColorClass,
 	highlightPresentation,
@@ -381,7 +381,7 @@ export function createReviewEditorExtension(
 				queueMicrotask(() => {
 					this.renderedBlockRewriteQueued = false;
 					if (this.destroyed || !this.lastDomSignal) return;
-					rewriteMultilineCriticMarkupInRenderedBlocks(
+					rewriteCriticMarkupInRenderedBlocks(
 						this.view.contentDOM,
 						this.view.state.doc.toString(),
 						controller.getDisplayMode(readPath(this.view.state)),

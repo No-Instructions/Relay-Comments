@@ -48,20 +48,35 @@ const EMBEDDED_SOURCE_RENDER_SELECTOR = SOURCE_RENDER_TAGS.map(
 ).join(", ");
 let previewTargetSequence = 0;
 
-/** Clean multiline CriticMarkup out of Markdown blocks that Obsidian embeds
- * directly in Live Preview (notably callouts). Those embedded renderers do
- * not consistently run registered Markdown postprocessors, so the editor
- * extension applies the same source-backed rewrite after their DOM appears. */
-export function rewriteMultilineCriticMarkupInRenderedBlocks(
+/**
+ * Render CriticMarkup inside the Markdown blocks Obsidian embeds directly in
+ * Live Preview (tables, callouts). Those embedded renderers run the Markdown
+ * pipeline before any postprocessor sees the text, so `{==anchor==}` has
+ * already become a native highlight with stray braces around it and a
+ * substitution's `~~` has become strikethrough. The editor extension applies
+ * the same source-backed rewrite after their DOM appears, narrowing each
+ * element to its own slice of the note.
+ */
+export function rewriteCriticMarkupInRenderedBlocks(
 	root: HTMLElement,
 	text: string,
 	mode: DisplayMode,
 	marks: readonly CriticMark[],
 ): void {
-	const multilineMarks = marks.filter(
-		(mark) => mark.valid && mark.raw.includes("\n"),
+	// Additions, deletions, and comments survive the embedded renderer as
+	// plain text and the text-node pass renders them in place, keeping
+	// Obsidian's inline formatting around them. Highlight anchors and
+	// substitutions do not: their == and ~~ are Markdown to that renderer,
+	// so those elements are re-rendered from source, as are marks spanning
+	// line breaks.
+	const mangledMarks = marks.filter(
+		(mark) =>
+			mark.valid &&
+			(mark.raw.includes("\n") ||
+				mark.raw.startsWith("{==") ||
+				mark.raw.startsWith("{~~")),
 	);
-	if (multilineMarks.length === 0) return;
+	if (mangledMarks.length === 0) return;
 
 	const candidates = Array.from(
 		root.querySelectorAll<HTMLElement>(EMBEDDED_SOURCE_RENDER_SELECTOR),
@@ -71,17 +86,27 @@ export function rewriteMultilineCriticMarkupInRenderedBlocks(
 		const range = selectMatchingSourceLineRange(candidate, text);
 		if (!range) continue;
 		if (
-			!multilineMarks.some(
-				(mark) => mark.from < range.to && mark.to > range.from,
-			)
+			!mangledMarks.some((mark) => mark.from < range.to && mark.to > range.from)
 		) {
 			continue;
 		}
 		if (!elementCoversSource(candidate, text.slice(range.from, range.to))) {
 			continue;
 		}
-		rewriteElementFromSourceRange(candidate, text, range, mode);
+		rewriteElementFromSourceRange(renderTarget(candidate), text, range, mode);
 	}
+}
+
+/** Rewrite a cell's wrapper so Live Preview keeps its table chrome. */
+function renderTarget(el: HTMLElement): HTMLElement {
+	if (el.tagName !== "TD" && el.tagName !== "TH") return el;
+	return el.querySelector<HTMLElement>(":scope > .table-cell-wrapper") ?? el;
+}
+
+function cellIndexOf(el: HTMLElement): number | undefined {
+	if (el.tagName !== "TD" && el.tagName !== "TH") return undefined;
+	const index = (el as HTMLTableCellElement).cellIndex;
+	return typeof index === "number" && index >= 0 ? index : undefined;
 }
 
 export function createReviewPostProcessor(
@@ -176,21 +201,28 @@ function rewriteSourceBackedElements(
 	const rewritten = new Set<HTMLElement>();
 	for (const candidate of candidates) {
 		if (rewritten.has(candidate) || shouldSkip(candidate)) continue;
+		// Section info carries the whole note as `text`; the section is the line range.
 		const section = ctx.getSectionInfo(candidate);
-		const source = section?.text;
-		if (!source || !SOURCE_PATTERN.test(source)) continue;
-		if (section && rewriteMultilineSlice(candidate, section, mode)) {
+		const sectionRange = section ? sectionSourceRange(section) : null;
+		if (!section || !sectionRange) continue;
+		const sectionText = section.text.slice(sectionRange.from, sectionRange.to);
+		if (!SOURCE_PATTERN.test(sectionText)) continue;
+		if (rewriteMultilineSlice(candidate, section, mode)) {
 			rewritten.add(candidate);
 			continue;
 		}
-		const sourceText = selectSourceTextForElement(candidate, source);
-		if (!sourceText) continue;
-		rewriteElementFromSource(
-			candidate,
-			normalizeSectionText(candidate, sourceText),
-			mode,
+		const lineIndex = selectSourceLineForElement(candidate, section, sectionRange);
+		if (lineIndex === null) continue;
+		const range = renderedElementSourceRange(
+			{ text: section.text, lineStart: lineIndex, lineEnd: lineIndex },
+			candidate.tagName,
+			candidate.textContent ?? "",
+			{ cellIndex: cellIndexOf(candidate) },
 		);
-		rewritten.add(candidate);
+		if (!range) continue;
+		if (rewriteElementFromSourceRange(candidate, section.text, range, mode)) {
+			rewritten.add(candidate);
+		}
 	}
 }
 
@@ -235,45 +267,57 @@ function rewriteMultilineSlice(
 	return true;
 }
 
-function selectSourceTextForElement(
+/** The note line, within the element's section, whose words best match it. */
+function selectSourceLineForElement(
 	el: HTMLElement,
-	sectionSource: string,
-): string | null {
+	section: MarkdownSectionInformation,
+	sectionRange: { from: number; to: number },
+): number | null {
 	const domText = el.textContent ?? "";
 	if (!DOM_REMNANT_PATTERN.test(domText)) return null;
 
-	const sourceLines = sectionSource
-		.split("\n")
-		.map((line) => line.trimEnd())
-		.filter((line) => SOURCE_PATTERN.test(line));
-	if (sourceLines.length === 0) return null;
-	if (sourceLines.length === 1) return sourceLines[0];
+	const lines = section.text.split("\n");
+	const candidates: Array<{ line: string; index: number }> = [];
+	for (
+		let index = section.lineStart;
+		index <= Math.min(section.lineEnd, lines.length - 1);
+		index += 1
+	) {
+		const line = lines[index].trimEnd();
+		if (SOURCE_PATTERN.test(line)) candidates.push({ line, index });
+	}
+	if (candidates.length === 0) return null;
+	if (candidates.length === 1) return candidates[0].index;
 
 	// Marks spanning line breaks cannot be reconstructed line by line; the
 	// slice-based path handles paragraphs, and other blocks are left with
 	// visible source rather than risking corruption.
 	if (
-		parseCriticMarkup(sectionSource).some(
-			(mark) => mark.valid && mark.raw.includes("\n"),
+		parseCriticMarkup(section.text).some(
+			(mark) =>
+				mark.valid &&
+				mark.raw.includes("\n") &&
+				mark.from < sectionRange.to &&
+				mark.to > sectionRange.from,
 		)
 	) {
 		return null;
 	}
 
 	const domWords = words(domText);
-	let bestLine: string | null = null;
+	let best: number | null = null;
 	let bestScore = 0;
-	for (const line of sourceLines) {
+	for (const { line, index } of candidates) {
 		const normalizedLine = normalizeSectionText(el, line);
 		const searchText = `${line} ${getRenderedSearchText(normalizedLine)}`;
 		const sourceWords = words(searchText);
 		const score = sourceWords.filter((word) => domWords.includes(word)).length;
 		if (score > bestScore) {
-			bestLine = line;
+			best = index;
 			bestScore = score;
 		}
 	}
-	return bestScore > 0 ? bestLine : null;
+	return bestScore > 0 ? best : null;
 }
 
 function selectMatchingSourceLineRange(
@@ -302,25 +346,37 @@ function selectMatchingSourceLineRange(
 		{ text, lineStart: bestLine, lineEnd: bestLine },
 		el.tagName,
 		domText,
+		{ cellIndex: cellIndexOf(el) },
 	);
 }
 
+/**
+ * Whether this element is the one the source slice produced, by word overlap.
+ * Only the source's visible words count: comment bodies never render into it.
+ */
 function elementCoversSource(el: HTMLElement, source: string): boolean {
 	const domWords = words(el.textContent ?? "");
+	const visibleWords = words(getRenderedVisibleText(source));
 	const sourceWords = words(`${source} ${getRenderedSearchText(source)}`);
-	if (domWords.length === 0 || sourceWords.length === 0) return false;
+	if (domWords.length === 0 || visibleWords.length === 0) return false;
 	const domInSource =
 		domWords.filter((word) => sourceWords.includes(word)).length /
 		domWords.length;
-	const sourceInDom =
-		sourceWords.filter((word) => domWords.includes(word)).length /
-		sourceWords.length;
-	return domInSource >= 0.7 && sourceInDom >= 0.7;
+	const visibleInDom =
+		visibleWords.filter((word) => domWords.includes(word)).length /
+		visibleWords.length;
+	return domInSource >= 0.7 && visibleInDom >= 0.7;
 }
 
 function getRenderedSearchText(source: string): string {
 	return renderDisplaySegments(source, "review")
 		.map((segment) => `${segment.text} ${segment.title ?? ""}`)
+		.join(" ");
+}
+
+function getRenderedVisibleText(source: string): string {
+	return renderDisplaySegments(source, "review")
+		.map((segment) => segment.text)
 		.join(" ");
 }
 
@@ -330,55 +386,43 @@ function words(text: string): string[] {
 	);
 }
 
+/** Source text as the reader sees it, for matching against rendered words. */
 function normalizeSectionText(el: HTMLElement, source: string): string {
 	const tag = el.tagName;
+	const unquoted = source
+		.split("\n")
+		.map((line) => line.replace(/^(?:[\t ]*>[\t ]?)+/, ""))
+		.join("\n");
 	if (/^H[1-6]$/.test(tag)) {
-		return source.replace(/^#{1,6}\s+/, "");
+		return unquoted.replace(/^#{1,6}\s+/, "");
 	}
 	if (tag === "LI") {
-		return source.replace(/^(\s*)(?:[-*+]|\d+[.)])\s+/, "$1");
+		return unquoted.replace(/^(\s*)(?:[-*+]|\d+[.)])\s+/, "$1");
 	}
-	if (tag === "BLOCKQUOTE") {
-		return source
-			.split("\n")
-			.map((line) => line.replace(/^>\s?/, ""))
-			.join("\n");
-	}
-	return source;
+	return unquoted;
 }
 
-function rewriteElementFromSource(
-	el: HTMLElement,
-	source: string,
-	mode: DisplayMode,
-): void {
-	const segments = renderDisplaySegments(source, mode);
-	if (segments.length === 1 && segments[0].kind === "text") return;
-
-	const fragment = createFragment();
-	for (const segment of segments) {
-		appendSegment(fragment, segment);
-	}
-	el.replaceChildren(fragment);
-	el.addClass("critic-preview-source-rendered");
-}
-
+/** Render a slice of the note into the element; false when it holds no markup. */
 function rewriteElementFromSourceRange(
 	el: HTMLElement,
 	text: string,
 	range: { from: number; to: number },
 	mode: DisplayMode,
-): void {
+): boolean {
 	const segments = renderSliceSegments(text, range.from, range.to, mode);
+	if (segments.length === 1 && segments[0].kind === "text") return false;
 	const fragment = createFragment();
 	for (const segment of segments) {
 		appendSegment(fragment, segment);
 	}
 	el.replaceChildren(fragment);
 	el.addClass("critic-preview-source-rendered");
+	return true;
 }
 
 function shouldSkip(el: HTMLElement): boolean {
+	// A cell being edited hosts its own CodeMirror view.
+	if (el.querySelector(".cm-editor")) return true;
 	let current: HTMLElement | null = el;
 	while (current) {
 		if (
