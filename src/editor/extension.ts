@@ -41,6 +41,7 @@ import {
 	parseNativeHighlights,
 	type NativeHighlight,
 } from "../markdown/highlights";
+import { isEditorSelectionTrusted, isFragmentEditor } from "./selection-trust";
 
 export const setCommentDraftAnchor =
 	StateEffect.define<CommentDraftAnchor | null>();
@@ -198,7 +199,7 @@ export function createReviewEditorExtension(
 
 	const reviewViewPlugin = ViewPlugin.fromClass(
 		class {
-			private commentButton: HTMLButtonElement;
+			private commentButton: HTMLButtonElement | null = null;
 			private renderedBlockObserver: MutationObserver;
 			private renderedBlockRewriteQueued = false;
 			private sourceViewEl: HTMLElement | null = null;
@@ -206,11 +207,19 @@ export function createReviewEditorExtension(
 			private livePreviewPollId: number | null = null;
 			private lastDomSignal: boolean | null = null;
 			private destroyed = false;
+			/** Identity for requestMeasure, so a burst of triggers measures once. */
+			private readonly commentButtonMeasureKey = {};
+			/** The document the selectionchange listener was registered on. */
+			private readonly selectionDocument: Document;
 			private currentPath(): string | null {
 				return controller.resolveEditorPath(
 					this.view,
 					readPath(this.view.state),
 				);
+			}
+			/** Recomputed per use: Obsidian attaches a fragment editor's DOM after the plugin is built. */
+			private get fragment(): boolean {
+				return isFragmentEditor(this.view.dom);
 			}
 			private handleClick = (event: MouseEvent): void => {
 				const target = event.target as HTMLElement | null;
@@ -256,18 +265,26 @@ export function createReviewEditorExtension(
 				if (related && anchor.contains(related)) return;
 				controller.scheduleThreadPreviewDismiss();
 			};
+			/** A widget selection produces no CodeMirror transaction, so this is the only re-measure signal. */
+			private handleSelectionChange = (): void => {
+				if (this.destroyed || this.fragment) return;
+				this.scheduleCommentButtonUpdate();
+			};
 
 			constructor(private view: EditorView) {
-				this.commentButton = this.createCommentButton();
 				this.renderedBlockObserver = new MutationObserver((records) => {
 					if (mutationTouchesEmbeddedBlock(records)) {
 						this.scheduleRenderedBlockRewrite();
 					}
 				});
-				this.view.dom.appendChild(this.commentButton);
 				this.view.dom.addEventListener("click", this.handleClick);
 				this.view.dom.addEventListener("pointerover", this.handlePointerOver);
 				this.view.dom.addEventListener("pointerout", this.handlePointerOut);
+				this.selectionDocument = this.view.dom.ownerDocument;
+				this.selectionDocument.addEventListener(
+					"selectionchange",
+					this.handleSelectionChange,
+				);
 				this.renderedBlockObserver.observe(this.view.contentDOM, {
 					childList: true,
 					subtree: true,
@@ -280,6 +297,21 @@ export function createReviewEditorExtension(
 				);
 				this.scheduleCommentButtonUpdate();
 				this.scheduleRenderedBlockRewrite();
+			}
+
+			/** Created lazily so the fragment check runs after Obsidian attaches the editor. */
+			private ensureCommentButton(): HTMLButtonElement | null {
+				if (this.fragment) {
+					this.commentButton?.remove();
+					this.commentButton = null;
+					return null;
+				}
+				if (!this.commentButton) {
+					this.commentButton = this.createCommentButton();
+					this.view.dom.appendChild(this.commentButton);
+				}
+
+				return this.commentButton;
 			}
 
 			update(update: ViewUpdate): void {
@@ -303,7 +335,8 @@ export function createReviewEditorExtension(
 						update.state.sliceDoc(draftAnchor.from, draftAnchor.to),
 					);
 				}
-				if (update.selectionSet) {
+				// Fragment offsets are the cell's, not the note's.
+				if (update.selectionSet && !this.fragment) {
 					controller.notifyEditorSelectionChanged(this.view);
 				}
 				if (
@@ -312,7 +345,8 @@ export function createReviewEditorExtension(
 					update.docChanged ||
 					update.viewportChanged ||
 					update.startState.field(criticField) !==
-						update.state.field(criticField)
+						update.state.field(criticField) ||
+					update.startState.field(commentDraftAnchorField) !== draftAnchor
 				) {
 					this.scheduleCommentButtonUpdate();
 				}
@@ -333,8 +367,12 @@ export function createReviewEditorExtension(
 				this.view.dom.removeEventListener("click", this.handleClick);
 				this.view.dom.removeEventListener("pointerover", this.handlePointerOver);
 				this.view.dom.removeEventListener("pointerout", this.handlePointerOut);
+				this.selectionDocument.removeEventListener(
+					"selectionchange",
+					this.handleSelectionChange,
+				);
 				controller.hideThreadPreview();
-				this.commentButton.remove();
+				this.commentButton?.remove();
 			}
 
 			private scheduleRenderedBlockRewrite(): void {
@@ -369,13 +407,21 @@ export function createReviewEditorExtension(
 					attributes: true,
 					attributeFilter: ["class"],
 				});
+				// Fragment editors are parented after construction; re-check once attached.
+				this.syncDomLivePreview();
 			}
 
 			private syncDomLivePreview(): void {
 				const sourceView = this.view.dom.closest(".markdown-source-view");
-				const domSignal = sourceView
-					? sourceView.classList.contains("is-live-preview")
-					: null;
+				// A fragment editor's document is the fragment, not the note, and Obsidian renders
+				// that markup itself - decorating here double-renders the mark against offsets that
+				// are not the note's. Reporting "not live preview" is how a view plugin tells the
+				// state field to build nothing.
+				const domSignal = this.fragment
+					? false
+					: sourceView
+						? sourceView.classList.contains("is-live-preview")
+						: null;
 				if (domSignal === this.lastDomSignal) return;
 				this.lastDomSignal = domSignal;
 				queueMicrotask(() => {
@@ -404,6 +450,12 @@ export function createReviewEditorExtension(
 					event.stopPropagation();
 					const selection = this.view.state.selection.main;
 					if (selection.empty) return;
+					// An untrusted range would comment on text the user selected away from.
+					if (!this.selectionIsTrusted()) {
+						this.scheduleCommentButtonUpdate();
+						return;
+					}
+
 					controller.startCommentDraft(
 						this.currentPath(),
 						selection.from,
@@ -417,18 +469,28 @@ export function createReviewEditorExtension(
 
 			private scheduleCommentButtonUpdate(): void {
 				this.view.requestMeasure({
+					key: this.commentButtonMeasureKey,
 					read: () => this.measureCommentButton(),
 					write: (placement) => this.applyCommentButtonPlacement(placement),
 				});
 			}
 
+			/** Whether the state selection still describes the on-screen selection. */
+			private selectionIsTrusted(): boolean {
+				return isEditorSelectionTrusted(this.view);
+			}
+
 			private measureCommentButton(): CommentButtonPlacement | null {
+				if (this.fragment) return null;
 				const selection = this.view.state.selection.main;
 				const fieldValue = this.view.state.field(criticField);
 				if (
 					!controller.shouldShowInlineActions() ||
 					!fieldValue.livePreview ||
-					selection.empty
+					selection.empty ||
+					// A second click while the composer is open would only replace the draft.
+					this.view.state.field(commentDraftAnchorField) !== null ||
+					!this.selectionIsTrusted()
 				) {
 					return null;
 				}
@@ -467,15 +529,18 @@ export function createReviewEditorExtension(
 			private applyCommentButtonPlacement(
 				placement: CommentButtonPlacement | null,
 			): void {
+				const button = this.ensureCommentButton();
+				if (!button) return;
+
 				if (!placement) {
-					this.commentButton.classList.remove("is-visible");
+					button.classList.remove("is-visible");
 					return;
 				}
-				this.commentButton.setCssStyles({
+				button.setCssStyles({
 					left: `${placement.left}px`,
 					top: `${placement.top}px`,
 				});
-				this.commentButton.classList.add("is-visible");
+				button.classList.add("is-visible");
 			}
 		},
 	);

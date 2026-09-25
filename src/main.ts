@@ -63,6 +63,10 @@ import {
 	type ReviewEditorController,
 } from "./editor/extension";
 import {
+	isEditorSelectionTrusted,
+	type TrustableEditorView,
+} from "./editor/selection-trust";
+import {
 	ADD_COMMENT_HOTKEYS,
 	getAddCommentTarget,
 } from "./editor/hotkeys";
@@ -1323,6 +1327,16 @@ export default class RelayCommentsPlugin
 		editor: Editor,
 		info?: { file?: TFile | null },
 	): void {
+		// A widget selection leaves the editor reporting a stale range.
+		const cm = this.getCodeMirrorEditor(editor) as unknown as
+			| TrustableEditorView
+			| null;
+		if (cm?.contentDOM && cm.state && !isEditorSelectionTrusted(cm)) {
+			new Notice(
+				"Can't comment on text inside a rendered block. Choose Edit on the block and select the text there.",
+			);
+			return;
+		}
 		const fromPos = editor.getCursor("from");
 		const toPos = editor.getCursor("to");
 		const from = editor.posToOffset(fromPos);
