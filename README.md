@@ -1,89 +1,90 @@
 # Relay Comments
 
-Comments and suggested edits for Obsidian notes — stored in the note itself.
+Comments and suggested edits for Obsidian notes, stored in the note itself.
 
-Select text, add a comment, and discuss it in a review sidebar, Google
-Docs-style. Propose additions, deletions, and replacements that the author
-can accept or reject with one action. Comments and suggested edits are
-written into the Markdown file as plain [CriticMarkup](#the-format), so review state
-survives without a server, syncs with anything that syncs text, and stays
-readable in any editor.
+Select text, add a comment, and discuss it in a review sidebar, the way you
+would in Google Docs. Propose additions, deletions, and replacements that the
+author accepts or rejects with one click. Relay Comments writes all of this
+into the Markdown file as plain [CriticMarkup](#the-format), so the review
+needs no server and stays readable in any editor. Anything that syncs text
+syncs the review too.
 
 ## Discuss a passage
 
-Select text and comment — `Ctrl+Alt+M` (`Cmd+Opt+M` on macOS), the margin
-button, or the right-click menu. Replies stack into a thread anchored to
-the passage, and collaborators' comments land in your note as they write
-them. Hover any commented passage to read the thread in place; the
-preview's links reply or open the full thread. Comment bodies use Obsidian's
-Markdown renderer, including formatting, lists, code, links, and embeds.
+Select text and add a comment with `Ctrl+Alt+M` (`Cmd+Opt+M` on macOS), the
+margin button, or the right-click menu. Replies stack into a thread anchored
+to the passage, and collaborators' comments land in your note as they write
+them. Hover a commented passage to read its thread in place; from the preview
+you can reply or open the full thread. Comments are Markdown, rendered by
+Obsidian, so formatting, lists, code, links, and embeds all work.
 
 ![A comment arrives in a daily note, is read from the hover preview, and gets a reply](docs/comment-thread.gif)
 
 ## Suggest edits
 
-Mark additions `{++like this++}`, deletions `{--like this--}`, and
-replacements `{~~old~>new~~}`. Review them where they sit: hover a
-suggestion and **Accept** or **Reject** it from the preview — or sweep
-the whole note at once with `Finalize for publish`.
+Comments discuss the text. Suggestions change it. Mark additions
+`{++like this++}`, deletions `{--like this--}`, and replacements
+`{~~old~>new~~}`, then review them where they sit: hover a suggestion and
+accept or reject it from the preview. To accept every suggestion and clear
+every comment at once, run `Finalize for publish`.
 
 ![Hovering a suggested replacement shows Accept and Reject; accepting rewrites the text in place](docs/suggested-edits.gif)
 
 ## Review in the sidebar
 
-Every comment, suggestion, and highlight in the note, in document order,
-with colored spines and diff chips so you can scan what each one is.
-Click a card to jump to its place in the note; resolve a thread with one
-click — the markup leaves the note, the text stays.
+Previews handle one passage at a time. The sidebar shows the whole note: every
+comment, suggestion, and highlight in document order, with colored spines and
+diff chips that tell you what each one is at a glance. Click a card to jump to
+its place in the note. Resolve a thread and the markup leaves the note; the
+text stays.
 
 ![Opening the review sidebar, jumping to a suggestion from its card, and resolving a thread](docs/review-sidebar.gif)
 
 ## Comment on canvases
 
-Figma-style pins on any canvas: comment on a card — from its right-click
-menu or by clicking it in comment mode — and the pin docks at the card's
-corner; click the empty board to drop a freestanding pin right there.
-Pins carry the author's initial, hold their size at any zoom, ride their
-card when it moves, and open a floating thread to read, reply, and
-resolve.
+On a canvas, comments become pins, as in Figma. Comment on a card from its
+right-click menu, or click the card in comment mode, and the pin docks at the
+card's corner. Click the empty board and a freestanding pin lands there. A pin
+shows the author's initial and keeps its size at any zoom. When its card
+moves, the pin moves with it. Click a pin to open its thread in a floating
+panel, where you can reply or resolve it.
 
 ![A canvas card gets a comment from its right-click menu, then a freestanding pin lands between two cards](docs/canvas-comments.gif)
 
 ## Authorship and identity
 
-No account or plugin dependency is required. Comments can use a plain
-author name such as `Bongo Cat`; when no identity service is available,
-Relay Comments settings ask for your name and an optional profile
-picture. [Relay](https://relay.md) and Obsidian Sync can instead supply
-your service identity. When both are available, choose one in Relay
-Comments settings.
+Every comment names its author, and no account or other plugin is required
+for that. A comment can carry a plain name such as `Bongo Cat`; without an
+identity service, the plugin settings ask for your name and an optional
+profile picture. If [Relay](https://relay.md) or Obsidian Sync is installed,
+it can supply your identity instead. When both are, pick one in the settings.
 
 The `identities` array in the plugin's `data.json` is a directory for
-resolving other people's author IDs. Those entries are never treated as
+resolving other people's author IDs. The plugin never treats an entry there as
 your own identity.
 
 ## Privacy and network access
 
-Relay Comments has no account, telemetry, or direct note-upload service.
-When you select Relay or Obsidian Sync as your identity provider, Relay
-Comments asks that installed service for identity records; that service's
-network and privacy behavior still applies. Profile-picture URLs are loaded
-by Obsidian when their avatars are displayed.
+Relay Comments has no account and sends no telemetry. It does not upload
+notes anywhere. If you choose Relay or Obsidian Sync as your identity
+provider, the plugin asks that service for identity records, and the
+service's own network and privacy behavior applies. Obsidian loads
+profile-picture URLs when it displays the avatars.
 
 ## Usage notes
 
 - Live Preview and Reading mode render review marks and hide the raw
-  delimiters; Source mode shows the plain text. Half-typed markup is
-  never hidden, so nothing silently disappears while you type.
-- Sidebar cards carry **Resolve**; suggestions add **Accept** /
-  **Reject** under the `⋯` menu.
+  delimiters. Source mode shows the plain text. The plugin never hides
+  half-typed markup, so nothing disappears while you type.
+- Sidebar cards have a Resolve action. Suggestions add Accept and Reject
+  under the `⋯` menu.
 - On a canvas, the add-comment shortcut starts click-to-place.
 
-Commands (search "Relay Comments" in the command palette): open/close the
-review sidebar, add comment, add comment to canvas (click to place), show
-comment preview at cursor, highlight selection, mark selection as
-addition/deletion/substitution, accept/reject current, accept/reject all,
-and finalize for publish. The ribbon icon toggles the sidebar.
+Search the command palette for "Relay Comments" to find the commands. They
+cover opening and closing the sidebar, adding comments to notes and canvases,
+showing the comment preview at the cursor, highlighting, marking additions,
+deletions, and substitutions, accepting or rejecting the current mark or all
+marks, and finalizing for publish. The ribbon icon toggles the sidebar.
 
 ## The format
 
@@ -98,41 +99,40 @@ Notes stay portable because review state is plain text in the
 | Highlight | `{==marked text==}` |
 | Comment | `{>>comment text<<}` |
 
-Comments can attach to Obsidian's native `==highlight==` syntax without
+A comment can also attach to Obsidian's native `==highlight==` syntax without
 converting the highlight to CriticMarkup.
 
-Authored comments can store a provider identity alongside a portable display
+An authored comment stores a provider identity next to a portable display
 name:
 
 ```
 {==the passage==}{{authorId="service-user-id" author="Bongo Cat">>Can we ground this sooner?<<}}
 ```
 
-A comment attached to an existing native highlight uses the same comment
-markup without converting the highlight:
+The same comment markup attaches to an existing native highlight:
 
 ```markdown
 ==the passage=={{authorId="service-user-id" author="Bongo Cat">>Can we ground this sooner?<<}}
 ```
 
-`authorId` is the opaque ID issued by the selected identity provider. `author`
-is the display name that remains useful when that provider is unavailable.
-When only one identity value is available, Relay Comments stores it in
-`author` and omits `authorId`. Avatars, colors, and other profile details are
-resolved when the note is displayed and are not duplicated into its Markdown.
+`authorId` is the opaque ID issued by the selected identity provider.
+`author` is the display name, which still works when that provider is
+unavailable. When only one value is known, the plugin stores it in `author`
+and omits `authorId`. The plugin looks up avatars, colors, and other profile
+details when it displays the note; it never writes them into the Markdown.
 
-Any CriticMarkup-aware tool still reads the note; plain-Markdown tools see
+Any CriticMarkup-aware tool still reads the note. Plain-Markdown tools see
 readable text with visible annotations.
 
 ## Installation
 
-Install Relay Comments from its
-[Obsidian community plugin catalog page](https://community.obsidian.md/plugins/relay-comments),
+Install from the
+[community plugin catalog](https://community.obsidian.md/plugins/relay-comments),
 or from inside Obsidian:
 
-1. Open **Settings → Community plugins** and select **Browse**.
-2. Search for **Relay Comments** and select **Install**.
-3. Select **Enable**.
+1. Open Settings, then Community plugins, and select Browse.
+2. Search for Relay Comments and select Install.
+3. Select Enable.
 
 ## Development
 
@@ -142,8 +142,8 @@ npm run check   # typecheck src/
 npm run build   # typecheck + produce main.js
 ```
 
-Unit tests live in `tests/unit/` — `npm test` runs them on any checkout.
-See [CONTRIBUTING](CONTRIBUTING.md).
+Unit tests live in `tests/unit/`; `npm test` runs them on any checkout. See
+[CONTRIBUTING](CONTRIBUTING.md).
 
 ## License
 
