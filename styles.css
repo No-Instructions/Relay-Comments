@@ -110,7 +110,13 @@
 	text-decoration-line: line-through;
 }
 
+.critic-preview-highlight.cm-critic-thread-anchor,
+.markdown-preview-view .critic-preview-highlight {
+	cursor: pointer;
+}
+
 .cm-critic-highlight.cm-critic-thread-anchor:hover,
+.critic-preview-highlight.cm-critic-thread-anchor:hover,
 .cm-critic-comment-anchor:hover {
 	background-color: color-mix(in srgb, var(--critic-highlight-color) 42%, transparent);
 }

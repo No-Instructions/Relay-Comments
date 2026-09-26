@@ -13,6 +13,12 @@ import {
 } from "./sections";
 import { highlightColorClass } from "../markdown/highlights";
 import { previewCommentComponents } from "./comment-components";
+import {
+	marksIntact,
+	matchRenderedAnchor,
+	repairMangledMarks,
+	runsTouching,
+} from "./blocks";
 
 export interface PreviewDisplayController {
 	getDisplayMode(path?: string | null): DisplayMode;
@@ -49,13 +55,9 @@ const EMBEDDED_SOURCE_RENDER_SELECTOR = SOURCE_RENDER_TAGS.map(
 let previewTargetSequence = 0;
 
 /**
- * Render CriticMarkup inside the Markdown blocks Obsidian embeds directly in
- * Live Preview (tables, callouts). Those embedded renderers run the Markdown
- * pipeline before any postprocessor sees the text, so `{==anchor==}` has
- * already become a native highlight with stray braces around it and a
- * substitution's `~~` has become strikethrough. The editor extension applies
- * the same source-backed rewrite after their DOM appears, narrowing each
- * element to its own slice of the note.
+ * Finish CriticMarkup inside the blocks Obsidian embeds in Live Preview (tables,
+ * callouts): repair what its renderer mangled, render in place when the marks are
+ * intact and from source otherwise, then give the highlights anchor identity.
  */
 export function rewriteCriticMarkupInRenderedBlocks(
 	root: HTMLElement,
@@ -63,37 +65,71 @@ export function rewriteCriticMarkupInRenderedBlocks(
 	mode: DisplayMode,
 	marks: readonly CriticMark[],
 ): void {
-	// Additions, deletions, and comments survive the embedded renderer as
-	// plain text and the text-node pass renders them in place, keeping
-	// Obsidian's inline formatting around them. Highlight anchors and
-	// substitutions do not: their == and ~~ are Markdown to that renderer,
-	// so those elements are re-rendered from source, as are marks spanning
-	// line breaks.
-	const mangledMarks = marks.filter(
-		(mark) =>
-			mark.valid &&
-			(mark.raw.includes("\n") ||
-				mark.raw.startsWith("{==") ||
-				mark.raw.startsWith("{~~")),
-	);
-	if (mangledMarks.length === 0) return;
+	const validMarks = marks.filter((mark) => mark.valid);
+	if (validMarks.length === 0) return;
 
 	const candidates = Array.from(
 		root.querySelectorAll<HTMLElement>(EMBEDDED_SOURCE_RENDER_SELECTOR),
 	);
 	for (const candidate of candidates) {
 		if (shouldSkip(candidate)) continue;
-		const range = selectMatchingSourceLineRange(candidate, text);
+		const target = renderTarget(candidate);
+		repairMangledMarks(target);
+		const remnants = DOM_REMNANT_PATTERN.test(target.textContent ?? "");
+		const unannotated = target.querySelector(
+			".critic-preview-highlight:not([data-critic-from])",
+		);
+		if (!remnants && !unannotated) continue;
+
+		const range = matchSourceLineRange(candidate, text);
 		if (!range) continue;
-		if (
-			!mangledMarks.some((mark) => mark.from < range.to && mark.to > range.from)
-		) {
-			continue;
+		const sliceMarks = validMarks.filter(
+			(mark) => mark.from < range.to && mark.to > range.from,
+		);
+		if (sliceMarks.length === 0) continue;
+
+		if (remnants) {
+			if (marksIntact(textNodeValues(target), sliceMarks)) {
+				renderTextNodes(target, mode);
+			} else if (
+				elementCoversSource(candidate, text.slice(range.from, range.to))
+			) {
+				rewriteElementFromSourceRange(target, text, range, mode);
+			} else {
+				continue;
+			}
 		}
-		if (!elementCoversSource(candidate, text.slice(range.from, range.to))) {
-			continue;
-		}
-		rewriteElementFromSourceRange(renderTarget(candidate), text, range, mode);
+		annotateRenderedAnchors(target, text, range, validMarks);
+	}
+}
+
+/** Give a block's highlights the run range and anchor class the editor handlers look for. */
+function annotateRenderedAnchors(
+	el: HTMLElement,
+	text: string,
+	range: { from: number; to: number },
+	marks: readonly CriticMark[],
+): void {
+	const highlights = Array.from(
+		el.querySelectorAll<HTMLElement>(
+			".critic-preview-highlight:not([data-critic-from])",
+		),
+	);
+	if (highlights.length === 0) return;
+	const runs = runsTouching(text, marks, range.from, range.to);
+	for (const highlight of highlights) {
+		const match = matchRenderedAnchor(
+			text,
+			runs,
+			marks,
+			highlight.textContent ?? "",
+			highlight.getAttribute("title"),
+		);
+		if (!match) continue;
+		highlight.dataset.criticFrom = String(match.from);
+		highlight.dataset.criticTo = String(match.to);
+		highlight.addClass("cm-critic-thread-anchor");
+		highlight.removeAttribute("title");
 	}
 }
 
@@ -119,31 +155,10 @@ export function createReviewPostProcessor(
 			controller.notifyRenderedCommentsChanged?.();
 			return;
 		}
+		// Put the source text back where Obsidian rendered {==anchor==} as a highlight.
+		repairMangledMarks(el);
 		rewriteSourceBackedElements(el, ctx, mode);
-
-		const walker = el.ownerDocument.createTreeWalker(
-			el,
-			NodeFilter.SHOW_TEXT,
-			{
-				acceptNode(node) {
-					const parent = node.parentElement;
-					if (!parent || shouldSkip(parent)) return NodeFilter.FILTER_REJECT;
-					const text = node.nodeValue ?? "";
-					return text.includes("{")
-						? NodeFilter.FILTER_ACCEPT
-						: NodeFilter.FILTER_SKIP;
-				},
-			},
-		);
-
-		const nodes: Text[] = [];
-		while (walker.nextNode()) {
-			nodes.push(walker.currentNode as Text);
-		}
-
-		for (const node of nodes) {
-			replaceTextNode(node, mode);
-		}
+		renderTextNodes(el, mode);
 		appendSectionCommentComponents(el, ctx);
 		controller.notifyRenderedCommentsChanged?.();
 	};
@@ -220,9 +235,69 @@ function rewriteSourceBackedElements(
 			{ cellIndex: cellIndexOf(candidate) },
 		);
 		if (!range) continue;
+		// Intact marks render in place, keeping Obsidian's inline formatting.
+		const sliceMarks = marksOf(section.text).filter(
+			(mark) => mark.valid && mark.from < range.to && mark.to > range.from,
+		);
+		if (
+			sliceMarks.length > 0 &&
+			marksIntact(textNodeValues(candidate), sliceMarks)
+		) {
+			continue;
+		}
 		if (rewriteElementFromSourceRange(candidate, section.text, range, mode)) {
 			rewritten.add(candidate);
 		}
+	}
+}
+
+const parsedTexts = new Map<string, CriticMark[]>();
+
+/** Parsed marks for a note text, cached across the elements of one render. */
+function marksOf(text: string): CriticMark[] {
+	const cached = parsedTexts.get(text);
+	if (cached) return cached;
+	const marks = parseCriticMarkup(text);
+	if (parsedTexts.size > 8) parsedTexts.clear();
+	parsedTexts.set(text, marks);
+	return marks;
+}
+
+/** Text node values under an element, skipping code and comment components. */
+function textNodeValues(root: HTMLElement): string[] {
+	const values: string[] = [];
+	const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+		acceptNode(node) {
+			const parent = node.parentElement;
+			return !parent || shouldSkip(parent)
+				? NodeFilter.FILTER_REJECT
+				: NodeFilter.FILTER_ACCEPT;
+		},
+	});
+	while (walker.nextNode()) {
+		values.push(walker.currentNode.nodeValue ?? "");
+	}
+	return values;
+}
+
+/** Render CriticMarkup found whole inside text nodes, in place. */
+function renderTextNodes(root: HTMLElement, mode: DisplayMode): void {
+	const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+		acceptNode(node) {
+			const parent = node.parentElement;
+			if (!parent || shouldSkip(parent)) return NodeFilter.FILTER_REJECT;
+			const text = node.nodeValue ?? "";
+			return text.includes("{")
+				? NodeFilter.FILTER_ACCEPT
+				: NodeFilter.FILTER_SKIP;
+		},
+	});
+	const nodes: Text[] = [];
+	while (walker.nextNode()) {
+		nodes.push(walker.currentNode as Text);
+	}
+	for (const node of nodes) {
+		replaceTextNode(node, mode);
 	}
 }
 
@@ -320,12 +395,11 @@ function selectSourceLineForElement(
 	return bestScore > 0 ? best : null;
 }
 
-function selectMatchingSourceLineRange(
+function matchSourceLineRange(
 	el: HTMLElement,
 	text: string,
 ): { from: number; to: number } | null {
 	const domText = el.textContent ?? "";
-	if (!DOM_REMNANT_PATTERN.test(domText)) return null;
 	const domWords = words(domText);
 	if (domWords.length === 0) return null;
 

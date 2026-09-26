@@ -66,6 +66,7 @@ import {
 	isEditorSelectionTrusted,
 	type TrustableEditorView,
 } from "./editor/selection-trust";
+import { matchRenderedAnchor, runsTouching } from "./preview/blocks";
 import {
 	ADD_COMMENT_HOTKEYS,
 	getAddCommentTarget,
@@ -244,6 +245,21 @@ export default class RelayCommentsPlugin
 		this.addRibbonIcon("message-square-text", "Open Relay Comments", () => {
 			void this.toggleReviewSidebarFromRibbon();
 		});
+		// Reading view has no editor anchors; its highlights are matched by what they show.
+		this.registerDomEvent(document, "click", (event) => {
+			this.handlePreviewAnchorClick(event);
+		});
+		this.registerDomEvent(document, "pointerover", (event) => {
+			this.handlePreviewAnchorHover(event);
+		});
+		this.registerDomEvent(document, "pointerout", (event) => {
+			const target = event.target as HTMLElement | null;
+			const highlight = this.previewAnchorAt(target);
+			if (!highlight) return;
+			const related = event.relatedTarget as Node | null;
+			if (related && highlight.contains(related)) return;
+			this.scheduleThreadPreviewDismiss();
+		});
 
 		this.registerCommands();
 		this.registerWorkspaceEvents();
@@ -315,6 +331,66 @@ export default class RelayCommentsPlugin
 		this.hideThreadPreview();
 		this.editorExtensions.length = 0;
 		this.app.workspace.updateOptions();
+	}
+
+	/** The Reading-view comment highlight under a pointer target, if any. */
+	private previewAnchorAt(target: HTMLElement | null): HTMLElement | null {
+		const highlight = target?.closest<HTMLElement>(
+			".markdown-preview-view .critic-preview-highlight",
+		);
+		return highlight && highlight.dataset.criticFrom === undefined
+			? highlight
+			: null;
+	}
+
+	/** The review run a Reading-view highlight stands for; ambiguous matches resolve to nothing. */
+	private resolvePreviewAnchor(
+		highlight: HTMLElement,
+	): { path: string; from: number; to: number } | null {
+		let view: MarkdownView | null = null;
+		this.app.workspace.iterateAllLeaves((leaf) => {
+			if (
+				!view &&
+				leaf.view instanceof MarkdownView &&
+				leaf.view.containerEl.contains(highlight)
+			) {
+				view = leaf.view;
+			}
+		});
+		const markdownView = view as MarkdownView | null;
+		if (!markdownView?.file) return null;
+		const text = markdownView.editor?.getValue() ?? markdownView.data;
+		const marks = parseCriticMarkup(text);
+		const match = matchRenderedAnchor(
+			text,
+			runsTouching(text, marks, 0, text.length),
+			marks,
+			highlight.textContent ?? "",
+			highlight.getAttribute("title"),
+		);
+		return match ? { path: markdownView.file.path, ...match } : null;
+	}
+
+	/** A click on a comment highlight in Reading view opens its thread. */
+	private handlePreviewAnchorClick(event: MouseEvent): void {
+		const highlight = this.previewAnchorAt(event.target as HTMLElement | null);
+		if (!highlight) return;
+		const anchor = this.resolvePreviewAnchor(highlight);
+		if (!anchor) return;
+		event.preventDefault();
+		this.activateCommentThread(anchor.path, anchor.from, anchor.to);
+	}
+
+	/** Resting on a comment highlight in Reading view previews its thread. */
+	private handlePreviewAnchorHover(event: PointerEvent): void {
+		if (event.buttons !== 0) return;
+		const highlight = this.previewAnchorAt(event.target as HTMLElement | null);
+		if (!highlight) return;
+		const anchor = this.resolvePreviewAnchor(highlight);
+		if (!anchor) return;
+		// The native tooltip would double the preview.
+		highlight.removeAttribute("title");
+		this.queueThreadPreview(anchor.path, anchor.from, anchor.to, highlight);
 	}
 
 	notifyEditorSelectionChanged(editorView?: CodeMirrorEditorView): void {

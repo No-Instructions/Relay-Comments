@@ -222,6 +222,7 @@ export function createReviewEditorExtension(
 				return isFragmentEditor(this.view.dom);
 			}
 			private handleClick = (event: MouseEvent): void => {
+				if (this.fragment) return;
 				const target = event.target as HTMLElement | null;
 				const anchor = target?.closest<HTMLElement>(
 					".cm-critic-thread-anchor, .cm-critic-suggestion-anchor",
@@ -238,6 +239,7 @@ export function createReviewEditorExtension(
 				);
 			};
 			private handlePointerOver = (event: PointerEvent): void => {
+				if (this.fragment) return;
 				const target = event.target as HTMLElement | null;
 				const anchor = target?.closest<HTMLElement>(
 					".cm-critic-thread-anchor, .cm-critic-suggestion-anchor",
@@ -376,7 +378,7 @@ export function createReviewEditorExtension(
 			}
 
 			private scheduleRenderedBlockRewrite(): void {
-				if (this.renderedBlockRewriteQueued) return;
+				if (this.fragment || this.renderedBlockRewriteQueued) return;
 				this.renderedBlockRewriteQueued = true;
 				queueMicrotask(() => {
 					this.renderedBlockRewriteQueued = false;
@@ -413,15 +415,10 @@ export function createReviewEditorExtension(
 
 			private syncDomLivePreview(): void {
 				const sourceView = this.view.dom.closest(".markdown-source-view");
-				// A fragment editor's document is the fragment, not the note, and Obsidian renders
-				// that markup itself - decorating here double-renders the mark against offsets that
-				// are not the note's. Reporting "not live preview" is how a view plugin tells the
-				// state field to build nothing.
-				const domSignal = this.fragment
-					? false
-					: sourceView
-						? sourceView.classList.contains("is-live-preview")
-						: null;
+				// A fragment editor decorates its cell's source like prose; its anchors stay inert.
+				const domSignal = sourceView
+					? sourceView.classList.contains("is-live-preview")
+					: null;
 				if (domSignal === this.lastDomSignal) return;
 				this.lastDomSignal = domSignal;
 				queueMicrotask(() => {
