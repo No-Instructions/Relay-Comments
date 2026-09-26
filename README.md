@@ -24,7 +24,7 @@ done.
 The sidebar lists the note's comments, suggestions, and highlights.
 Resolving a thread removes its markup from the note.
 
-![Opening the review sidebar, jumping to a suggestion from its card, and resolving a thread](docs/review-sidebar.gif)
+![Opening the review sidebar and resolving a thread, which removes its card and its markup in the note](docs/review-sidebar.gif)
 
 ## Identity
 
