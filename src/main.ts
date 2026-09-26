@@ -67,6 +67,7 @@ import {
 	type TrustableEditorView,
 } from "./editor/selection-trust";
 import { matchRenderedAnchor, runsTouching } from "./preview/blocks";
+import { isEditorReadOnly, READ_ONLY_NOTICE } from "./editor/access";
 import {
 	ADD_COMMENT_HOTKEYS,
 	getAddCommentTarget,
@@ -121,6 +122,7 @@ import {
 export interface ActiveReviewState {
 	file: TFile;
 	editor: Editor;
+	readOnly: boolean;
 	marks: CriticMark[];
 	nativeHighlights: NativeHighlight[];
 	activeMarkId: string | null;
@@ -161,6 +163,7 @@ interface CodeMirrorAdapter {
 
 interface ThreadPreviewData {
 	kind: "thread" | "suggestion";
+	readOnly: boolean;
 	label: string;
 	countLabel: string;
 	snippet: string;
@@ -778,9 +781,10 @@ export default class RelayCommentsPlugin
 			message.setText(data.snippet);
 		}
 
+		const writable = !data.readOnly && this.settings.showInlineActions;
 		const links: Array<{ label: string; aria: string; act: () => void }> =
 			data.kind === "suggestion"
-				? this.settings.showInlineActions
+				? writable
 					? [
 							{
 								label: "Accept",
@@ -795,12 +799,14 @@ export default class RelayCommentsPlugin
 						]
 					: []
 				: [
-						{
-							label: "Reply",
-							aria: "Reply in sidebar",
-							act: () => handlers.open({ focusReply: true }),
-						},
-						...(this.settings.showInlineActions && !data.resolved
+						data.readOnly
+							? { label: "Open", aria: "Open in sidebar", act: () => handlers.open() }
+							: {
+									label: "Reply",
+									aria: "Reply in sidebar",
+									act: () => handlers.open({ focusReply: true }),
+								},
+						...(writable && !data.resolved
 							? [
 									{
 										label: "Resolve",
@@ -1037,6 +1043,10 @@ export default class RelayCommentsPlugin
 		const found = this.findMarkRunAtRange(filePath, from, to, editorView);
 		if (!found) return null;
 		const { anchor, visibleComments } = found;
+		const surface = editorView
+			? this.findReviewEditorSurface(editorView)
+			: this.findReviewEditorSurfaceByPath(filePath);
+		const readOnly = surface ? this.editorIsReadOnly(surface.editor) : false;
 
 		if (visibleComments.length === 0) {
 			if (anchor.kind !== "critic") return null;
@@ -1045,6 +1055,7 @@ export default class RelayCommentsPlugin
 			const identity = this.getReviewerIdentityForMark(anchor.mark, filePath);
 			return {
 				kind: "suggestion",
+				readOnly,
 				label: parts.label,
 				countLabel: "",
 				snippet: clampPreviewSnippet(parts.snippet),
@@ -1066,6 +1077,7 @@ export default class RelayCommentsPlugin
 		);
 		return {
 			kind: "thread",
+			readOnly,
 			label: resolved
 				? "Resolved comment"
 				: anchor.kind === "critic" && isSuggestionMark(anchor.mark)
@@ -1275,6 +1287,7 @@ export default class RelayCommentsPlugin
 		return {
 			file,
 			editor,
+			readOnly: this.editorIsReadOnly(editor),
 			marks,
 			nativeHighlights,
 			activeMarkId: activeMark?.id ?? activeNativeHighlight?.id ?? null,
@@ -1325,6 +1338,7 @@ export default class RelayCommentsPlugin
 				? this.findReviewEditorSurfaceByPath(path)
 				: this.getCurrentReviewEditorSurface();
 		if (surface) this.rememberReviewEditorSurface(surface);
+		if (this.refuseIfReadOnly(surface?.editor)) return;
 		const activeFile = this.app.workspace.getActiveFile();
 		const filePath = surface?.file.path ?? path ?? activeFile?.path;
 		if (!filePath) {
@@ -1403,6 +1417,7 @@ export default class RelayCommentsPlugin
 		editor: Editor,
 		info?: { file?: TFile | null },
 	): void {
+		if (this.refuseIfReadOnly(editor)) return;
 		// A widget selection leaves the editor reporting a stale range.
 		const cm = this.getCodeMirrorEditor(editor) as unknown as
 			| TrustableEditorView
@@ -1457,6 +1472,7 @@ export default class RelayCommentsPlugin
 			new Notice("Open the commented note before saving this comment.");
 			return;
 		}
+		if (this.refuseIfReadOnly(refreshedEditor)) return;
 		const documentText = refreshedEditor.getValue();
 		const commentMarkup = this.formatAttachedCommentMarkup(comment, identity);
 		const marks = parseCriticMarkup(documentText);
@@ -1593,6 +1609,20 @@ export default class RelayCommentsPlugin
 
 	private getCodeMirrorEditor(editor: Editor): CodeMirrorAdapter | null {
 		return (editor as unknown as { cm?: CodeMirrorAdapter }).cm ?? null;
+	}
+
+	private editorIsReadOnly(editor: Editor): boolean {
+		const cm = this.getCodeMirrorEditor(editor) as unknown as
+			| { state?: unknown }
+			| null;
+		return !!cm?.state && isEditorReadOnly(cm as CodeMirrorEditorView);
+	}
+
+	/** True, with a notice, when the note cannot take the edit. */
+	private refuseIfReadOnly(editor: Editor | null | undefined): boolean {
+		if (!editor || !this.editorIsReadOnly(editor)) return false;
+		new Notice(READ_ONLY_NOTICE);
+		return true;
 	}
 
 	getAvailableIdentityProviders(): IdentityProviderOption[] {
@@ -1785,7 +1815,7 @@ export default class RelayCommentsPlugin
 
 	applyMarkActionFromSidebar(mark: CriticMark, action: CriticAction): void {
 		const editor = this.getCurrentReviewEditorSurface()?.editor;
-		if (!editor) return;
+		if (!editor || this.refuseIfReadOnly(editor)) return;
 		replaceMark(editor, mark, action);
 		this.refreshReviewSidebars();
 	}
@@ -1796,7 +1826,7 @@ export default class RelayCommentsPlugin
 		replacement: string,
 	): void {
 		const editor = this.getCurrentReviewEditorSurface()?.editor;
-		if (!editor) return;
+		if (!editor || this.refuseIfReadOnly(editor)) return;
 		editor.replaceRange(
 			replacement,
 			editor.offsetToPos(fromOffset),
@@ -1814,6 +1844,7 @@ export default class RelayCommentsPlugin
 		const editor = surface?.editor;
 		const path = surface?.file.path;
 		if (!editor || !path) return false;
+		if (this.refuseIfReadOnly(editor)) return false;
 		const editorView = surface.editorView;
 		const identity = await this.getCurrentReviewerIdentityAsync(path);
 		const refreshedSurface =
@@ -1844,7 +1875,7 @@ export default class RelayCommentsPlugin
 	updateCommentTextFromSidebar(mark: CriticMark, text: string): boolean {
 		if (mark.type !== "comment") return false;
 		const editor = this.getCurrentReviewEditorSurface()?.editor;
-		if (!editor) return false;
+		if (!editor || this.refuseIfReadOnly(editor)) return false;
 		const range = mark.ranges.commentText ?? [mark.contentFrom, mark.contentTo];
 		editor.replaceRange(
 			sanitizeCommentText(text),
@@ -2034,32 +2065,50 @@ export default class RelayCommentsPlugin
 			(editor) => this.showCommentPreviewAtCursor(editor),
 		);
 		this.addEditorCommand("add-addition", "Mark selection as addition", (editor) =>
-			wrapSelection(editor, "addition"),
+			this.editWith(editor, () => {
+				wrapSelection(editor, "addition");
+			}),
 		);
 		this.addEditorCommand("add-deletion", "Mark selection as deletion", (editor) =>
-			wrapSelection(editor, "deletion"),
+			this.editWith(editor, () => {
+				wrapSelection(editor, "deletion");
+			}),
 		);
 		this.addEditorCommand("add-substitution", "Mark selection as substitution", (editor) =>
-			addSubstitution(this.app, editor),
+			this.editWith(editor, () => addSubstitution(this.app, editor)),
 		);
 		this.addEditorCommand("add-highlight", "Highlight selection", (editor) =>
-			wrapSelection(editor, "highlight"),
+			this.editWith(editor, () => {
+				wrapSelection(editor, "highlight");
+			}),
 		);
-		this.addEditorCommand("accept-current", "Accept current comment or suggestion", (editor) => {
-			applyCurrentMarkAction(editor, "accept");
-		});
-		this.addEditorCommand("reject-current", "Reject current comment or suggestion", (editor) => {
-			applyCurrentMarkAction(editor, "reject");
-		});
-		this.addEditorCommand("accept-all", "Accept all comments and suggestions", (editor) => {
-			applyAllInEditor(editor, "accept");
-		});
-		this.addEditorCommand("reject-all", "Reject all comments and suggestions", (editor) => {
-			applyAllInEditor(editor, "reject");
-		});
-		this.addEditorCommand("finalize-for-publish", "Finalize for publish", (editor) => {
-			applyAllInEditor(editor, "accept");
-		});
+		this.addEditorCommand("accept-current", "Accept current comment or suggestion", (editor) =>
+			this.editWith(editor, () => {
+				applyCurrentMarkAction(editor, "accept");
+			}),
+		);
+		this.addEditorCommand("reject-current", "Reject current comment or suggestion", (editor) =>
+			this.editWith(editor, () => {
+				applyCurrentMarkAction(editor, "reject");
+			}),
+		);
+		this.addEditorCommand("accept-all", "Accept all comments and suggestions", (editor) =>
+			this.editWith(editor, () => applyAllInEditor(editor, "accept")),
+		);
+		this.addEditorCommand("reject-all", "Reject all comments and suggestions", (editor) =>
+			this.editWith(editor, () => applyAllInEditor(editor, "reject")),
+		);
+		this.addEditorCommand("finalize-for-publish", "Finalize for publish", (editor) =>
+			this.editWith(editor, () => applyAllInEditor(editor, "accept")),
+		);
+	}
+
+	private editWith(
+		editor: Editor,
+		edit: () => void | Promise<void>,
+	): void | Promise<void> {
+		if (this.refuseIfReadOnly(editor)) return;
+		return edit();
 	}
 
 	private addEditorCommand(
@@ -2246,7 +2295,7 @@ export default class RelayCommentsPlugin
 			item
 				.setTitle("Add comment")
 				.setIcon("message-square-plus")
-				.setDisabled(!editor.somethingSelected())
+				.setDisabled(!editor.somethingSelected() || this.editorIsReadOnly(editor))
 				.onClick(() => {
 					this.startCommentDraftFromEditor(editor, info);
 				});

@@ -116,6 +116,7 @@ export class ReviewSidebarView extends ItemView {
 	/** HoverParent for page previews spawned from links in comments. */
 	hoverPopover: HoverPopover | null = null;
 	private selectedItemId: string | null = null;
+	private readOnly = false;
 	private replyDraftItemId: string | null = null;
 	private replyDraftTarget: DraftTarget | null = null;
 	private editingCommentId: string | null = null;
@@ -332,6 +333,7 @@ export class ReviewSidebarView extends ItemView {
 	private renderContent(): void {
 		const root = this.contentEl;
 		const state = this.plugin.getActiveReviewState();
+		this.readOnly = state?.readOnly ?? false;
 		const externalState = state
 			? null
 			: this.plugin.getActiveExternalCommentState();
@@ -578,6 +580,9 @@ export class ReviewSidebarView extends ItemView {
 	private renderHeader(root: HTMLElement, title: string): void {
 		const header = root.createDiv({ cls: "critic-sidebar-header" });
 		header.createEl("h3", { text: title });
+		if (this.readOnly) {
+			header.createSpan({ cls: "critic-sidebar-readonly", text: "Read-only" });
+		}
 		const closeButton = header.createEl("button", {
 			cls: "critic-icon-button critic-sidebar-close-button",
 			attr: { "aria-label": "Close review sidebar" },
@@ -996,6 +1001,7 @@ export class ReviewSidebarView extends ItemView {
 	}
 
 	private addCardActions(parent: HTMLElement, item: ReviewItem): void {
+		if (this.readOnly) return;
 		const actions = parent.createDiv({ cls: "critic-card-actions" });
 		this.addResolveButton(actions, item);
 		if (itemHasSecondaryActions(item)) {
@@ -1056,6 +1062,7 @@ export class ReviewSidebarView extends ItemView {
 	}
 
 	private addCommentActions(parent: HTMLElement, onEdit: () => void): void {
+		if (this.readOnly) return;
 		const actions = parent.createDiv({
 			cls: "critic-card-actions critic-message-actions",
 		});
@@ -1328,7 +1335,7 @@ export class ReviewSidebarView extends ItemView {
 		mark: CriticMark | NativeHighlight,
 		selected: boolean,
 	): void {
-		if (!selected) {
+		if (!selected || this.readOnly) {
 			return;
 		}
 

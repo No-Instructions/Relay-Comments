@@ -42,6 +42,7 @@ import {
 	type NativeHighlight,
 } from "../markdown/highlights";
 import { isEditorSelectionTrusted, isFragmentEditor } from "./selection-trust";
+import { isEditorReadOnly } from "./access";
 
 export const setCommentDraftAnchor =
 	StateEffect.define<CommentDraftAnchor | null>();
@@ -348,7 +349,9 @@ export function createReviewEditorExtension(
 					update.viewportChanged ||
 					update.startState.field(criticField) !==
 						update.state.field(criticField) ||
-					update.startState.field(commentDraftAnchorField) !== draftAnchor
+					update.startState.field(commentDraftAnchorField) !== draftAnchor ||
+					isEditorReadOnly({ state: update.startState }) !==
+						isEditorReadOnly({ state: update.state })
 				) {
 					this.scheduleCommentButtonUpdate();
 				}
@@ -478,7 +481,7 @@ export function createReviewEditorExtension(
 			}
 
 			private measureCommentButton(): CommentButtonPlacement | null {
-				if (this.fragment) return null;
+				if (this.fragment || isEditorReadOnly(this.view)) return null;
 				const selection = this.view.state.selection.main;
 				const fieldValue = this.view.state.field(criticField);
 				if (
