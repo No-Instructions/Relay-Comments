@@ -7,6 +7,7 @@ import {
 	runsTouching,
 	type RepairableElement,
 	type RepairableNode,
+	isCommentBodyRender,
 } from "src/preview/blocks";
 
 // A minimal DOM with just enough querySelectorAll for the mangled-mark selector.
@@ -194,5 +195,18 @@ describe("matchRenderedAnchor", () => {
 	it("declines when the visible text alone is ambiguous", () => {
 		expect(matchRenderedAnchor(source, runs, marks, "word", null)).toBeNull();
 		expect(matchRenderedAnchor(source, runs, marks, "missing", null)).toBeNull();
+	});
+});
+
+describe("isCommentBodyRender", () => {
+	const inside = { closest: (selector: string) => (selector === ".critic-comment-markdown" ? {} : null) };
+	const outside = { closest: () => null };
+
+	it("recognises elements rendered inside a comment body", () => {
+		expect(isCommentBodyRender(inside)).toBe(true);
+	});
+
+	it("leaves note content alone", () => {
+		expect(isCommentBodyRender(outside)).toBe(false);
 	});
 });

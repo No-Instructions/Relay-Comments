@@ -14,6 +14,7 @@ import {
 import { highlightColorClass } from "../markdown/highlights";
 import { previewCommentComponents } from "./comment-components";
 import {
+	isCommentBodyRender,
 	marksIntact,
 	matchRenderedAnchor,
 	repairMangledMarks,
@@ -149,6 +150,7 @@ export function createReviewPostProcessor(
 	controller: PreviewDisplayController,
 ) {
 	return (el: HTMLElement, ctx: MarkdownPostProcessorContext): void => {
+		if (isCommentBodyRender(el)) return;
 		const mode = controller.getDisplayMode(ctx.sourcePath);
 		if (hideCommentFootnotes(el, ctx) || hideCommentOnlySection(el, ctx)) {
 			appendSectionCommentComponents(el, ctx);

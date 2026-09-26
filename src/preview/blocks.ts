@@ -140,3 +140,13 @@ export function runsTouching(
 		(run) => run.comments.length > 0 && run.from < to && run.to > from,
 	);
 }
+
+/** Whether a rendered element belongs to a comment body rather than a note.
+    Comment bodies go through Obsidian's renderer too, and treating them as
+    note content loops: the sidebar renders a body, the postprocessor reports
+    rendered comments, the sidebar renders again. */
+export function isCommentBodyRender(el: {
+	closest(selector: string): unknown;
+}): boolean {
+	return el.closest(".critic-comment-markdown") != null;
+}
