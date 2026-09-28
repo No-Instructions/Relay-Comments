@@ -610,6 +610,136 @@ Initial settings:
 3. Open the review sidebar when selecting comments.
 4. Show comment previews on hover.
 
+## Command Line Interface
+
+Relay Comments registers a command family with the Obsidian CLI so an agent
+or a script can read threads, act on them, and wait for review activity
+without a file watcher. The commands need Obsidian desktop 1.12.2 or later
+with the command line interface enabled under Settings, General, Advanced,
+and the vault open in the running app. Older apps and mobile register
+nothing and report nothing. The CLI is available on Windows, macOS, and
+Linux; the plugin adds no sockets, ports, or files of its own, so nothing
+in this surface is platform specific.
+
+Invocation is `obsidian vault=<name> <command> key=value ... [--json]`. Text
+answers are for people; `--json` answers carry `ok: true` with the payload,
+or `ok: false` with a `code` and `message`. The CLI's own exit code is
+always 0, so callers read `ok`. A flag named `text` is legal here because
+the format flag declares only `json`; declaring `text|json` would make the
+CLI treat `text=` as the `--text` shortcut and drop it.
+
+| Command | Purpose |
+| --- | --- |
+| `comments [path=<note>]` | Version, the identity comments are signed with, the identity directory, and watch state: cursor, watched scopes, tracked notes, and pending waiters. |
+| `comments:threads path=<note\|canvas\|folder> [--open]` | Threads in document order; on a canvas, node by node. Each carries its 1-based `index`, the anchor's `id`, `kind`, 1-based `line`, run offsets, anchor text, `comments` with `author`, `authorId`, `date`, and `text`, and `resolved`. Invalid marks are listed separately. A folder lists only notes that have threads. |
+| `comments:watch [path=<note\|canvas\|folder>] [since=<cursor>] [timeout=<seconds>] [kind=<kinds>] [ignore-author=<names>] [--any]` | Block until the next matching review change in scope, or return the kept matching events after `since` at once. |
+| `comments:comment path=<note\|canvas> (quote=<text> \| node=<id>) text=<comment> [line=<n>] [author=<name>]` | Open a thread on an exact passage, or on a canvas pin a comment to a node. |
+| `comments:reply path=<note\|canvas> thread=<n\|id> text=<reply> [author=<name>]` | Append to a thread. |
+| `comments:resolve path=<note\|canvas> thread=<n\|id>` | Resolve a thread with the sidebar's semantics; a canvas pin is marked resolved, as the pin UI does. |
+| `comments:accept path=<note\|canvas> thread=<n\|id>`, `comments:reject ...` | Apply a suggestion and drop its comments. |
+| `comments:suggest path=<note\|canvas> quote=<text> (replace=<text> \| insert=<text> \| --delete) [node=<id>] [line=<n>] [comment=<text>] [author=<name>]` | Write a substitution, an addition after the passage, or a deletion, optionally with an explanatory comment. |
+
+A thread is named by the index from the most recent listing or by its
+anchor id. A passage is named by an exact quote; when the quote occurs more
+than once the caller adds `line=`, and the error lists the candidate lines.
+A quote that touches an existing mark is refused, since CriticMarkup cannot
+nest; a quote that is exactly a native highlight's passage attaches the
+comment after that highlight without rewriting it.
+
+### Event stream
+
+The plugin keeps an in-memory log of review-mark changes. A note's marks are
+compared by kind and exact source, not position, so ordinary typing that
+leaves the marks alone produces nothing; a comment, reply, resolution, or
+suggestion produces one event with the marks `added` and `removed`, each
+with kind, 1-based line, readable text, author metadata, and a shortened
+`raw`.
+
+Canvases are watched alongside notes. A canvas contributes one `pin` mark
+per comment thread, keyed by the thread id and its resolved state, one
+`comment` mark per message in the thread, and the CriticMarkup inside its
+text cards. Canvas marks carry the `node` id instead of a line, except text
+card marks, which also carry their line within the card; pins and pin
+comments carry the `thread` id. Opening a pin, replying, resolving, and
+deleting a thread each produce an event; moving or resizing a node does
+not. A canvas that fails to parse, such as one caught mid-write, keeps its
+last snapshot. Changes made in an open canvas arrive when Obsidian saves
+it, typically within two seconds.
+
+Events are numbered; the number is the `cursor` a caller hands back
+as `since=` to resume without missing anything between two calls. The log
+keeps the last 1000 events and answers `gap: true` when a cursor predates
+them.
+
+Only watched scopes cost anything. The first `watch` on a note or folder
+arms that scope for the rest of the session and reads its notes once to
+snapshot them; a folder inside an armed folder adds nothing. Vault and
+editor changes to notes outside every armed scope are dropped on a path
+check, before any read or parse. Inside a scope, bursts of changes collapse
+into one parse after a quarter second of quiet, and at least once a second
+while a note keeps changing, so an open note reports a new comment before
+its autosave.
+
+Any number of `watch` calls may wait at once, each with its own scope and
+filter; the CLI transport and the renderer are not blocked while they wait.
+A call returns once: immediately when kept events after `since` match,
+otherwise on the next matching event, or on `timeout=` with an empty list
+and the current cursor. Without `timeout=` it waits until an event arrives
+or the plugin unloads. The caller runs it again with the returned cursor.
+
+Filters apply per call. `kind=` keeps only the named mark kinds:
+`comment`, `highlight`, `addition`, `deletion`, `substitution`, or `pin`.
+`ignore-author=` takes names or ids; an event whose signed marks are all by
+those authors is skipped along with the unsigned highlight or suggestion
+that came with them, which is how an agent ignores its own writes. `--any`
+also returns on edits that leave the marks unchanged; those go to that
+waiter only and are never kept. A rename is reported to a scope that holds
+either end of the move, and a move out of every watched scope is reported
+as a deletion.
+
+### Canvases
+
+Every command that takes a note also takes a canvas. A canvas lists two
+kinds of thread under one running index, node by node in file order: the
+CriticMarkup threads inside each text card, with the node id, the line
+within the card, and an id of the form `<node>:<mark id>`; and each comment
+pin, with the node id and the pin's own id. `quote=` searches the text
+cards and must match in exactly one card, narrowed with `node=` when
+needed, and `line=` counts within that card; the CriticMarkup written there
+is the same as in a note. `comments:comment node=<id>` without a quote pins
+a new thread to that node at its top-right corner, as the pin UI does;
+freestanding pins are not created from the CLI. A reply to a pin appends to
+its `comments`, resolving a pin sets `resolved: true`, and accept or reject
+refuse a pin. Pin comments are stored with `author`, `authorId` when the
+identity has one, `date`, and `text`, the shape the pin UI writes. Edits to
+an open canvas go through the canvas view, which then saves as it does for
+the pin UI; a closed canvas is rewritten through the vault as tab-indented
+JSON, preserving every other node and edge field.
+
+### Writing through the CLI
+
+An edit to an open note goes through its editor as one transaction with
+origin `relay-comments`, so collaboration sees an ordinary edit; a
+read-only editor refuses. A closed note is edited atomically through the
+vault. Comments written by the CLI carry `date` as an ISO-8601 UTC
+timestamp after `authorId` and `author`; the sidebar does not write dates.
+The signature defaults to the plugin's current reviewer identity. `author=`
+selects an entry from the identity directory by id or name, or signs with
+a plain display name. With no identity at all the comment carries only its
+date. Every write command accepts `author=`, including resolve, accept,
+reject, and a suggestion without a comment.
+
+Undo follows the signature. A write made as the user, with no `author=` or
+with `author=` naming the user's own identity by id or name, is an ordinary
+undo step in the open note or canvas. A write made as any other identity
+behaves like a collaborator's change: in a note it is dispatched outside
+the editor's undo history, and in a canvas it adds no history step and is
+replayed into the snapshots the user can step back to, so the user's undo
+takes back the user's own edits and leaves the other identity's in place.
+Canvas replay applies pin changes wherever the node and thread exist and a
+text-card change only to the card text it was made against. Write results
+report `undoable`.
+
 ## Testing Strategy
 
 Unit tests:
@@ -619,6 +749,8 @@ Unit tests:
 3. Accept/reject transformations.
 4. Reading-mode render policy output.
 5. Identity-provider selection and resolution.
+6. CLI commands against a fake note store, the event log's diff, scope,
+   filter, and cursor semantics, and the change feed's debounce.
 
 Integration tests:
 

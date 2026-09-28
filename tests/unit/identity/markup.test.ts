@@ -30,6 +30,31 @@ describe("formatAuthoredComment", () => {
 		expect(formatAuthoredComment("Looks good")).toBe("{>>Looks good<<}");
 	});
 
+	it("writes the date after the identity attributes when one is given", () => {
+		expect(
+			formatAuthoredComment(
+				"Looks good",
+				"123456",
+				"Bongo Cat",
+				"2026-09-26T12:00:00.000Z",
+			),
+		).toBe(
+			'{{authorId="123456" author="Bongo Cat" date="2026-09-26T12:00:00.000Z">>Looks good<<}}',
+		);
+		expect(
+			formatAuthoredComment("Looks good", undefined, "Claude", "2026-09-26T12:00:00.000Z"),
+		).toBe('{{author="Claude" date="2026-09-26T12:00:00.000Z">>Looks good<<}}');
+	});
+
+	it("keeps a date even without an identity and drops an unsafe one", () => {
+		expect(formatAuthoredComment("Looks good", undefined, undefined, "2026-09-26")).toBe(
+			'{{date="2026-09-26">>Looks good<<}}',
+		);
+		expect(formatAuthoredComment("Looks good", "123456", undefined, 'bad"date')).toBe(
+			'{{author="123456">>Looks good<<}}',
+		);
+	});
+
 	it("does not alter or embed an unsafe service ID", () => {
 		expect(formatAuthoredComment("Looks good", 'bad"id')).toBe(
 			"{>>Looks good<<}",

@@ -11,9 +11,14 @@ import {
 	type Hotkey,
 	type MarkdownFileInfo,
 	type Menu,
+	requireApiVersion,
 	type TFile,
 	type WorkspaceLeaf,
 } from "obsidian";
+import { ReviewEventLog } from "./cli/events";
+import type { ReviewEventFeed } from "./cli/feed";
+import { attachReviewEventFeed, buildCliContext, windowTimers } from "./cli/context";
+import { registerRelayCommentsCli } from "./cli/registerCli";
 import {
 	getComposerSubmitScopeBinding,
 	isComposerSubmitKey,
@@ -221,6 +226,8 @@ export default class RelayCommentsPlugin
 	private readonly identityRequests = new Map<string, Promise<void>>();
 	private identityRevision = 0;
 	private settingsTab: RelayCommentsSettingTab | null = null;
+	private reviewEvents: ReviewEventLog | null = null;
+	private reviewEventFeed: ReviewEventFeed | null = null;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -266,6 +273,7 @@ export default class RelayCommentsPlugin
 
 		this.registerCommands();
 		this.registerWorkspaceEvents();
+		this.registerCli();
 		this.captureActiveContentLeaf(
 			this.app.workspace.getActiveViewOfType(ItemView)?.leaf ?? null,
 		);
@@ -314,6 +322,10 @@ export default class RelayCommentsPlugin
 	}
 
 	onunload(): void {
+		this.reviewEventFeed?.dispose();
+		this.reviewEventFeed = null;
+		this.reviewEvents?.dispose();
+		this.reviewEvents = null;
 		this.canvasPins?.stop();
 		this.canvasPins = null;
 		this.externalCommentObserver?.disconnect();
@@ -2486,6 +2498,37 @@ export default class RelayCommentsPlugin
 			this.lastMarkdownPath = resolved.file.path;
 		}
 		return resolved;
+	}
+
+	/**
+	 * Register the `comments` command family with the Obsidian CLI. Needs a
+	 * desktop app that exposes registerCliHandler (1.12.2 and later); older
+	 * apps and mobile get no commands and no error. Vault events feed the
+	 * watch log once the layout is ready, so the initial file index never
+	 * registers as activity; until something is watched they cost a path
+	 * check and nothing more.
+	 */
+	private registerCli(): void {
+		if (!Platform.isDesktopApp || !requireApiVersion("1.12.2")) return;
+		const registrar = this as unknown as { registerCliHandler?: unknown };
+		if (typeof registrar.registerCliHandler !== "function") return;
+		const events = new ReviewEventLog({ timers: windowTimers });
+		this.reviewEvents = events;
+		const ctx = buildCliContext(this, events);
+		registerRelayCommentsCli(this, ctx);
+		this.app.workspace.onLayoutReady(() => {
+			if (this.reviewEvents !== events) return;
+			this.reviewEventFeed = attachReviewEventFeed(this, ctx);
+		});
+	}
+
+	/** The open Markdown view showing a note, for edits that should go through its editor. */
+	findOpenMarkdownView(path: string): MarkdownView | null {
+		return this.getMarkdownViewByPath(path);
+	}
+
+	noteEditorIsReadOnly(editor: Editor): boolean {
+		return this.editorIsReadOnly(editor);
 	}
 
 	private getMarkdownViewByPath(path: string): MarkdownView | null {
