@@ -1186,6 +1186,10 @@
 	gap: 10px;
 	max-height: 40vh;
 	overflow-y: auto;
+	/* Glyph overflow on fractional line heights rounds scrollHeight one
+	   pixel past clientHeight, which showed a scrollbar on a one-message
+	   thread; the padding absorbs it without hiding real overflow. */
+	padding-bottom: 2px;
 }
 
 .critic-canvas-card-text {

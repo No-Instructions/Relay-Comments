@@ -113,6 +113,10 @@ function usablePaneHeight(overlay: HTMLElement): number {
 export class CanvasCommentPins {
 	private card: HTMLElement | null = null;
 	private cardKey: string | null = null;
+	/** The open card's thread as rendered, to notice changes made elsewhere. */
+	private cardSignature: string | null = null;
+	/** The open card's parts that a refresh rebuilds or updates. */
+	private cardParts: CardParts | null = null;
 	private placement: (() => void) | null = null;
 	private menuPatches: Array<{
 		el: HTMLElement;
@@ -472,6 +476,14 @@ export class CanvasCommentPins {
 		if (!thread) {
 			this.closeCard();
 			return;
+		}
+		// A reply or resolution from a collaborator, Relay, or the CLI
+		// changes the thread under the open card. Rebuild the header and
+		// the comment list in place; the composer is never replaced, so a
+		// draft keeps its undo history, IME composition, focus, and (on
+		// mobile) the keyboard.
+		if (this.cardParts && threadSignature(thread) !== this.cardSignature) {
+			this.refreshCard(view, nodeId, threadId, thread, this.cardParts);
 		}
 		this.positionCard(view);
 	}
@@ -861,6 +873,174 @@ export class CanvasCommentPins {
 		}
 
 		const header = card.createDiv({ cls: "critic-canvas-card-header" });
+		this.renderCardHeader(header, view, nodeId, threadId, thread, pin);
+		const list = card.createDiv({ cls: "critic-canvas-card-comments" });
+		const listScope = this.renderCardComments(list, view, thread);
+
+		const composer = card.createDiv({
+			cls: "critic-thread-composer critic-composer-shell",
+		});
+		const textarea = composer.createEl("textarea", {
+			cls: "critic-thread-textarea",
+			attr: {
+				placeholder: thread.comments.length ? "Reply…" : "Comment…",
+			},
+		});
+		const actions = composer.createDiv({ cls: "critic-composer-actions" });
+		const submit = actions.createEl("button", {
+			cls: "critic-text-button critic-button-primary",
+			text: thread.comments.length ? "Reply" : "Comment",
+			attr: { type: "button" },
+		});
+		const cancel = actions.createEl("button", {
+			cls: "critic-text-button",
+			text: "Cancel",
+			attr: { type: "button" },
+		});
+		cancel.addEventListener("click", () => this.closeCard());
+		// The shortcut help advertises keys a phone doesn't have; the
+		// visible submit and cancel buttons are the whole story there.
+		if (!Platform.isMobile) {
+			const help = actions.createSpan({ cls: "critic-composer-help" });
+			const helpButton = help.createEl("button", {
+				cls: "critic-icon-button critic-composer-help-button",
+				attr: { type: "button", "aria-label": "Show composer shortcuts" },
+			});
+			setIcon(helpButton, "keyboard");
+			help.createDiv({
+				cls: "critic-composer-help-tooltip",
+				text: formatComposerSubmitHint(Platform.isMacOS),
+				attr: { role: "tooltip" },
+			});
+		}
+
+		const syncSubmit = () => {
+			submit.disabled = textarea.value.trim().length === 0;
+			composer.classList.toggle(
+				"has-content",
+				textarea.value.trim().length > 0,
+			);
+		};
+		syncSubmit();
+		const post = () => {
+			const text = textarea.value.trim();
+			if (!text) return;
+			const identity = this.host.getIdentity();
+			const current = this.findNode(view, nodeId);
+			if (!current) return;
+			this.writeNode(
+				view,
+				addReply(current, threadId, {
+					author: identity.name,
+					authorId: identity.id,
+					date: new Date().toISOString(),
+					text,
+				}),
+				nodeId,
+			);
+			// The reopened card focuses its own composer when it reveals.
+			this.openCard(view, nodeId, threadId, pin);
+		};
+		submit.addEventListener("click", post);
+		textarea.addEventListener("input", syncSubmit);
+		textarea.addEventListener("keydown", (event) => {
+			event.stopPropagation();
+			if (event.key === "Escape") {
+				event.preventDefault();
+				this.closeCard();
+				return;
+			}
+			if (!isComposerSubmitKey(event)) return;
+			event.preventDefault();
+			if (!submit.disabled) post();
+		});
+
+		// The overlay position is pure math from the canvas matrix, so the
+		// card can be placed and swapped in immediately — no settle wait,
+		// no first-paint clipping. The old same-thread card is removed in
+		// the same tick, so a submit never blanks the card.
+		previous?.remove();
+		previousCleanup?.();
+		this.card = card;
+		this.cardKey = key;
+		this.cardSignature = threadSignature(thread);
+		this.cardParts = { header, list, listScope, textarea, submit, pin };
+		this.cardOwner = view;
+		if (!card.classList.contains("is-flipped")) {
+			this.decideCardSide(view, card, key);
+		}
+		this.positionCard(view);
+		// The card's height settles after this first placement (comment
+		// bodies render, and focusing the composer can toggle the mobile
+		// navbar that bounds the pane) — waiting for the 400ms poll to
+		// re-clamp showed on film as the card hopping up almost a second
+		// after opening. Track the settle directly.
+		const resizeWatcher = new ResizeObserver(() => this.positionCard(view));
+		resizeWatcher.observe(card);
+		const settleTimer = window.setTimeout(() => this.positionCard(view), 120);
+		// pointerdown, not mousedown: the canvas prevents default on its
+		// touch handling, which cancels the synthesized mouse events, so a
+		// mousedown listener never sees background taps on mobile.
+		const onDocumentPointerDown = (event: PointerEvent) => {
+			const target = event.target as Node | null;
+			if (target && (card.contains(target) || pin?.contains(target))) {
+				return;
+			}
+			this.closeCard();
+		};
+		const onKeyDown = (event: KeyboardEvent) => {
+			if (event.key === "Escape") {
+				this.closeCard();
+				return;
+			}
+			// Backup for submit chords Obsidian's keymap ignores (e.g. the
+			// meta variant on Linux); the primary path is the pushed scope.
+			if (
+				document.activeElement === textarea &&
+				isComposerSubmitKey(event)
+			) {
+				event.preventDefault();
+				event.stopPropagation();
+				if (!submit.disabled) post();
+			}
+		};
+		// The composer advertises mod-Enter, but Obsidian's global keymap
+		// consumes that chord before it reaches the textarea (verified:
+		// the Control keydown arrived, the Enter never did). A pushed
+		// scope gets first chance, same as the sidebar view's composer.
+		const popScope = this.host.pushComposerScope(() => {
+			if (document.activeElement === textarea && !submit.disabled) {
+				post();
+			}
+		});
+		document.addEventListener("pointerdown", onDocumentPointerDown, true);
+		document.addEventListener("keydown", onKeyDown, true);
+		card.dataset.criticCleanup = "true";
+		this.cardCleanup = () => {
+			this.cardParts?.listScope.unload();
+			popScope();
+			resizeWatcher.disconnect();
+			window.clearTimeout(settleTimer);
+			document.removeEventListener(
+				"pointerdown",
+				onDocumentPointerDown,
+				true,
+			);
+			document.removeEventListener("keydown", onKeyDown, true);
+		};
+		this.sweepStaleActiveEditor();
+		textarea.focus();
+	}
+
+	/** The header: label, Resolved badge, resolve and more-actions buttons. */
+	private renderCardHeader(
+		header: HTMLElement,
+		view: CanvasViewLike,
+		nodeId: string,
+		threadId: string,
+		thread: CanvasCommentThread,
+		pin: HTMLElement | null,
+	): void {
 		header.createSpan({
 			cls: "critic-thread-preview-label",
 			text: "Comment",
@@ -914,11 +1094,17 @@ export class CanvasCommentPins {
 			);
 			menu.showAtMouseEvent(event);
 		});
+	}
 
+	/** The comment list; returns the component that owns rendered bodies. */
+	private renderCardComments(
+		list: HTMLElement,
+		view: CanvasViewLike,
+		thread: CanvasCommentThread,
+	): Component {
 		const identity = this.host.getIdentity();
 		const renderScope = new Component();
 		renderScope.load();
-		const list = card.createDiv({ cls: "critic-canvas-card-comments" });
 		for (const comment of thread.comments) {
 			const item = list.createDiv({ cls: "critic-canvas-card-comment" });
 			const commentHeader = item.createDiv({ cls: "critic-comment-header" });
@@ -959,157 +1145,34 @@ export class CanvasCommentPins {
 				},
 			);
 		}
+		return renderScope;
+	}
 
-		const composer = card.createDiv({
-			cls: "critic-thread-composer critic-composer-shell",
-		});
-		const textarea = composer.createEl("textarea", {
-			cls: "critic-thread-textarea",
-			attr: {
-				placeholder: thread.comments.length ? "Reply…" : "Comment…",
-			},
-		});
-		const actions = composer.createDiv({ cls: "critic-composer-actions" });
-		const submit = actions.createEl("button", {
-			cls: "critic-text-button critic-button-primary",
-			text: thread.comments.length ? "Reply" : "Comment",
-			attr: { type: "button" },
-		});
-		const cancel = actions.createEl("button", {
-			cls: "critic-text-button",
-			text: "Cancel",
-			attr: { type: "button" },
-		});
-		cancel.addEventListener("click", () => this.closeCard());
-		// The shortcut help advertises keys a phone doesn't have; the
-		// visible submit and cancel buttons are the whole story there.
-		if (!Platform.isMobile) {
-			const help = actions.createSpan({ cls: "critic-composer-help" });
-			const helpButton = help.createEl("button", {
-				cls: "critic-icon-button critic-composer-help-button",
-				attr: { type: "button", "aria-label": "Show composer shortcuts" },
-			});
-			setIcon(helpButton, "keyboard");
-			help.createDiv({
-				cls: "critic-composer-help-tooltip",
-				text: formatComposerSubmitHint(Platform.isMacOS),
-				attr: { role: "tooltip" },
-			});
-		}
-
-		const syncSubmit = () => {
-			submit.disabled = textarea.value.trim().length === 0;
-			composer.classList.toggle(
-				"has-content",
-				textarea.value.trim().length > 0,
-			);
-		};
-		syncSubmit();
-		const post = () => {
-			const text = textarea.value.trim();
-			if (!text) return;
-			const current = this.findNode(view, nodeId);
-			if (!current) return;
-			this.writeNode(
-				view,
-				addReply(current, threadId, {
-					author: identity.name,
-					authorId: identity.id,
-					date: new Date().toISOString(),
-					text,
-				}),
-				nodeId,
-			);
-			// The reopened card focuses its own composer when it reveals.
-			this.openCard(view, nodeId, threadId, pin);
-		};
-		submit.addEventListener("click", post);
-		textarea.addEventListener("input", syncSubmit);
-		textarea.addEventListener("keydown", (event) => {
-			event.stopPropagation();
-			if (event.key === "Escape") {
-				event.preventDefault();
-				this.closeCard();
-				return;
-			}
-			if (!isComposerSubmitKey(event)) return;
-			event.preventDefault();
-			if (!submit.disabled) post();
-		});
-
-		// The overlay position is pure math from the canvas matrix, so the
-		// card can be placed and swapped in immediately — no settle wait,
-		// no first-paint clipping. The old same-thread card is removed in
-		// the same tick, so a submit never blanks the card.
-		previous?.remove();
-		previousCleanup?.();
-		this.card = card;
-		this.cardKey = key;
-		this.cardOwner = view;
-		if (!card.classList.contains("is-flipped")) {
-			this.decideCardSide(view, card, key);
-		}
-		this.positionCard(view);
-		// The card's height settles after this first placement (comment
-		// bodies render, and focusing the composer can toggle the mobile
-		// navbar that bounds the pane) — waiting for the 400ms poll to
-		// re-clamp showed on film as the card hopping up almost a second
-		// after opening. Track the settle directly.
-		const resizeWatcher = new ResizeObserver(() => this.positionCard(view));
-		resizeWatcher.observe(card);
-		const settleTimer = window.setTimeout(() => this.positionCard(view), 120);
-		// pointerdown, not mousedown: the canvas prevents default on its
-		// touch handling, which cancels the synthesized mouse events, so a
-		// mousedown listener never sees background taps on mobile.
-		const onDocumentPointerDown = (event: PointerEvent) => {
-			const target = event.target as Node | null;
-			if (target && (card.contains(target) || pin?.contains(target))) {
-				return;
-			}
-			this.closeCard();
-		};
-		const onKeyDown = (event: KeyboardEvent) => {
-			if (event.key === "Escape") {
-				this.closeCard();
-				return;
-			}
-			// Backup for submit chords Obsidian's keymap ignores (e.g. the
-			// meta variant on Linux); the primary path is the pushed scope.
-			if (
-				document.activeElement === textarea &&
-				isComposerSubmitKey(event)
-			) {
-				event.preventDefault();
-				event.stopPropagation();
-				if (!submit.disabled) post();
-			}
-		};
-		// The composer advertises mod-Enter, but Obsidian's global keymap
-		// consumes that chord before it reaches the textarea (verified:
-		// the Control keydown arrived, the Enter never did). A pushed
-		// scope gets first chance, same as the sidebar view's composer.
-		const popScope = this.host.pushComposerScope(() => {
-			if (document.activeElement === textarea && !submit.disabled) {
-				post();
-			}
-		});
-		document.addEventListener("pointerdown", onDocumentPointerDown, true);
-		document.addEventListener("keydown", onKeyDown, true);
-		card.dataset.criticCleanup = "true";
-		this.cardCleanup = () => {
-			renderScope.unload();
-			popScope();
-			resizeWatcher.disconnect();
-			window.clearTimeout(settleTimer);
-			document.removeEventListener(
-				"pointerdown",
-				onDocumentPointerDown,
-				true,
-			);
-			document.removeEventListener("keydown", onKeyDown, true);
-		};
-		this.sweepStaleActiveEditor();
-		textarea.focus();
+	/**
+	 * Bring an open card up to date with its thread without touching the
+	 * composer. The list keeps its scroll position, or stays pinned to the
+	 * bottom when it was there, so a new reply comes into view.
+	 */
+	private refreshCard(
+		view: CanvasViewLike,
+		nodeId: string,
+		threadId: string,
+		thread: CanvasCommentThread,
+		parts: CardParts,
+	): void {
+		parts.header.empty();
+		this.renderCardHeader(parts.header, view, nodeId, threadId, thread, parts.pin);
+		const { list } = parts;
+		const atBottom = list.scrollTop + list.clientHeight >= list.scrollHeight - 4;
+		const scrollTop = list.scrollTop;
+		parts.listScope.unload();
+		list.empty();
+		parts.listScope = this.renderCardComments(list, view, thread);
+		list.scrollTop = atBottom ? list.scrollHeight : scrollTop;
+		const hasComments = thread.comments.length > 0;
+		parts.textarea.placeholder = hasComments ? "Reply…" : "Comment…";
+		parts.submit.setText(hasComments ? "Reply" : "Comment");
+		this.cardSignature = threadSignature(thread);
 	}
 
 	/**
@@ -1240,6 +1303,8 @@ export class CanvasCommentPins {
 	closeCard(): void {
 		this.cardCleanup?.();
 		this.cardCleanup = null;
+		this.cardSignature = null;
+		this.cardParts = null;
 		this.card?.remove();
 		this.card = null;
 		this.cardKey = null;
@@ -1248,4 +1313,19 @@ export class CanvasCommentPins {
 		// moment; see sweepStaleActiveEditor.
 		this.sweepStaleActiveEditor();
 	}
+}
+
+/** The open card's parts that an in-place refresh touches. */
+interface CardParts {
+	header: HTMLElement;
+	list: HTMLElement;
+	listScope: Component;
+	textarea: HTMLTextAreaElement;
+	submit: HTMLButtonElement;
+	pin: HTMLElement | null;
+}
+
+/** What the card shows of a thread; any change re-renders the open card. */
+function threadSignature(thread: CanvasCommentThread): string {
+	return JSON.stringify([thread.resolved === true, thread.comments]);
 }
