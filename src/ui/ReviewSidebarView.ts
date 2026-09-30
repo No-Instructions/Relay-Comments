@@ -52,7 +52,7 @@ import {
 	reconcileDraftTarget,
 	type DraftTarget,
 } from "./draft-reconciliation";
-import { sidebarScrollTopForRender } from "./sidebar-scroll";
+import { sidebarScrollTopForRender, sidebarSourceChanged } from "./sidebar-scroll";
 import { commentDraftKey } from "../editor/comment-draft-anchor";
 import {
 	highlightColorClass,
@@ -116,6 +116,8 @@ export class ReviewSidebarView extends ItemView {
 	/** HoverParent for page previews spawned from links in comments. */
 	hoverPopover: HoverPopover | null = null;
 	private selectedItemId: string | null = null;
+	/** The note the picked card belongs to; a pick made for an incoming note survives the switch. */
+	private pickSourceKey: string | null = null;
 	private readOnly = false;
 	private replyDraftItemId: string | null = null;
 	private replyDraftTarget: DraftTarget | null = null;
@@ -227,6 +229,7 @@ export class ReviewSidebarView extends ItemView {
 		if (!item) return;
 
 		this.selectedItemId = item.id;
+		this.pickSourceKey = sourceKeyOf(state, null);
 		this.replyDraftItemId = item.id;
 		this.replyDraftTarget = toDraftTarget(item);
 		this.render();
@@ -337,11 +340,7 @@ export class ReviewSidebarView extends ItemView {
 		const externalState = state
 			? null
 			: this.plugin.getActiveExternalCommentState();
-		const sourceKey = state
-			? `review:${state.file.path}`
-			: externalState
-				? `external:${externalState.filePath ?? externalState.title}`
-				: "empty";
+		const sourceKey = sourceKeyOf(state, externalState);
 		// Emptying the scroller collapses it and zeroes scrollTop; put it back
 		// once the new content exists so a rebuild doesn't move the viewport.
 		const scrollTop = sidebarScrollTopForRender(
@@ -349,6 +348,18 @@ export class ReviewSidebarView extends ItemView {
 			sourceKey,
 			root.scrollTop,
 		);
+		// A pick belongs to the note it was made in. When another note takes
+		// over, drop it unless it was made for that note, as an activation from
+		// a hover preview is.
+		if (
+			sidebarSourceChanged(this.lastRenderedSourceKey, sourceKey) &&
+			this.pickSourceKey !== sourceKey
+		) {
+			this.selectedItemId = null;
+			this.replyDraftItemId = null;
+			this.replyDraftTarget = null;
+			this.editingCommentId = null;
+		}
 		this.resetCommentRenderScope();
 		root.empty();
 		root.addClass("critic-sidebar");
@@ -570,6 +581,7 @@ export class ReviewSidebarView extends ItemView {
 		comment: ExternalCommentComponent,
 	): void {
 		this.selectedItemId = itemId;
+		this.pickSourceKey = this.lastRenderedSourceKey;
 		this.replyDraftItemId = null;
 		this.replyDraftTarget = null;
 		this.editingCommentId = null;
@@ -1205,6 +1217,7 @@ export class ReviewSidebarView extends ItemView {
 			this.editingCommentId = null;
 		}
 		this.selectedItemId = item.id;
+		this.pickSourceKey = this.lastRenderedSourceKey;
 		this.replyDraftItemId = item.id;
 		this.replyDraftTarget = toDraftTarget(item);
 		const range = getItemTargetRange(item);
@@ -1761,4 +1774,13 @@ function initials(name: string): string {
 		.slice(0, 2)
 		.map((word) => word[0]?.toUpperCase() ?? "")
 		.join("");
+}
+
+function sourceKeyOf(
+	state: ActiveReviewState | null,
+	externalState: { filePath?: string | null; title: string } | null,
+): string {
+	if (state) return `review:${state.file.path}`;
+	if (externalState) return `external:${externalState.filePath ?? externalState.title}`;
+	return "empty";
 }

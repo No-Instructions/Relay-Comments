@@ -1,5 +1,8 @@
 import { describe, expect, it } from "@jest/globals";
-import { sidebarScrollTopForRender } from "src/ui/sidebar-scroll";
+import {
+	sidebarScrollTopForRender,
+	sidebarSourceChanged,
+} from "src/ui/sidebar-scroll";
 
 describe("sidebar scroll restoration", () => {
 	it("keeps the viewport steady while the same note rerenders", () => {
@@ -26,5 +29,17 @@ describe("sidebar scroll restoration", () => {
 
 	it("starts the initial render at the top", () => {
 		expect(sidebarScrollTopForRender(null, "review:one.md", 420)).toBe(0);
+	});
+});
+
+describe("sidebarSourceChanged", () => {
+	it("is false for the first render and for a rebuild of the same note", () => {
+		expect(sidebarSourceChanged(null, "review:a.md")).toBe(false);
+		expect(sidebarSourceChanged("review:a.md", "review:a.md")).toBe(false);
+	});
+
+	it("is true when another note takes over the sidebar", () => {
+		expect(sidebarSourceChanged("review:a.md", "review:b.md")).toBe(true);
+		expect(sidebarSourceChanged("review:a.md", "empty")).toBe(true);
 	});
 });

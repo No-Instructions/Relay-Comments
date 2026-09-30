@@ -60,6 +60,7 @@ import {
 	wrapSelection,
 	addSubstitution,
 	getCurrentMark,
+	markForRange,
 } from "./editor/commands";
 import {
 	createReviewEditorExtension,
@@ -211,6 +212,11 @@ export default class RelayCommentsPlugin
 	private lastMarkdownPath: string | null = null;
 	private lastContentLeaf: WorkspaceLeaf | null = null;
 	private externalCommentObserver: MutationObserver | null = null;
+	/** Per editor, the selection CodeMirror last reported and the document it was in. */
+	private editorSelectionSnapshots = new WeakMap<
+		CodeMirrorEditorView,
+		{ doc: CodeMirrorEditorView["state"]["doc"]; from: number; to: number }
+	>();
 	private externalCommentRefreshTimer: number | null = null;
 	private reviewSidebarOpenPromise: Promise<void> | null = null;
 	private sidebarRefreshTimer: number | null = null;
@@ -410,8 +416,41 @@ export default class RelayCommentsPlugin
 	}
 
 	notifyEditorSelectionChanged(editorView?: CodeMirrorEditorView): void {
-		if (editorView) this.rememberReviewEditor(editorView);
+		if (editorView) {
+			this.rememberReviewEditor(editorView);
+			this.snapshotSelection(editorView);
+		}
 		this.scheduleReviewSidebarRefresh(120);
+	}
+
+	/** A background edit keeps its editor's selection current without making
+	    that editor the reviewed one. */
+	notifyEditorDocumentChanged(editorView: CodeMirrorEditorView): void {
+		this.snapshotSelection(editorView);
+	}
+
+	notifyEditorDocumentReplaced(editorView: CodeMirrorEditorView): void {
+		this.editorSelectionSnapshots.delete(editorView);
+	}
+
+	private snapshotSelection(editorView: CodeMirrorEditorView): void {
+		const { from, to } = editorView.state.selection.main;
+		this.editorSelectionSnapshots.set(editorView, {
+			doc: editorView.state.doc,
+			from,
+			to,
+		});
+	}
+
+	/** The selection CodeMirror last reported for this editor and document, or null while
+	    the editor holds a document its selection has not been set in yet. */
+	private trustedSelection(
+		editorView: CodeMirrorEditorView | null | undefined,
+	): { from: number; to: number } | null {
+		if (!editorView) return null;
+		const snapshot = this.editorSelectionSnapshots.get(editorView);
+		if (!snapshot || snapshot.doc !== editorView.state.doc) return null;
+		return { from: snapshot.from, to: snapshot.to };
 	}
 
 	notifyRenderedCommentsChanged(): void {
@@ -1291,12 +1330,16 @@ export default class RelayCommentsPlugin
 		const text = editor.getValue();
 		const marks = parseCriticMarkup(text);
 		const nativeHighlights = parseNativeHighlights(text, marks);
-		const activeMark = getCurrentMark(editor);
-		const cursorOffset = editor.posToOffset(editor.getCursor("from"));
-		const activeNativeHighlight = findNativeHighlightAtOffset(
-			nativeHighlights,
-			cursorOffset,
-		);
+		// The cursor thread comes from what CodeMirror reported for this
+		// document. While a pane loads another note, the editor's own cursor
+		// still points into the old one.
+		const selection = this.trustedSelection(surface.editorView);
+		const activeMark = selection
+			? markForRange(marks, selection.from, selection.to)
+			: null;
+		const activeNativeHighlight = selection
+			? findNativeHighlightAtOffset(nativeHighlights, selection.from)
+			: null;
 		return {
 			file,
 			editor,

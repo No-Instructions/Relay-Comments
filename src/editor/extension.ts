@@ -71,6 +71,10 @@ export interface ReviewEditorController {
 	scheduleThreadPreviewDismiss(): void;
 	hideThreadPreview(): void;
 	notifyEditorSelectionChanged(editorView?: EditorView): void;
+	/** The document changed under an unchanged selection, as a background edit does. */
+	notifyEditorDocumentChanged(editorView: EditorView): void;
+	/** Obsidian loaded another document into this editor; its selection is not yet meaningful. */
+	notifyEditorDocumentReplaced(editorView: EditorView): void;
 	startCommentDraft(
 		path: string | null,
 		from: number,
@@ -274,7 +278,14 @@ export function createReviewEditorExtension(
 				this.scheduleCommentButtonUpdate();
 			};
 
+			private lastPath: string | null;
+			private awaitingLoad = false;
+
 			constructor(private view: EditorView) {
+				this.lastPath = readPath(view.state);
+				// An editor that already exists when the plugin loads has a
+				// selection the sidebar should know about from the start.
+				controller.notifyEditorDocumentChanged(view);
 				this.renderedBlockObserver = new MutationObserver((records) => {
 					if (mutationTouchesEmbeddedBlock(records)) {
 						this.scheduleRenderedBlockRewrite();
@@ -338,9 +349,29 @@ export function createReviewEditorExtension(
 						update.state.sliceDoc(draftAnchor.from, draftAnchor.to),
 					);
 				}
-				// Fragment offsets are the cell's, not the note's.
-				if (update.selectionSet && !this.fragment) {
-					controller.notifyEditorSelectionChanged(this.view);
+				// Fragment offsets are the cell's, not the note's. Once the pane's
+				// file changes, the next whole-document replacement that sets no
+				// selection is Obsidian loading that note, and the selection it
+				// maps over is the old note's. Any other replacement is an edit.
+				const path = readPath(update.state);
+				if (path !== this.lastPath) {
+					this.lastPath = path;
+					this.awaitingLoad = true;
+				}
+				if (!this.fragment) {
+					if (
+						this.awaitingLoad &&
+						!update.selectionSet &&
+						documentReplaced(update)
+					) {
+						this.awaitingLoad = false;
+						controller.notifyEditorDocumentReplaced(this.view);
+					} else if (update.selectionSet) {
+						this.awaitingLoad = false;
+						controller.notifyEditorSelectionChanged(this.view);
+					} else if (update.docChanged) {
+						controller.notifyEditorDocumentChanged(this.view);
+					}
 				}
 				if (
 					refreshUi ||
@@ -587,6 +618,17 @@ function canReuseTrailingEdit(
 		value.lastReviewRangeEnd,
 		changes,
 	);
+}
+
+function documentReplaced(update: ViewUpdate): boolean {
+	if (!update.docChanged) return false;
+	const length = update.startState.doc.length;
+	if (length === 0) return false;
+	let whole = false;
+	update.changes.iterChangedRanges((fromA, toA) => {
+		if (fromA === 0 && toA === length) whole = true;
+	});
+	return whole;
 }
 
 function readPath(state: EditorState): string | null {
