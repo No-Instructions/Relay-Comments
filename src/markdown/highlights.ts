@@ -8,7 +8,7 @@ export type HighlightColor =
 	| "blue"
 	| "purple";
 
-const COLOR_EMOJIS = [
+export const COLOR_EMOJIS = [
 	["🔴", "red"],
 	["🟠", "orange"],
 	["🟢", "green"],

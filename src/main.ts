@@ -73,6 +73,7 @@ import {
 } from "./editor/selection-trust";
 import { matchRenderedAnchor, runsTouching } from "./preview/blocks";
 import { isEditorReadOnly, READ_ONLY_NOTICE } from "./editor/access";
+import { narrowAnchorRange } from "./critic/anchor-range";
 import {
 	ADD_COMMENT_HOTKEYS,
 	getAddCommentTarget,
@@ -1357,9 +1358,29 @@ export default class RelayCommentsPlugin
 			new Notice("Open a Markdown note before adding a comment.");
 			return;
 		}
-		// CriticMarkup can't express overlapping marks.
 		const editorText = surface?.editor.getValue();
 		const marks = editorText ? parseCriticMarkup(editorText) : [];
+		const nativeHighlights = editorText
+			? parseNativeHighlights(editorText, marks)
+			: [];
+		// A complete native highlight is matched on the raw selection; any other
+		// selection anchors to the text after its line's block syntax.
+		const nativeHighlight = findNativeHighlightForSelection(
+			nativeHighlights,
+			from,
+			to,
+		);
+		if (!nativeHighlight && editorText) {
+			const anchor = narrowAnchorRange(editorText, from, to);
+			if (!anchor) {
+				new Notice("Select text to comment on.");
+				return;
+			}
+			from = anchor.from;
+			to = anchor.to;
+			selectedText = editorText.slice(from, to);
+		}
+		// CriticMarkup can't express overlapping marks.
 		if (
 			editorText &&
 			marks.some(
@@ -1371,14 +1392,6 @@ export default class RelayCommentsPlugin
 			);
 			return;
 		}
-		const nativeHighlights = editorText
-			? parseNativeHighlights(editorText, marks)
-			: [];
-		const nativeHighlight = findNativeHighlightForSelection(
-			nativeHighlights,
-			from,
-			to,
-		);
 		const overlappingNativeHighlight = nativeHighlights.some(
 			(highlight) => highlight.from < to && highlight.to > from,
 		);
@@ -1440,10 +1453,8 @@ export default class RelayCommentsPlugin
 			);
 			return;
 		}
-		const fromPos = editor.getCursor("from");
-		const toPos = editor.getCursor("to");
-		const from = editor.posToOffset(fromPos);
-		const to = editor.posToOffset(toPos);
+		const from = editor.posToOffset(editor.getCursor("from"));
+		const to = editor.posToOffset(editor.getCursor("to"));
 		const selectedText = editor.getSelection();
 		if (from === to || selectedText.length === 0) {
 			new Notice("Select text to comment on.");

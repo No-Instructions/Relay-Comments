@@ -4,6 +4,7 @@ import {
 	findMarkAtOffset,
 	parseCriticMarkup,
 } from "../critic/parse";
+import { narrowAnchorRange, type AnchorRange } from "../critic/anchor-range";
 import { replacementForMark, type CriticAction } from "../critic/transform";
 import type { CriticMark } from "../critic/types";
 import { promptText } from "../ui/PromptModal";
@@ -12,7 +13,6 @@ export function wrapSelection(
 	editor: Editor,
 	type: "addition" | "deletion" | "highlight",
 ): void {
-	const selection = editor.getSelection();
 	const wrappers = {
 		addition: ["{++", "++}"],
 		deletion: ["{--", "--}"],
@@ -20,6 +20,46 @@ export function wrapSelection(
 	} as const;
 	const [open, close] = wrappers[type];
 	const insertionStart = editor.posToOffset(editor.getCursor("from"));
+	if (type === "highlight") {
+		// A highlight anchors text, so block syntax stays outside it. Every
+		// selection is wrapped in one transaction, and each caret ends after
+		// its closing marker.
+		const text = editor.getValue();
+		const anchors = editor
+			.listSelections()
+			.map((range) => {
+				const a = editor.posToOffset(range.anchor);
+				const b = editor.posToOffset(range.head);
+				return narrowAnchorRange(text, Math.min(a, b), Math.max(a, b));
+			})
+			.filter((anchor): anchor is AnchorRange => anchor !== null)
+			.sort((a, b) => a.from - b.from);
+		if (anchors.length > 0) {
+			const wrapped = anchors.reduce(
+				(result, anchor, index) => {
+					const previousEnd = index === 0 ? 0 : anchors[index - 1].to;
+					return result + text.slice(previousEnd, anchor.from) + open + text.slice(anchor.from, anchor.to) + close;
+				},
+				"",
+			) + text.slice(anchors[anchors.length - 1].to);
+			const added = open.length + close.length;
+			editor.transaction(
+				{
+					changes: anchors.map((anchor) => ({
+						from: editor.offsetToPos(anchor.from),
+						to: editor.offsetToPos(anchor.to),
+						text: `${open}${text.slice(anchor.from, anchor.to)}${close}`,
+					})),
+					selections: anchors.map((anchor, index) => ({
+						from: positionAt(wrapped, anchor.to + added * (index + 1)),
+					})),
+				},
+				"relay-comments",
+			);
+			return;
+		}
+	}
+	const selection = editor.getSelection();
 	editor.replaceSelection(`${open}${selection}${close}`, "relay-comments");
 	if (selection.length === 0) {
 		editor.setCursor(editor.offsetToPos(insertionStart + open.length));
@@ -85,12 +125,27 @@ export function replaceMark(
 }
 
 export function getCurrentMark(editor: Editor): CriticMark | null {
-	const text = editor.getValue();
-	const marks = parseCriticMarkup(text);
-	const from = editor.posToOffset(editor.getCursor("from"));
-	const to = editor.posToOffset(editor.getCursor("to"));
-	if (from !== to) {
-		return findFirstMarkInRange(marks, from, to);
-	}
+	const marks = parseCriticMarkup(editor.getValue());
+	return markForRange(
+		marks,
+		editor.posToOffset(editor.getCursor("from")),
+		editor.posToOffset(editor.getCursor("to")),
+	);
+}
+
+/** The mark a selection sits in: the first one a range touches, or the one at a caret. */
+export function markForRange(
+	marks: CriticMark[],
+	from: number,
+	to: number,
+): CriticMark | null {
+	if (from !== to) return findFirstMarkInRange(marks, from, to);
 	return findMarkAtOffset(marks, from);
+}
+
+/** Line and column of an offset in `text`, for positions in a document that does not exist yet. */
+function positionAt(text: string, offset: number): { line: number; ch: number } {
+	const head = text.slice(0, offset);
+	const line = (head.match(/\n/g) ?? []).length;
+	return { line, ch: offset - (head.lastIndexOf("\n") + 1) };
 }

@@ -67,6 +67,48 @@ describe("selection trust", () => {
 		expect(selectionTrust(facts({ domText: "" }))).toBe("text-mismatch");
 	});
 
+	it("accepts a mapped selection that stops short of hidden syntax only", () => {
+		// An inactive heading line renders without its `##`, so the DOM selection
+		// maps to 3..11 while the state holds 0..11. Same for hidden `**`.
+		expect(
+			selectionTrust(
+				facts({ domText: "Must fix", stateText: "## Must fix", stateFrom: 0, domRange: { from: 3, to: 11 } }),
+			),
+		).toBe("agrees");
+		expect(
+			selectionTrust(
+				facts({ domText: "bold", stateText: "**bold**", stateFrom: 10, domRange: { from: 12, to: 16 } }),
+			),
+		).toBe("agrees");
+	});
+
+	it("decides a long run of syntax followed by text without backtracking", () => {
+		const fence = "`".repeat(40) + "js\n";
+		const started = Date.now();
+		expect(
+			selectionTrust(
+				facts({ domText: "code", stateText: fence + "code", stateFrom: 0, domRange: { from: fence.length, to: fence.length + 4 } }),
+			),
+		).toBe("text-mismatch");
+		expect(Date.now() - started).toBeLessThan(200);
+	});
+
+	it("still distrusts a mapped selection that is missing ordinary text", () => {
+		expect(
+			selectionTrust(
+				facts({ domText: "prose", stateText: "Some prose", stateFrom: 0, domRange: { from: 5, to: 10 } }),
+			),
+		).toBe("text-mismatch");
+	});
+
+	it("agrees when the mapped range is exactly the state range", () => {
+		expect(
+			selectionTrust(
+				facts({ domText: "Some prose", stateText: "Some prose", stateFrom: 40, domRange: { from: 40, to: 50 } }),
+			),
+		).toBe("agrees");
+	});
+
 	it("ignores whitespace differences between rendered and source text", () => {
 		// A rendered selection legitimately collapses and re-wraps whitespace.
 		expect(
@@ -222,6 +264,7 @@ describe("readDomSelectionFacts", () => {
 		expect(facts).toEqual({
 			domText: "Some prose",
 			endsInsideContent: 2,
+			domRange: null,
 			anchorEditable: "true",
 			focusEditable: "true",
 			stateText: "Some prose",

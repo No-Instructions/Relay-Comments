@@ -27,6 +27,10 @@ export interface DomSelectionFacts {
 	focusEditable: string | null;
 	/** What CodeMirror believes is selected. */
 	stateText: string;
+	/** Document offset where `stateText` starts, when the view can map DOM positions. */
+	stateFrom?: number;
+	/** Document offsets the DOM selection maps to, when both ends are inside the editor. */
+	domRange?: { from: number; to: number } | null;
 }
 
 const DISTRUSTED: ReadonlySet<SelectionTrust> = new Set<SelectionTrust>([
@@ -43,6 +47,20 @@ export function selectionTrust(facts: DomSelectionFacts): SelectionTrust {
 		return "uneditable-widget";
 
 	if (facts.endsInsideContent === 1) return "partly-outside";
+
+	if (facts.domRange && facts.stateFrom !== undefined) {
+		const stateTo = facts.stateFrom + facts.stateText.length;
+		const { from, to } = facts.domRange;
+		if (from === facts.stateFrom && to === stateTo) return "agrees";
+		// Live Preview hides syntax on inactive lines, so the DOM selection can
+		// stop short of the state selection, but only by syntax characters.
+		if (from < to && from >= facts.stateFrom && to <= stateTo) {
+			const before = facts.stateText.slice(0, from - facts.stateFrom);
+			const after = facts.stateText.slice(to - facts.stateFrom);
+			if (isHiddenSyntax(before) && isHiddenSyntax(after)) return "agrees";
+		}
+		return "text-mismatch";
+	}
 
 	// Rendered and source text differ in whitespace only.
 	if (squeeze(facts.domText) !== squeeze(facts.stateText))
@@ -67,12 +85,16 @@ export interface DomElementLike extends DomNodeLike {
 	contains(node: DomNodeLike | null): boolean;
 }
 
+export interface DomRangeLike {
+	startContainer: DomNodeLike;
+	startOffset: number;
+	endContainer: DomNodeLike;
+	endOffset: number;
+}
+
 export interface DomSelectionLike {
 	rangeCount: number;
-	getRangeAt(index: number): {
-		startContainer: DomNodeLike;
-		endContainer: DomNodeLike;
-	};
+	getRangeAt(index: number): DomRangeLike;
 	toString(): string;
 }
 
@@ -96,18 +118,38 @@ export interface TrustableEditorView {
 		selection: { main: { from: number; to: number } };
 		sliceDoc(from: number, to: number): string;
 	};
+	posAtDOM?(node: DomNodeLike, offset: number): number;
 }
 
 /** The verdict for a live editor's main selection. */
 export function editorSelectionTrust(view: TrustableEditorView): SelectionTrust {
 	const { from, to } = view.state.selection.main;
-	return selectionTrust(
-		readDomSelectionFacts(
+	// Positions map only for this editor's own text: an end inside a nested
+	// editor (a table cell) maps to the widget, not to what is selected.
+	const host = view.contentDOM.closest(".cm-editor");
+	const ownText = (node: DomNodeLike): boolean =>
+		elementOf(node)?.closest(".cm-editor") === host;
+	const mapRange = view.posAtDOM
+		? (range: DomRangeLike): { from: number; to: number } | null => {
+				if (!ownText(range.startContainer) || !ownText(range.endContainer)) return null;
+				try {
+					const a = view.posAtDOM!(range.startContainer, range.startOffset);
+					const b = view.posAtDOM!(range.endContainer, range.endOffset);
+					return a === b ? null : { from: Math.min(a, b), to: Math.max(a, b) };
+				} catch {
+					return null;
+				}
+			}
+		: undefined;
+	return selectionTrust({
+		...readDomSelectionFacts(
 			view.dom.ownerDocument.getSelection(),
 			view.contentDOM,
 			view.state.sliceDoc(from, to),
+			mapRange,
 		),
-	);
+		stateFrom: from,
+	});
 }
 
 /** Whether `state.selection` still describes what the user has selected on screen. */
@@ -120,6 +162,7 @@ export function readDomSelectionFacts(
 	selection: DomSelectionLike | null,
 	contentDOM: DomElementLike,
 	stateText: string,
+	mapRange?: (range: DomRangeLike) => { from: number; to: number } | null,
 ): DomSelectionFacts {
 	if (!selection || selection.rangeCount === 0)
 		return {
@@ -142,6 +185,7 @@ export function readDomSelectionFacts(
 		anchorEditable: startInside ? editableOf(range.startContainer) : null,
 		focusEditable: endInside ? editableOf(range.endContainer) : null,
 		stateText,
+		domRange: startInside && endInside && mapRange ? mapRange(range) : null,
 	};
 }
 
@@ -166,4 +210,34 @@ function editableOf(node: DomNodeLike): string | null {
 
 function squeeze(value: string): string {
 	return value.replace(/\s+/g, "");
+}
+
+const SYNTAX_CHARS = new Set("#*_~=`>-+![]()%|");
+
+/** Markdown syntax Live Preview hides on an inactive line, and nothing else.
+    A single pass: every character is whitespace, a syntax character, or part
+    of an ordered-list number such as `12.`. */
+function isHiddenSyntax(value: string): boolean {
+	let i = 0;
+	while (i < value.length) {
+		const char = value[i];
+		if (/\s/.test(char) || SYNTAX_CHARS.has(char)) {
+			i += 1;
+			continue;
+		}
+		if (/\d/.test(char)) {
+			let j = i;
+			while (j < value.length && /\d/.test(value[j])) j += 1;
+			if (value[j] === "." || value[j] === ")") {
+				i = j + 1;
+				continue;
+			}
+		}
+		if ((char === "x" || char === "X") && value[i - 1] === "[" && value[i + 1] === "]") {
+			i += 1;
+			continue;
+		}
+		return false;
+	}
+	return true;
 }
