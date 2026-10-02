@@ -1,3 +1,4 @@
+import { narrowAnchorRange } from "../critic/anchor-range";
 import type { CliData, CliFlags } from "obsidian";
 import type { CanvasComment } from "../canvas/comments-data";
 import { sanitizeCommentText } from "../critic/comment-text";
@@ -447,7 +448,20 @@ function planComment(content: string, range: { from: number; to: number }, marku
 	changes: TextChange[];
 	anchorFrom: number;
 } {
-	const native = checkAnchorRange(content, range.from, range.to);
+	let native = checkAnchorRange(content, range.from, range.to);
+	if (!native) {
+		// A quote that starts at a bullet or heading hashes anchors to the
+		// text after them, as a selection in the editor does.
+		const anchor = narrowAnchorRange(content, range.from, range.to);
+		if (!anchor) {
+			throw new CliError(
+				"empty_quote",
+				"quote= names only block syntax or whitespace; quote the passage after it",
+			);
+		}
+		range = anchor;
+		native = checkAnchorRange(content, range.from, range.to);
+	}
 	if (native) {
 		const at = runEndForHighlight(content, native);
 		return { changes: [{ from: at, to: at, insert: markup }], anchorFrom: native.from };

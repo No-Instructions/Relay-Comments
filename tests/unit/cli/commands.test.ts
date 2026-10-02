@@ -149,6 +149,28 @@ describe("comments:comment", () => {
 		});
 	});
 
+	it("keeps a heading's hashes and a bullet outside the anchor", async () => {
+		const target = vault();
+		target.notes.set("Notes/outline.md", "## Must fix\n\n- first item\n");
+		await run(target, "comments:comment", {
+			path: "Notes/outline.md",
+			quote: "## Must fix",
+			text: "Still a heading?",
+		});
+		await run(target, "comments:comment", {
+			path: "Notes/outline.md",
+			quote: "- first item",
+			text: "Still an item?",
+		});
+		const note = target.notes.get("Notes/outline.md") ?? "";
+		expect(note.startsWith(`## {==Must fix==}${SIGNED}>>Still a heading?<<}}`)).toBe(true);
+		expect(note).toContain(`- {==first item==}${SIGNED}>>Still an item?<<}}`);
+		expect(await json(target, "comments:comment", { path: "Notes/outline.md", quote: "## ", text: "x" })).toMatchObject({
+			ok: false,
+			code: "empty_quote",
+		});
+	});
+
 	it("attaches to a native highlight without rewriting it", async () => {
 		const target = vault();
 		await run(target, "comments:comment", {
