@@ -5,6 +5,18 @@ import {
 } from "src/critic/anchor-range";
 
 describe("structuralPrefixLength", () => {
+	it.each([
+		["- > quoted", 4],
+		["> - [ ] task", 8],
+		["\t\t- [ ] task", 8],
+		["> > ### heading", 8],
+		["* * *", 0],
+		["- - -", 0],
+		["1234567890. prose", 0],
+	])("uses shared block syntax rules for %j", (line, length) => {
+		expect(structuralPrefixLength(line)).toBe(length);
+	});
+
 	it("measures heading, list, task, and quote syntax", () => {
 		expect(structuralPrefixLength("## Must fix")).toBe(3);
 		expect(structuralPrefixLength("- item")).toBe(2);
