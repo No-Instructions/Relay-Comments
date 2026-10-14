@@ -80,6 +80,7 @@ import {
 	getAddCommentTarget,
 } from "./editor/hotkeys";
 import { buildCommentDraftInsertion } from "./editor/comment-draft-anchor";
+import { commentDraftContentRange } from "./editor/comment-draft-range";
 import {
 	findCanvasEditorSurface,
 	findFocusedCanvasEditorSurface,
@@ -1458,6 +1459,15 @@ export default class RelayCommentsPlugin
 			return;
 		}
 		const editorText = surface?.editor.getValue();
+		if (editorText !== undefined) {
+			const range = commentDraftContentRange(editorText, from, to);
+			if (!range) {
+				new Notice("Select text within one block line to comment on it.");
+				return;
+			}
+			({ from, to } = range);
+			selectedText = editorText.slice(from, to);
+		}
 		const marks = editorText ? parseCriticMarkup(editorText) : [];
 		const nativeHighlights = editorText
 			? parseNativeHighlights(editorText, marks)
@@ -1607,6 +1617,13 @@ export default class RelayCommentsPlugin
 					draft.to,
 				)
 			: null;
+		const range = nativeHighlight
+			? null
+			: commentDraftContentRange(documentText, draft.from, draft.to);
+		if (!nativeHighlight && !range) {
+			new Notice("The commented text changed; select it again within one block line.");
+			return;
+		}
 		// A rewrite of the note while the draft was open can leave its passage
 		// spanning other markup, which CriticMarkup can't nest. Keep the draft
 		// and its text so the reviewer can select the passage again.
@@ -1636,13 +1653,13 @@ export default class RelayCommentsPlugin
 				undefined,
 				"relay-comments",
 			);
-		} else {
-			const currentText = documentText.slice(draft.from, draft.to);
+		} else if (range) {
+			const currentText = documentText.slice(range.from, range.to);
 			const insertion = buildCommentDraftInsertion(currentText, commentMarkup);
 			refreshedEditor.replaceRange(
 				insertion,
-				refreshedEditor.offsetToPos(draft.from),
-				refreshedEditor.offsetToPos(draft.to),
+				refreshedEditor.offsetToPos(range.from),
+				refreshedEditor.offsetToPos(range.to),
 				"relay-comments",
 			);
 		}
