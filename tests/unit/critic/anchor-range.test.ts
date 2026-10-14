@@ -238,6 +238,24 @@ describe("narrowAnchorRange inside block syntax", () => {
 		expect(highlight?.raw).toBe("==Heading==");
 	});
 
+	it.each(["1. ", "- ", "- [ ] ", "# ", "> "])(
+		"keeps the %j content anchor when another thread receives a multiline reply", (prefix) => {
+			const text = prefix + "target and {==other==}{>>question<<}";
+			const state = EditorState.create({ doc: text });
+			const reply = "{>>reply\nsecond line<<}";
+			const changes = ChangeSet.of({ from: 0, to: text.length, insert: text + reply }, text.length);
+			const draft = mapCommentDraftAnchor(
+				{ id: 8, filePath: "note.md", from: prefix.length, to: prefix.length + 6 },
+				changes,
+				state.doc,
+			);
+			const updatedText = changes.apply(state.doc).toString();
+			expect(insertComment(updatedText, draft.from, draft.to)).toBe(
+				prefix + "{==target==}" + comment + " and {==other==}{>>question<<}" + reply,
+			);
+		},
+	);
+
 	it("recomputes the content boundary after an entire mapped range is rewritten", () => {
 		const text = "old text";
 		const changes = ChangeSet.of({ from: 0, to: text.length, insert: "# New heading\n" }, text.length);
