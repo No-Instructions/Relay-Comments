@@ -120,6 +120,10 @@ import {
 	type ExternalCommentState,
 } from "./dom/comment-components";
 import {
+	COMMENT_OBSERVER_ATTRIBUTES,
+	externalCommentMutationMatters,
+} from "./dom/comment-mutations";
+import {
 	findNativeHighlightAtOffset,
 	findNativeHighlightForSelection,
 	parseNativeHighlights,
@@ -2293,25 +2297,18 @@ export default class RelayCommentsPlugin
 		const root = this.getLeafContentRoot(leaf);
 		if (!root || typeof MutationObserver === "undefined") return;
 
-		this.externalCommentObserver = new MutationObserver(() => {
-			this.scheduleExternalCommentRefresh();
+		this.externalCommentObserver = new MutationObserver((mutations) => {
+			if (mutations.some((mutation) => externalCommentMutationMatters(root, mutation))) {
+				this.scheduleExternalCommentRefresh();
+			}
 		});
 		this.externalCommentObserver.observe(root, {
 			subtree: true,
 			childList: true,
 			characterData: true,
 			attributes: true,
-			attributeFilter: [
-				"id",
-				"data-criticmarkup-comment",
-				"data-criticmarkup-body",
-				"data-criticmarkup-author",
-				"data-criticmarkup-status",
-				"data-criticmarkup-thread",
-				"data-criticmarkup-key",
-				"data-criticmarkup-target",
-				"data-criticmarkup-label",
-			],
+			attributeOldValue: true,
+			attributeFilter: COMMENT_OBSERVER_ATTRIBUTES,
 		});
 	}
 

@@ -3,8 +3,10 @@ import {
 	groupExternalCommentComponents,
 	scrollToExternalComment,
 } from "../../../src/dom/comment-components";
+import { externalCommentMutationMatters } from "../../../src/dom/comment-mutations";
 
 class FakeElement {
+	nodeType = 1;
 	tagName = "DIV";
 	parent: FakeElement | null = null;
 	children: FakeElement[] = [];
@@ -30,6 +32,12 @@ class FakeElement {
 
 	getAttribute(name: string): string | null {
 		return this.attributes[name] ?? null;
+	}
+	get parentElement(): FakeElement | null { return this.parent; }
+	setAttribute(name: string, value: string): void { this.attributes[name] = value; }
+	removeAttribute(name: string): void { delete this.attributes[name]; }
+	querySelector(selector: string): FakeElement | null {
+		return this.querySelectorAll<FakeElement>(selector)[0] ?? null;
 	}
 
 	querySelectorAll<T>(selector: string): T[] {
@@ -58,7 +66,11 @@ class FakeElement {
 			typeof options === "object" && options !== null ? options : {};
 	}
 
-	private matches(selector: string): boolean {
+	matches(selector: string): boolean {
+		if (selector.includes(",")) return selector.split(",").some(part => this.matches(part.trim()));
+		if (selector === '[data-criticmarkup-comment="v1"][data-criticmarkup-target]') {
+			return this.attributes["data-criticmarkup-comment"] === "v1" && "data-criticmarkup-target" in this.attributes;
+		}
 		if (selector === "iframe") return this.tagName === "IFRAME";
 		if (selector === '[data-criticmarkup-comment="v1"]') {
 			return this.attributes["data-criticmarkup-comment"] === "v1";
@@ -208,5 +220,92 @@ describe("rendered CriticMarkup comment components", () => {
 
 		component.isConnected = false;
 		expect(scrollToExternalComment(comment)).toBe(false);
+	});
+});
+
+describe("external comment mutation filtering", () => {
+	const record = (target: FakeElement, properties: Partial<MutationRecord> = {}): MutationRecord => ({
+		type: "childList", target: target as unknown as Node,
+		addedNodes: [], removedNodes: [], attributeName: null, oldValue: null,
+		...properties,
+	} as unknown as MutationRecord);
+	const nodes = (...elements: FakeElement[]): NodeList => elements as unknown as NodeList;
+	const component = (): FakeElement => element({"data-criticmarkup-comment": "v1"})
+		.append(element({"data-criticmarkup-body": ""}, "Please review"));
+
+	test("ignores terminal row replacements and text edits, even beside comments", () => {
+		const terminal = element().append(element({}, "output"));
+		const root = element().append(component(), terminal);
+		expect(externalCommentMutationMatters(asHtml(root), record(terminal, {
+			addedNodes: nodes(element({}, "next output")), removedNodes: nodes(terminal.children[0]),
+		}))).toBe(false);
+		expect(externalCommentMutationMatters(asHtml(root), record(terminal, {
+			type: "characterData", target: {nodeType: 3, parentElement: terminal} as unknown as Node,
+		}))).toBe(false);
+	});
+
+	test.each(["addedNodes", "removedNodes"] as const)("detects a provider index in %s, including its first or last comment", (key) => {
+		const root = element();
+		const index = element().append(component());
+		expect(externalCommentMutationMatters(asHtml(root), record(root, {[key]: nodes(index)}))).toBe(true);
+	});
+
+	test("detects body text edits and body replacement/removal", () => {
+		const comment = component();
+		const body = comment.children[0];
+		const root = element().append(comment);
+		expect(externalCommentMutationMatters(asHtml(root), record(body, {
+			type: "characterData", target: {nodeType: 3, parentElement: body} as unknown as Node,
+		}))).toBe(true);
+		expect(externalCommentMutationMatters(asHtml(root), record(comment, {removedNodes: nodes(body)}))).toBe(true);
+		body.removeAttribute("data-criticmarkup-body");
+		expect(externalCommentMutationMatters(asHtml(root), record(body, {
+			type: "attributes", attributeName: "data-criticmarkup-body", oldValue: "",
+		}))).toBe(true);
+	});
+
+	test.each(["author", "status", "thread", "key", "target", "label"])("detects %s changes from Relay Diffs", (field) => {
+		const comment = component();
+		const name = `data-criticmarkup-${field}`;
+		comment.setAttribute(name, "changed");
+		const root = element().append(comment);
+		expect(externalCommentMutationMatters(asHtml(root), record(comment, {
+			type: "attributes", attributeName: name, oldValue: "previous",
+		}))).toBe(true);
+		expect(externalCommentMutationMatters(asHtml(root), record(comment, {
+			type: "attributes", attributeName: name, oldValue: "changed",
+		}))).toBe(false);
+	});
+
+	test("detects marker removal or unsupported version, and ignores other metadata", () => {
+		const comment = element({"data-criticmarkup-comment": "v2"});
+		const root = element().append(comment);
+		const changed = record(comment, {type: "attributes", attributeName: "data-criticmarkup-comment", oldValue: "v1"});
+		expect(externalCommentMutationMatters(asHtml(root), changed)).toBe(true);
+		comment.removeAttribute("data-criticmarkup-comment");
+		expect(externalCommentMutationMatters(asHtml(root), changed)).toBe(true);
+		expect(externalCommentMutationMatters(asHtml(root), record(comment, {
+			type: "attributes", attributeName: "data-criticmarkup-author", oldValue: "old",
+		}))).toBe(false);
+	});
+
+	test("tracks referenced target insertion, removal, replacement and ID changes", () => {
+		const comment = component();
+		comment.setAttribute("data-criticmarkup-target", "line-42");
+		const root = element().append(comment);
+		const target = element({id: "line-42"});
+		for (const key of ["addedNodes", "removedNodes"]) {
+			expect(externalCommentMutationMatters(asHtml(root), record(root, {[key]: nodes(target)}))).toBe(true);
+		}
+		target.setAttribute("id", "line-43");
+		expect(externalCommentMutationMatters(asHtml(root), record(target, {type: "attributes", attributeName: "id", oldValue: "line-42"}))).toBe(true);
+		expect(externalCommentMutationMatters(asHtml(root), record(target, {type: "attributes", attributeName: "id", oldValue: "unrelated"}))).toBe(false);
+		expect(externalCommentMutationMatters(asHtml(root), record(root, {addedNodes: nodes(target)}))).toBe(false);
+	});
+
+	test("preserves collection of newly inserted Canvas frames", () => {
+		const root = element();
+		const frame = element(); frame.tagName = "IFRAME";
+		expect(externalCommentMutationMatters(asHtml(root), record(root, {addedNodes: nodes(frame)}))).toBe(true);
 	});
 });
