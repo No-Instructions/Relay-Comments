@@ -1,3 +1,4 @@
+/// <reference lib="es2021.weakref" />
 import {
 	editorInfoField,
 	editorLivePreviewField,
@@ -43,6 +44,7 @@ import {
 } from "../markdown/highlights";
 import { isEditorSelectionTrusted, isFragmentEditor } from "./selection-trust";
 import { isEditorReadOnly } from "./access";
+import { DisposableCallbacks } from "./disposable-callbacks";
 
 export const setCommentDraftAnchor =
 	StateEffect.define<CommentDraftAnchor | null>();
@@ -106,9 +108,19 @@ interface CriticFieldValue {
 	path: string | null;
 }
 
+export interface ReviewEditorExtension {
+	extension: Extension;
+	dispose(): void;
+}
+
 export function createReviewEditorExtension(
 	controller: ReviewEditorController,
-): Extension {
+): ReviewEditorExtension {
+	const callbacks = new DisposableCallbacks();
+	const owner: { controller: ReviewEditorController | null } = { controller };
+	// Weak tracking must not turn ordinary document edits into a state history.
+	const values = new Set<WeakRef<CriticFieldValue>>();
+	let allocations = 0;
 	// Live-preview state observed from the DOM by the view plugin; the state
 	// field itself must stay DOM-free.
 	const setDomLivePreview = StateEffect.define<boolean | null>();
@@ -120,12 +132,14 @@ export function createReviewEditorExtension(
 		const livePreview =
 			domLivePreview ?? state.field(editorLivePreviewField, false) ?? false;
 		const path = readPath(state);
+		if (!owner.controller) throw new Error("Editor extension already disposed");
 		const { decorations, atomics, marks, lastReviewRangeEnd } = buildDecorations(
 			state,
 			livePreview,
-			controller,
+			owner.controller,
+			callbacks,
 		);
-		return {
+		const value = {
 			decorations,
 			atomics,
 			marks,
@@ -134,15 +148,18 @@ export function createReviewEditorExtension(
 			domLivePreview,
 			path,
 		};
+		values.add(new WeakRef(value));
+		if (++allocations % 64 === 0) {
+			for (const ref of values) if (!ref.deref()) values.delete(ref);
+		}
+		return value;
 	};
 
 	// Block decorations (used to hide comment markup that spans line breaks)
 	// may only be provided by a state field, not a view plugin.
 	const criticField = StateField.define<CriticFieldValue>({
-		create(state) {
-			return buildFieldValue(state, null);
-		},
-		update(value, tr) {
+		create: callbacks.wrap((state: EditorState) => buildFieldValue(state, null)),
+		update: callbacks.wrap((value: CriticFieldValue, tr: Transaction) => {
 			let domLivePreview = value.domLivePreview;
 			for (const effect of tr.effects) {
 				if (effect.is(setDomLivePreview)) {
@@ -172,20 +189,18 @@ export function createReviewEditorExtension(
 				return value;
 			}
 			return buildFieldValue(tr.state, domLivePreview);
-		},
-		provide: (field) => [
-			EditorView.decorations.from(field, (value) => value.decorations),
+		}),
+		provide: callbacks.wrap((field: StateField<CriticFieldValue>) => [
+			EditorView.decorations.from(field, callbacks.wrap((value: CriticFieldValue) => value.decorations)),
 			EditorView.atomicRanges.of(
-				(view) => view.state.field(field).atomics,
+				callbacks.wrap((view: EditorView) => view.state.field(field).atomics),
 			),
-		],
+		]),
 	});
 
 	const commentDraftAnchorField = StateField.define<CommentDraftAnchor | null>({
-		create() {
-			return null;
-		},
-		update(value, tr) {
+		create: callbacks.wrap(() => null),
+		update: callbacks.wrap((value: CommentDraftAnchor | null, tr: Transaction) => {
 			for (const effect of tr.effects) {
 				if (effect.is(setCommentDraftAnchor)) {
 					value = effect.value;
@@ -199,389 +214,406 @@ export function createReviewEditorExtension(
 				return value;
 			}
 			return mapCommentDraftAnchor(value, tr.changes);
-		},
+		}),
 	});
 
-	const reviewViewPlugin = ViewPlugin.fromClass(
-		class {
-			private commentButton: HTMLButtonElement | null = null;
-			private renderedBlockObserver: MutationObserver;
-			private renderedBlockRewriteQueued = false;
-			private sourceViewEl: HTMLElement | null = null;
-			private sourceViewObserver: MutationObserver | null = null;
-			private livePreviewPollId: number | null = null;
-			private lastDomSignal: boolean | null = null;
-			private destroyed = false;
-			/** Identity for requestMeasure, so a burst of triggers measures once. */
-			private readonly commentButtonMeasureKey = {};
-			/** The document the selectionchange listener was registered on. */
-			private readonly selectionDocument: Document;
-			private currentPath(): string | null {
-				return controller.resolveEditorPath(
-					this.view,
-					readPath(this.view.state),
-				);
-			}
-			/** Recomputed per use: Obsidian attaches a fragment editor's DOM after the plugin is built. */
-			private get fragment(): boolean {
-				return isFragmentEditor(this.view.dom);
-			}
-			private handleClick = (event: MouseEvent): void => {
-				if (this.fragment) return;
-				const target = event.target as HTMLElement | null;
-				const anchor = target?.closest<HTMLElement>(
-					".cm-critic-thread-anchor, .cm-critic-suggestion-anchor",
-				);
-				if (!anchor) return;
-				const from = Number(anchor.dataset.criticFrom);
-				const to = Number(anchor.dataset.criticTo);
-				if (!Number.isFinite(from) || !Number.isFinite(to)) return;
-				controller.activateCommentThread(
-					this.currentPath(),
-					from,
-					to,
-					{ editorView: this.view },
-				);
-			};
-			private handlePointerOver = (event: PointerEvent): void => {
-				if (this.fragment) return;
-				const target = event.target as HTMLElement | null;
-				const anchor = target?.closest<HTMLElement>(
-					".cm-critic-thread-anchor, .cm-critic-suggestion-anchor",
-				);
-				if (!anchor || !this.view.dom.contains(anchor)) return;
-				const from = Number(anchor.dataset.criticFrom);
-				const to = Number(anchor.dataset.criticTo);
-				if (!Number.isFinite(from) || !Number.isFinite(to)) return;
-				if (event.buttons !== 0) return;
-				controller.queueThreadPreview(
-					this.currentPath(),
-					from,
-					to,
-					anchor,
-					this.view,
-				);
-			};
-			private handlePointerOut = (event: PointerEvent): void => {
-				const target = event.target as HTMLElement | null;
-				const anchor = target?.closest<HTMLElement>(
-					".cm-critic-thread-anchor, .cm-critic-suggestion-anchor",
-				);
-				if (!anchor || !this.view.dom.contains(anchor)) return;
-				const related = event.relatedTarget as Node | null;
-				if (related && anchor.contains(related)) return;
-				controller.scheduleThreadPreviewDismiss();
-			};
-			/** A widget selection produces no CodeMirror transaction, so this is the only re-measure signal. */
-			private handleSelectionChange = (): void => {
-				if (this.destroyed || this.fragment) return;
-				this.scheduleCommentButtonUpdate();
-			};
+	class ReviewViewPlugin {
+		private commentButton: HTMLButtonElement | null = null;
+		private readonly buttonListeners = new AbortController();
+		private renderedBlockObserver: MutationObserver;
+		private renderedBlockRewriteQueued = false;
+		private sourceViewEl: HTMLElement | null = null;
+		private sourceViewObserver: MutationObserver | null = null;
+		private livePreviewPollId: number | null = null;
+		private lastDomSignal: boolean | null = null;
+		private destroyed = false;
+		/** Identity for requestMeasure, so a burst of triggers measures once. */
+		private readonly commentButtonMeasureKey = {};
+		/** The document the selectionchange listener was registered on. */
+		private readonly selectionDocument: Document;
+		private currentPath(): string | null {
+			return owner.controller?.resolveEditorPath(
+				this.view,
+				readPath(this.view.state),
+			) ?? null;
+		}
+		/** Recomputed per use: Obsidian attaches a fragment editor's DOM after the plugin is built. */
+		private get fragment(): boolean {
+			return isFragmentEditor(this.view.dom);
+		}
+		private handleClick = (event: MouseEvent): void => {
+			if (this.fragment) return;
+			const target = event.target as HTMLElement | null;
+			const anchor = target?.closest<HTMLElement>(
+				".cm-critic-thread-anchor, .cm-critic-suggestion-anchor",
+			);
+			if (!anchor) return;
+			const from = Number(anchor.dataset.criticFrom);
+			const to = Number(anchor.dataset.criticTo);
+			if (!Number.isFinite(from) || !Number.isFinite(to)) return;
+			owner.controller?.activateCommentThread(
+				this.currentPath(),
+				from,
+				to,
+				{ editorView: this.view },
+			);
+		};
+		private handlePointerOver = (event: PointerEvent): void => {
+			if (this.fragment) return;
+			const target = event.target as HTMLElement | null;
+			const anchor = target?.closest<HTMLElement>(
+				".cm-critic-thread-anchor, .cm-critic-suggestion-anchor",
+			);
+			if (!anchor || !this.view.dom.contains(anchor)) return;
+			const from = Number(anchor.dataset.criticFrom);
+			const to = Number(anchor.dataset.criticTo);
+			if (!Number.isFinite(from) || !Number.isFinite(to)) return;
+			if (event.buttons !== 0) return;
+			owner.controller?.queueThreadPreview(
+				this.currentPath(),
+				from,
+				to,
+				anchor,
+				this.view,
+			);
+		};
+		private handlePointerOut = (event: PointerEvent): void => {
+			const target = event.target as HTMLElement | null;
+			const anchor = target?.closest<HTMLElement>(
+				".cm-critic-thread-anchor, .cm-critic-suggestion-anchor",
+			);
+			if (!anchor || !this.view.dom.contains(anchor)) return;
+			const related = event.relatedTarget as Node | null;
+			if (related && anchor.contains(related)) return;
+			owner.controller?.scheduleThreadPreviewDismiss();
+		};
+		/** A widget selection produces no CodeMirror transaction, so this is the only re-measure signal. */
+		private handleSelectionChange = (): void => {
+			if (this.destroyed || this.fragment) return;
+			this.scheduleCommentButtonUpdate();
+		};
 
-			private lastPath: string | null;
-			private awaitingLoad = false;
+		private lastPath: string | null;
+		private awaitingLoad = false;
 
-			constructor(private view: EditorView) {
-				this.lastPath = readPath(view.state);
-				// An editor that already exists when the plugin loads has a
-				// selection the sidebar should know about from the start.
-				controller.notifyEditorDocumentChanged(view);
-				this.renderedBlockObserver = new MutationObserver((records) => {
-					if (mutationTouchesEmbeddedBlock(records)) {
-						this.scheduleRenderedBlockRewrite();
-					}
-				});
-				this.view.dom.addEventListener("click", this.handleClick);
-				this.view.dom.addEventListener("pointerover", this.handlePointerOver);
-				this.view.dom.addEventListener("pointerout", this.handlePointerOut);
-				this.selectionDocument = this.view.dom.ownerDocument;
-				this.selectionDocument.addEventListener(
-					"selectionchange",
-					this.handleSelectionChange,
-				);
-				this.renderedBlockObserver.observe(this.view.contentDOM, {
-					childList: true,
-					subtree: true,
-				});
-				this.observeSourceView();
-				this.syncDomLivePreview();
-				this.livePreviewPollId = window.setInterval(
-					() => this.syncDomLivePreview(),
-					500,
-				);
-				this.scheduleCommentButtonUpdate();
-				this.scheduleRenderedBlockRewrite();
-			}
-
-			/** Created lazily so the fragment check runs after Obsidian attaches the editor. */
-			private ensureCommentButton(): HTMLButtonElement | null {
-				if (this.fragment) {
-					this.commentButton?.remove();
-					this.commentButton = null;
-					return null;
-				}
-				if (!this.commentButton) {
-					this.commentButton = this.createCommentButton();
-					this.view.dom.appendChild(this.commentButton);
-				}
-
-				return this.commentButton;
-			}
-
-			update(update: ViewUpdate): void {
-				this.observeSourceView();
-				const refreshUi = update.transactions.some((transaction) =>
-					transaction.effects.some((effect) =>
-						effect.is(refreshReviewEditorUi),
-					),
-				);
-				const draftAnchor = update.state.field(commentDraftAnchorField);
-				if (
-					update.docChanged &&
-					draftAnchor &&
-					readPath(update.state) === draftAnchor.filePath
-				) {
-					controller.updateCommentDraftAnchor(
-						draftAnchor.id,
-						draftAnchor.filePath,
-						draftAnchor.from,
-						draftAnchor.to,
-						update.state.sliceDoc(draftAnchor.from, draftAnchor.to),
-					);
-				}
-				// Fragment offsets are the cell's, not the note's. Once the pane's
-				// file changes, the next whole-document replacement that sets no
-				// selection is Obsidian loading that note, and the selection it
-				// maps over is the old note's. Any other replacement is an edit.
-				const path = readPath(update.state);
-				if (path !== this.lastPath) {
-					this.lastPath = path;
-					this.awaitingLoad = true;
-				}
-				if (!this.fragment) {
-					if (
-						this.awaitingLoad &&
-						!update.selectionSet &&
-						documentReplaced(update)
-					) {
-						this.awaitingLoad = false;
-						controller.notifyEditorDocumentReplaced(this.view);
-					} else if (update.selectionSet) {
-						this.awaitingLoad = false;
-						controller.notifyEditorSelectionChanged(this.view);
-					} else if (update.docChanged) {
-						controller.notifyEditorDocumentChanged(this.view);
-					}
-				}
-				if (
-					refreshUi ||
-					update.selectionSet ||
-					update.docChanged ||
-					update.viewportChanged ||
-					update.startState.field(criticField) !==
-						update.state.field(criticField) ||
-					update.startState.field(commentDraftAnchorField) !== draftAnchor ||
-					isEditorReadOnly({ state: update.startState }) !==
-						isEditorReadOnly({ state: update.state })
-				) {
-					this.scheduleCommentButtonUpdate();
-				}
-				if (update.docChanged || update.viewportChanged) {
+		constructor(private view: EditorView) {
+			this.lastPath = readPath(view.state);
+			// An editor that already exists when the plugin loads has a
+			// selection the sidebar should know about from the start.
+			owner.controller?.notifyEditorDocumentChanged(view);
+			this.renderedBlockObserver = new MutationObserver((records) => {
+				if (mutationTouchesEmbeddedBlock(records)) {
 					this.scheduleRenderedBlockRewrite();
 				}
-			}
+			});
+			this.view.dom.addEventListener("click", this.handleClick);
+			this.view.dom.addEventListener("pointerover", this.handlePointerOver);
+			this.view.dom.addEventListener("pointerout", this.handlePointerOut);
+			this.selectionDocument = this.view.dom.ownerDocument;
+			this.selectionDocument.addEventListener(
+				"selectionchange",
+				this.handleSelectionChange,
+			);
+			this.renderedBlockObserver.observe(this.view.contentDOM, {
+				childList: true,
+				subtree: true,
+			});
+			this.observeSourceView();
+			this.syncDomLivePreview();
+			this.livePreviewPollId = window.setInterval(
+				() => this.syncDomLivePreview(),
+				500,
+			);
+			this.scheduleCommentButtonUpdate();
+			this.scheduleRenderedBlockRewrite();
+		}
 
-			destroy(): void {
-				this.destroyed = true;
-				this.renderedBlockObserver.disconnect();
-				this.sourceViewObserver?.disconnect();
-				this.sourceViewObserver = null;
-				if (this.livePreviewPollId !== null) {
-					window.clearInterval(this.livePreviewPollId);
-					this.livePreviewPollId = null;
-				}
-				this.view.dom.removeEventListener("click", this.handleClick);
-				this.view.dom.removeEventListener("pointerover", this.handlePointerOver);
-				this.view.dom.removeEventListener("pointerout", this.handlePointerOut);
-				this.selectionDocument.removeEventListener(
-					"selectionchange",
-					this.handleSelectionChange,
-				);
-				controller.hideThreadPreview();
+		/** Created lazily so the fragment check runs after Obsidian attaches the editor. */
+		private ensureCommentButton(): HTMLButtonElement | null {
+			if (this.destroyed) return null;
+			if (this.fragment) {
 				this.commentButton?.remove();
+				this.commentButton = null;
+				return null;
+			}
+			if (!this.commentButton) {
+				this.commentButton = this.createCommentButton();
+				this.view.dom.appendChild(this.commentButton);
 			}
 
-			private scheduleRenderedBlockRewrite(): void {
-				if (this.fragment || this.renderedBlockRewriteQueued) return;
-				this.renderedBlockRewriteQueued = true;
-				queueMicrotask(() => {
-					this.renderedBlockRewriteQueued = false;
-					if (this.destroyed || !this.lastDomSignal) return;
-					rewriteCriticMarkupInRenderedBlocks(
-						this.view.contentDOM,
-						this.view.state.doc.toString(),
-						controller.getDisplayMode(readPath(this.view.state)),
-						this.view.state.field(criticField).marks,
-					);
-				});
-			}
+			return this.commentButton;
+		}
 
-			private observeSourceView(): void {
-				const sourceView = this.view.dom.closest<HTMLElement>(
-					".markdown-source-view",
+		update(update: ViewUpdate): void {
+			this.observeSourceView();
+			const refreshUi = update.transactions.some((transaction) =>
+				transaction.effects.some((effect) =>
+					effect.is(refreshReviewEditorUi),
+				),
+			);
+			const draftAnchor = update.state.field(commentDraftAnchorField);
+			if (
+				update.docChanged &&
+				draftAnchor &&
+				readPath(update.state) === draftAnchor.filePath
+			) {
+				owner.controller?.updateCommentDraftAnchor(
+					draftAnchor.id,
+					draftAnchor.filePath,
+					draftAnchor.from,
+					draftAnchor.to,
+					update.state.sliceDoc(draftAnchor.from, draftAnchor.to),
 				);
-				if (sourceView === this.sourceViewEl) return;
+			}
+			// Fragment offsets are the cell's, not the note's. Once the pane's
+			// file changes, the next whole-document replacement that sets no
+			// selection is Obsidian loading that note, and the selection it
+			// maps over is the old note's. Any other replacement is an edit.
+			const path = readPath(update.state);
+			if (path !== this.lastPath) {
+				this.lastPath = path;
+				this.awaitingLoad = true;
+			}
+			if (!this.fragment) {
+				if (
+					this.awaitingLoad &&
+					!update.selectionSet &&
+					documentReplaced(update)
+				) {
+					this.awaitingLoad = false;
+					owner.controller?.notifyEditorDocumentReplaced(this.view);
+				} else if (update.selectionSet) {
+					this.awaitingLoad = false;
+					owner.controller?.notifyEditorSelectionChanged(this.view);
+				} else if (update.docChanged) {
+					owner.controller?.notifyEditorDocumentChanged(this.view);
+				}
+			}
+			if (
+				refreshUi ||
+				update.selectionSet ||
+				update.docChanged ||
+				update.viewportChanged ||
+				update.startState.field(criticField) !==
+					update.state.field(criticField) ||
+				update.startState.field(commentDraftAnchorField) !== draftAnchor ||
+				isEditorReadOnly({ state: update.startState }) !==
+					isEditorReadOnly({ state: update.state })
+			) {
+				this.scheduleCommentButtonUpdate();
+			}
+			if (update.docChanged || update.viewportChanged) {
+				this.scheduleRenderedBlockRewrite();
+			}
+		}
 
-				this.sourceViewObserver?.disconnect();
-				this.sourceViewEl = sourceView;
-				if (!sourceView) return;
+		destroy(): void {
+			if (this.destroyed) return;
+			this.destroyed = true;
+			this.renderedBlockObserver.disconnect();
+			this.sourceViewObserver?.disconnect();
+			this.sourceViewObserver = null;
+			this.sourceViewEl = null;
+			if (this.livePreviewPollId !== null) {
+				window.clearInterval(this.livePreviewPollId);
+				this.livePreviewPollId = null;
+			}
+			this.view.dom.removeEventListener("click", this.handleClick);
+			this.view.dom.removeEventListener("pointerover", this.handlePointerOver);
+			this.view.dom.removeEventListener("pointerout", this.handlePointerOut);
+			this.selectionDocument.removeEventListener(
+				"selectionchange",
+				this.handleSelectionChange,
+			);
+			owner.controller?.hideThreadPreview();
+			this.buttonListeners.abort();
+			this.commentButton?.remove();
+			this.commentButton = null;
+		}
 
-				this.sourceViewObserver = new MutationObserver(() => {
-					this.syncDomLivePreview();
-				});
-				this.sourceViewObserver.observe(sourceView, {
-					attributes: true,
-					attributeFilter: ["class"],
-				});
-				// Fragment editors are parented after construction; re-check once attached.
+		private scheduleRenderedBlockRewrite(): void {
+			if (this.destroyed || this.fragment || this.renderedBlockRewriteQueued) return;
+			this.renderedBlockRewriteQueued = true;
+			queueMicrotask(() => {
+				this.renderedBlockRewriteQueued = false;
+				if (this.destroyed || !this.lastDomSignal) return;
+				rewriteCriticMarkupInRenderedBlocks(
+					this.view.contentDOM,
+					this.view.state.doc.toString(),
+					owner.controller?.getDisplayMode(readPath(this.view.state)) ?? "review",
+					this.view.state.field(criticField).marks,
+				);
+			});
+		}
+
+		private observeSourceView(): void {
+			const sourceView = this.view.dom.closest<HTMLElement>(
+				".markdown-source-view",
+			);
+			if (sourceView === this.sourceViewEl) return;
+
+			this.sourceViewObserver?.disconnect();
+			this.sourceViewEl = sourceView;
+			if (!sourceView) return;
+
+			this.sourceViewObserver = new MutationObserver(() => {
 				this.syncDomLivePreview();
-			}
+			});
+			this.sourceViewObserver.observe(sourceView, {
+				attributes: true,
+				attributeFilter: ["class"],
+			});
+			// Fragment editors are parented after construction; re-check once attached.
+			this.syncDomLivePreview();
+		}
 
-			private syncDomLivePreview(): void {
-				const sourceView = this.view.dom.closest(".markdown-source-view");
-				// A fragment editor decorates its cell's source like prose; its anchors stay inert.
-				const domSignal = sourceView
-					? sourceView.classList.contains("is-live-preview")
-					: null;
-				if (domSignal === this.lastDomSignal) return;
-				this.lastDomSignal = domSignal;
-				queueMicrotask(() => {
-					if (this.destroyed) return;
-					this.view.dispatch({
-						effects: setDomLivePreview.of(domSignal),
-					});
+		private syncDomLivePreview(): void {
+			if (this.destroyed) return;
+			const sourceView = this.view.dom.closest(".markdown-source-view");
+			// A fragment editor decorates its cell's source like prose; its anchors stay inert.
+			const domSignal = sourceView
+				? sourceView.classList.contains("is-live-preview")
+				: null;
+			if (domSignal === this.lastDomSignal) return;
+			this.lastDomSignal = domSignal;
+			queueMicrotask(() => {
+				if (this.destroyed) return;
+				this.view.dispatch({
+					effects: setDomLivePreview.of(domSignal),
 				});
-			}
+			});
+		}
 
-			private createCommentButton(): HTMLButtonElement {
-				const button = createEl("button");
-				button.className = "cm-critic-comment-button";
-				button.type = "button";
-				// setTooltip, never the title attribute: a title makes the
-				// browser's native tooltip appear alongside Obsidian's styled one.
-				button.setAttribute("aria-label", "Add comment");
-				setTooltip(button, "Add comment");
-				setIcon(button, "message-square-plus");
-				button.addEventListener("mousedown", (event) => {
-					event.preventDefault();
-					event.stopPropagation();
-				});
-				button.addEventListener("click", (event) => {
-					event.preventDefault();
-					event.stopPropagation();
-					const selection = this.view.state.selection.main;
-					if (selection.empty) return;
-					// An untrusted range would comment on text the user selected away from.
-					if (!this.selectionIsTrusted()) {
-						this.scheduleCommentButtonUpdate();
-						return;
-					}
-
-					controller.startCommentDraft(
-						this.currentPath(),
-						selection.from,
-						selection.to,
-						this.view.state.sliceDoc(selection.from, selection.to),
-						this.view,
-					);
-				});
-				return button;
-			}
-
-			private scheduleCommentButtonUpdate(): void {
-				this.view.requestMeasure({
-					key: this.commentButtonMeasureKey,
-					read: () => this.measureCommentButton(),
-					write: (placement) => this.applyCommentButtonPlacement(placement),
-				});
-			}
-
-			/** Whether the state selection still describes the on-screen selection. */
-			private selectionIsTrusted(): boolean {
-				return isEditorSelectionTrusted(this.view);
-			}
-
-			private measureCommentButton(): CommentButtonPlacement | null {
-				if (this.fragment || isEditorReadOnly(this.view)) return null;
+		private createCommentButton(): HTMLButtonElement {
+			const button = createEl("button");
+			button.className = "cm-critic-comment-button";
+			button.type = "button";
+			// setTooltip, never the title attribute: a title makes the
+			// browser's native tooltip appear alongside Obsidian's styled one.
+			button.setAttribute("aria-label", "Add comment");
+			setTooltip(button, "Add comment");
+			setIcon(button, "message-square-plus");
+			button.addEventListener("mousedown", (event) => {
+				event.preventDefault();
+				event.stopPropagation();
+			}, { signal: this.buttonListeners.signal });
+			button.addEventListener("click", (event) => {
+				event.preventDefault();
+				event.stopPropagation();
 				const selection = this.view.state.selection.main;
-				const fieldValue = this.view.state.field(criticField);
-				if (
-					!controller.shouldShowInlineActions() ||
-					!fieldValue.livePreview ||
-					selection.empty ||
-					// A second click while the composer is open would only replace the draft.
-					this.view.state.field(commentDraftAnchorField) !== null ||
-					!this.selectionIsTrusted()
-				) {
-					return null;
-				}
-				const selectedText = this.view.state.sliceDoc(
-					selection.from,
-					selection.to,
-				);
-				if (selectedText.trim().length === 0) {
-					return null;
-				}
-				// CriticMarkup can't express overlapping marks; don't offer a
-				// comment that would nest inside existing markup.
-				if (
-					fieldValue.marks.some(
-						(mark) => mark.from < selection.to && mark.to > selection.from,
-					)
-				) {
-					return null;
-				}
-
-				const coords = this.view.coordsAtPos(selection.to);
-				if (!coords) return null;
-
-				// Sit in the editor's right margin (like Google Docs) instead
-				// of floating over the text that follows the selection.
-				const editorRect = this.view.dom.getBoundingClientRect();
-				const contentRect = this.view.contentDOM.getBoundingClientRect();
-				const left = Math.min(
-					contentRect.right - editorRect.left + 12,
-					editorRect.width - 40,
-				);
-				const top = coords.top - editorRect.top - 6;
-				return { left: Math.round(left), top: Math.round(top) };
-			}
-
-			private applyCommentButtonPlacement(
-				placement: CommentButtonPlacement | null,
-			): void {
-				const button = this.ensureCommentButton();
-				if (!button) return;
-
-				if (!placement) {
-					button.classList.remove("is-visible");
+				if (selection.empty) return;
+				// An untrusted range would comment on text the user selected away from.
+				if (!this.selectionIsTrusted()) {
+					this.scheduleCommentButtonUpdate();
 					return;
 				}
-				button.setCssStyles({
-					left: `${placement.left}px`,
-					top: `${placement.top}px`,
-				});
-				button.classList.add("is-visible");
-			}
-		},
-	);
 
-	return [
-		Prec.highest(criticField),
-		commentDraftAnchorField,
-		reviewViewPlugin,
-		reviewEditorTheme,
-	];
+				owner.controller?.startCommentDraft(
+					this.currentPath(),
+					selection.from,
+					selection.to,
+					this.view.state.sliceDoc(selection.from, selection.to),
+					this.view,
+				);
+			}, { signal: this.buttonListeners.signal });
+			return button;
+		}
+
+		private scheduleCommentButtonUpdate(): void {
+			if (this.destroyed) return;
+			this.view.requestMeasure({
+				key: this.commentButtonMeasureKey,
+				read: () => this.measureCommentButton(),
+				write: (placement) => this.applyCommentButtonPlacement(placement),
+			});
+		}
+
+		/** Whether the state selection still describes the on-screen selection. */
+		private selectionIsTrusted(): boolean {
+			return isEditorSelectionTrusted(this.view);
+		}
+
+		private measureCommentButton(): CommentButtonPlacement | null {
+			if (this.destroyed || this.fragment || isEditorReadOnly(this.view)) return null;
+			const selection = this.view.state.selection.main;
+			const fieldValue = this.view.state.field(criticField);
+			if (
+				!owner.controller?.shouldShowInlineActions() ||
+				!fieldValue.livePreview ||
+				selection.empty ||
+				// A second click while the composer is open would only replace the draft.
+				this.view.state.field(commentDraftAnchorField) !== null ||
+				!this.selectionIsTrusted()
+			) {
+				return null;
+			}
+			const selectedText = this.view.state.sliceDoc(
+				selection.from,
+				selection.to,
+			);
+			if (selectedText.trim().length === 0) {
+				return null;
+			}
+			// CriticMarkup can't express overlapping marks; don't offer a
+			// comment that would nest inside existing markup.
+			if (
+				fieldValue.marks.some(
+					(mark) => mark.from < selection.to && mark.to > selection.from,
+				)
+			) {
+				return null;
+			}
+
+			const coords = this.view.coordsAtPos(selection.to);
+			if (!coords) return null;
+
+			// Sit in the editor's right margin (like Google Docs) instead
+			// of floating over the text that follows the selection.
+			const editorRect = this.view.dom.getBoundingClientRect();
+			const contentRect = this.view.contentDOM.getBoundingClientRect();
+			const left = Math.min(
+				contentRect.right - editorRect.left + 12,
+				editorRect.width - 40,
+			);
+			const top = coords.top - editorRect.top - 6;
+			return { left: Math.round(left), top: Math.round(top) };
+		}
+
+		private applyCommentButtonPlacement(
+			placement: CommentButtonPlacement | null,
+		): void {
+			const button = this.ensureCommentButton();
+			if (!button) return;
+
+			if (!placement) {
+				button.classList.remove("is-visible");
+				return;
+			}
+			button.setCssStyles({
+				left: `${placement.left}px`,
+				top: `${placement.top}px`,
+			});
+			button.classList.add("is-visible");
+		}
+	}
+	const reviewViewPlugin = ViewPlugin.define(callbacks.wrap((view: EditorView) => new ReviewViewPlugin(view)));
+
+	return {
+		extension: [Prec.highest(criticField), commentDraftAnchorField, reviewViewPlugin, reviewEditorTheme],
+		dispose() {
+			owner.controller = null;
+			callbacks.dispose();
+			for (const ref of values) {
+				const value = ref.deref();
+				if (!value) continue;
+				// Release widgets, parsed text and paths in host-retained states.
+				value.decorations = value.atomics = Decoration.none;
+				value.marks = [];
+				value.path = null;
+			}
+			values.clear();
+		},
+	};
 }
 
 function mutationTouchesEmbeddedBlock(records: MutationRecord[]): boolean {
@@ -640,6 +672,7 @@ function buildDecorations(
 	state: EditorState,
 	livePreview: boolean,
 	controller: ReviewEditorController,
+	callbacks: DisposableCallbacks,
 ): {
 	decorations: DecorationSet;
 	atomics: DecorationSet;
@@ -655,7 +688,7 @@ function buildDecorations(
 		};
 	}
 	try {
-		return buildDecorationsInner(state, controller);
+		return buildDecorationsInner(state, controller, callbacks);
 	} catch (error) {
 		console.error("[Relay Comments] decoration build failed", error);
 		return {
@@ -670,6 +703,7 @@ function buildDecorations(
 function buildDecorationsInner(
 	state: EditorState,
 	controller: ReviewEditorController,
+	callbacks: DisposableCallbacks,
 ): {
 	decorations: DecorationSet;
 	atomics: DecorationSet;
@@ -731,13 +765,14 @@ function buildDecorationsInner(
 			addReplace(ranges, mark.from, mark.to, mark.raw.includes("\n"));
 			addAtom(atomRanges, mark.from, mark.to);
 		} else if (mode === "clean") {
-			decorateClean(text, mark, ranges);
+			decorateClean(callbacks, text, mark, ranges);
 		} else {
 			// Threads hover to a comment preview; plain suggestions hover to
 			// an accept/reject preview — both need range attributes. Bare
 			// highlights get neither (nothing to preview or act on).
 			const hoverable = attached.length > 0 || isSuggestionMark(mark);
 			decorateReview(
+				callbacks,
 				text,
 				mark,
 				ranges,
@@ -791,6 +826,7 @@ function buildDecorationsInner(
 }
 
 function decorateReview(
+	callbacks: DisposableCallbacks,
 	text: string,
 	mark: CriticMark,
 	ranges: Array<Range<Decoration>>,
@@ -798,7 +834,7 @@ function decorateReview(
 	anchorClass = "cm-critic-thread-anchor",
 ): void {
 	hideDelimiters(mark, ranges);
-	const taskPrefixes = addCriticTaskPrefixDecorations(text, mark, ranges);
+	const taskPrefixes = addCriticTaskPrefixDecorations(text, mark, ranges, callbacks);
 
 	switch (mark.type) {
 		case "addition":
@@ -876,6 +912,7 @@ function decorateReview(
 }
 
 function decorateClean(
+	callbacks: DisposableCallbacks,
 	text: string,
 	mark: CriticMark,
 	ranges: Array<Range<Decoration>>,
@@ -883,7 +920,7 @@ function decorateClean(
 	switch (mark.type) {
 		case "addition":
 			hideDelimiters(mark, ranges);
-			addCriticTaskPrefixDecorations(text, mark, ranges);
+			addCriticTaskPrefixDecorations(text, mark, ranges, callbacks);
 			break;
 		case "highlight": {
 			hideDelimiters(mark, ranges);
@@ -895,7 +932,7 @@ function decorateClean(
 					mark.contentFrom + presentation.prefixLength,
 				);
 			}
-			addCriticTaskPrefixDecorations(text, mark, ranges);
+			addCriticTaskPrefixDecorations(text, mark, ranges, callbacks);
 			break;
 		}
 		case "deletion":
@@ -1014,6 +1051,7 @@ function addCriticTaskPrefixDecorations(
 	text: string,
 	mark: CriticMark,
 	ranges: Array<Range<Decoration>>,
+	callbacks: DisposableCallbacks,
 ): CriticTaskPrefix[] {
 	const taskPrefixes = findCriticTaskPrefixes(text, mark);
 	for (const taskPrefix of taskPrefixes) {
@@ -1031,28 +1069,31 @@ function addCriticTaskPrefixDecorations(
 		ranges.push(
 			Decoration.replace({
 				inclusive: false,
-				widget: new CriticTaskCheckboxWidget(taskPrefix),
+				widget: createTaskCheckboxWidget(taskPrefix, callbacks),
 			}).range(taskPrefix.markerFrom, taskPrefix.markerTo),
 		);
 	}
 	return taskPrefixes;
 }
 
-class CriticTaskCheckboxWidget extends WidgetType {
-	constructor(private taskPrefix: CriticTaskPrefix) {
-		super();
-	}
+const taskWidgetPrefixes = new WeakMap<WidgetType, CriticTaskPrefix>();
 
-	eq(widget: WidgetType): boolean {
-		return (
-			widget instanceof CriticTaskCheckboxWidget &&
-			widget.taskPrefix.checked === this.taskPrefix.checked &&
-			widget.taskPrefix.checkboxFrom === this.taskPrefix.checkboxFrom &&
-			widget.taskPrefix.checkboxTo === this.taskPrefix.checkboxTo
-		);
-	}
-
-	toDOM(view: EditorView): HTMLElement {
+function createTaskCheckboxWidget(
+	taskPrefix: CriticTaskPrefix,
+	callbacks: DisposableCallbacks,
+): WidgetType {
+	// A plugin-defined prototype would keep the bundle alive even after all
+	// callbacks were disconnected. The host's WidgetType has no instance state.
+	const widget = Object.create(WidgetType.prototype) as WidgetType;
+	const listenersByDOM = new WeakMap<HTMLElement, AbortController>();
+	taskWidgetPrefixes.set(widget, taskPrefix);
+	widget.eq = callbacks.wrap((other: WidgetType) => {
+		const prefix = taskWidgetPrefixes.get(other);
+		return !!prefix && prefix.checked === taskPrefix.checked &&
+			prefix.checkboxFrom === taskPrefix.checkboxFrom &&
+			prefix.checkboxTo === taskPrefix.checkboxTo;
+	});
+	widget.toDOM = callbacks.wrap((view: EditorView): HTMLElement => {
 		// Same DOM shape as a native task line's widget — a
 		// label.task-list-label wrapping the input — so theme rules for
 		// task checkboxes apply unchanged.
@@ -1067,32 +1108,36 @@ class CriticTaskCheckboxWidget extends WidgetType {
 		const checkbox = createEl("input");
 		checkbox.type = "checkbox";
 		checkbox.className = "task-list-item-checkbox cm-critic-task-checkbox";
-		checkbox.checked = this.taskPrefix.checked;
-		checkbox.setAttribute("data-task", this.taskPrefix.task);
+		checkbox.checked = taskPrefix.checked;
+		checkbox.setAttribute("data-task", taskPrefix.task);
 		checkbox.setAttribute("aria-label", "Task complete");
+		const listeners = new AbortController();
+		listenersByDOM.set(label, listeners);
 		label.addEventListener("mousedown", (event) => {
 			event.preventDefault();
 			event.stopPropagation();
-		});
+		}, { signal: listeners.signal });
 		checkbox.addEventListener("click", (event) => {
 			event.preventDefault();
 			event.stopPropagation();
 			view.dispatch({
 				changes: {
-					from: this.taskPrefix.checkboxFrom,
-					to: this.taskPrefix.checkboxTo,
-					insert: this.taskPrefix.checked ? " " : "x",
+					from: taskPrefix.checkboxFrom,
+					to: taskPrefix.checkboxTo,
+					insert: taskPrefix.checked ? " " : "x",
 				},
 				userEvent: "input",
 			});
-		});
+		}, { signal: listeners.signal });
 		label.appendChild(checkbox);
 		return label;
-	}
-
-	ignoreEvent(): boolean {
-		return true;
-	}
+	});
+	widget.ignoreEvent = callbacks.wrap(() => true);
+	widget.destroy = callbacks.wrap((dom: HTMLElement) => {
+		listenersByDOM.get(dom)?.abort();
+		listenersByDOM.delete(dom);
+	});
+	return widget;
 }
 
 // No native title here either: these anchors get the rich hover preview,

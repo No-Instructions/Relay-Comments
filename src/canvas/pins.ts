@@ -111,6 +111,7 @@ function usablePaneHeight(overlay: HTMLElement): number {
  * empty canvas adds freestanding pins on invisible carrier nodes.
  */
 export class CanvasCommentPins {
+	private interval: number | null = null;
 	private card: HTMLElement | null = null;
 	private cardKey: string | null = null;
 	/** The open card's thread as rendered, to notice changes made elsewhere. */
@@ -130,12 +131,14 @@ export class CanvasCommentPins {
 	constructor(private host: PinHost) {}
 
 	start(): void {
-		this.host.registerInterval(
-			window.setInterval(() => this.renderAll(), 400),
-		);
+		if (this.interval !== null) return;
+		this.interval = window.setInterval(() => this.renderAll(), 400);
+		this.host.registerInterval(this.interval);
 	}
 
 	stop(): void {
+		if (this.interval !== null) window.clearInterval(this.interval);
+		this.interval = null;
 		this.closeCard();
 		this.cancelPlacement();
 		for (const { el, listener } of this.menuPatches) {
@@ -159,6 +162,7 @@ export class CanvasCommentPins {
 	// ── Rendering ────────────────────────────────────────────────────
 
 	renderAll(): void {
+		if (this.interval === null) return;
 		for (const leaf of this.host.getCanvasLeaves()) {
 			const view = leaf.view as unknown as CanvasViewLike;
 			if (view.canvas) {

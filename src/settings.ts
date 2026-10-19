@@ -19,6 +19,11 @@ export class RelayCommentsSettingTab extends PluginSettingTab {
 		super(app, plugin);
 	}
 
+	dispose(): void {
+		this.hasDisplayed = false;
+		this.containerEl.empty();
+	}
+
 	display(): void {
 		this.hasDisplayed = true;
 		const { containerEl } = this;

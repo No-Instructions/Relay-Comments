@@ -209,6 +209,7 @@ export default class RelayCommentsPlugin
 	implements ReviewEditorController
 {
 	settings!: RelayCommentsSettings;
+	private unloaded = false;
 	private commentDraft: CommentDraft | null = null;
 	private commentDraftSequence = 0;
 	private commentDraftEditorView: CodeMirrorEditorView | null = null;
@@ -231,8 +232,9 @@ export default class RelayCommentsPlugin
 	private activeThreadPreview: ActiveThreadPreview | null = null;
 	private previewId = 0;
 	private readonly editorExtensions: Extension[] = [];
+	private editorExtension: ReturnType<typeof createReviewEditorExtension> | null = null;
 	private identityProviders: IdentityProvider[] = [];
-	private configuredIdentityResolver!: IdentityResolver;
+	private configuredIdentityResolver: IdentityResolver | null = null;
 	private readonly identityCache = new Map<string, ReviewerIdentity | null>();
 	private readonly identityRequests = new Map<string, Promise<void>>();
 	private identityRevision = 0;
@@ -252,7 +254,8 @@ export default class RelayCommentsPlugin
 			(leaf: WorkspaceLeaf) => new ReviewSidebarView(leaf, this),
 		);
 		this.editorExtensions.length = 0;
-		this.editorExtensions.push(createReviewEditorExtension(this));
+		this.editorExtension = createReviewEditorExtension(this);
+		this.editorExtensions.push(this.editorExtension.extension);
 		this.registerEditorExtension(this.editorExtensions);
 		this.app.workspace.updateOptions();
 		this.registerMarkdownPostProcessor(createReviewPostProcessor(this));
@@ -324,6 +327,7 @@ export default class RelayCommentsPlugin
 		});
 
 		this.app.workspace.onLayoutReady(() => {
+			if (this.unloaded) return;
 			this.captureActiveContentLeaf(
 				this.app.workspace.getActiveViewOfType(ItemView)?.leaf ?? null,
 			);
@@ -333,6 +337,12 @@ export default class RelayCommentsPlugin
 	}
 
 	onunload(): void {
+		if (this.unloaded) return;
+		this.unloaded = true;
+		this.identityRevision += 1;
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_CRITIC_REVIEW)) {
+			if (leaf.view instanceof ReviewSidebarView) leaf.view.dispose();
+		}
 		this.reviewEventFeed?.dispose();
 		this.reviewEventFeed = null;
 		this.reviewEvents?.dispose();
@@ -355,8 +365,25 @@ export default class RelayCommentsPlugin
 			this.identityRefreshTimer = null;
 		}
 		this.hideThreadPreview();
+		this.commentDraft = null;
+		this.commentDraftEditorView = null;
+		this.lastReviewEditorView = null;
+		this.lastMarkdownPath = null;
+		this.lastContentLeaf = null;
+		this.editorSelectionSnapshots = new WeakMap();
+		this.identityCache.clear();
+		this.identityRequests.clear();
+		this.identityProviders = [];
+		this.configuredIdentityResolver = null;
+		this.settingsTab?.dispose();
+		this.settingsTab = null;
 		this.editorExtensions.length = 0;
-		this.app.workspace.updateOptions();
+		try {
+			this.app.workspace.updateOptions();
+		} finally {
+			this.editorExtension?.dispose();
+			this.editorExtension = null;
+		}
 	}
 
 	/** The Reading-view comment highlight under a pointer target, if any. */
@@ -947,6 +974,7 @@ export default class RelayCommentsPlugin
 	}
 
 	getCurrentReviewerIdentity(path?: string | null): ReviewerIdentity {
+		if (this.unloaded) return fallbackIdentity();
 		const filePath =
 			path ?? this.app.workspace.getActiveFile()?.path ?? this.lastMarkdownPath;
 		if (!filePath) return fallbackIdentity();
@@ -968,11 +996,14 @@ export default class RelayCommentsPlugin
 	async getCurrentReviewerIdentityAsync(
 		path: string,
 	): Promise<ReviewerIdentity> {
+		if (this.unloaded) return fallbackIdentity();
+		const revision = this.identityRevision;
 		const key = this.identityCacheKey("current", path);
 		if (this.identityCache.has(key)) {
 			return this.identityCache.get(key) ?? fallbackIdentity();
 		}
 		const identity = await this.resolveCurrentIdentity(path);
+		if (this.unloaded || revision !== this.identityRevision) return fallbackIdentity();
 		this.identityCache.set(key, identity);
 		return identity ?? fallbackIdentity();
 	}
@@ -1532,7 +1563,7 @@ export default class RelayCommentsPlugin
 		const identity = await this.getCurrentReviewerIdentityAsync(draft.filePath);
 		// Identity lookup may involve the network. Recheck that the same draft
 		// and editor are still active before applying its source edit.
-		if (this.commentDraft !== draft) return;
+		if (this.unloaded || this.commentDraft !== draft) return;
 		const refreshedSurface = initiatingEditorView
 			? this.findReviewEditorSurface(initiatingEditorView) ??
 				this.findReviewEditorSurfaceByPath(draft.filePath)
@@ -1717,6 +1748,7 @@ export default class RelayCommentsPlugin
 	}
 
 	private async refreshCurrentIdentity(): Promise<void> {
+		if (this.unloaded) return;
 		const path =
 			this.app.workspace.getActiveFile()?.path ?? this.lastMarkdownPath;
 		if (!path) return;
@@ -1766,7 +1798,7 @@ export default class RelayCommentsPlugin
 		const provider = this.getSelectedIdentityProvider();
 		const resolvers: IdentityResolver[] = [
 			...(provider ? [provider] : []),
-			this.configuredIdentityResolver,
+			...(this.configuredIdentityResolver ? [this.configuredIdentityResolver] : []),
 		];
 		for (const resolver of resolvers) {
 			if (!resolver.isAvailable()) continue;
@@ -1790,7 +1822,7 @@ export default class RelayCommentsPlugin
 		const provider = this.getSelectedIdentityProvider();
 		const resolvers: IdentityResolver[] = [
 			...(provider ? [provider] : []),
-			this.configuredIdentityResolver,
+			...(this.configuredIdentityResolver ? [this.configuredIdentityResolver] : []),
 		];
 		for (const resolver of resolvers) {
 			if (!resolver.isAvailable()) continue;
@@ -1822,17 +1854,20 @@ export default class RelayCommentsPlugin
 		key: string,
 		resolve: () => Promise<ReviewerIdentity | null>,
 	): void {
-		if (this.identityRequests.has(key)) return;
+		if (this.unloaded || this.identityRequests.has(key)) return;
+		const revision = this.identityRevision;
 		const request = resolve()
 			.then((identity) => {
+				if (this.unloaded || revision !== this.identityRevision) return;
 				this.identityCache.set(key, identity);
 				this.scheduleIdentityRefresh();
 			})
 			.catch(() => {
+				if (this.unloaded || revision !== this.identityRevision) return;
 				this.identityCache.set(key, null);
 			})
 			.finally(() => {
-				this.identityRequests.delete(key);
+				if (this.identityRequests.get(key) === request) this.identityRequests.delete(key);
 			});
 		this.identityRequests.set(key, request);
 	}
@@ -1917,6 +1952,7 @@ export default class RelayCommentsPlugin
 		if (this.refuseIfReadOnly(editor)) return false;
 		const editorView = surface.editorView;
 		const identity = await this.getCurrentReviewerIdentityAsync(path);
+		if (this.unloaded) return false;
 		const refreshedSurface =
 			this.findReviewEditorSurface(editorView) ??
 			this.findReviewEditorSurfaceByPath(path);
@@ -1980,6 +2016,7 @@ export default class RelayCommentsPlugin
 	}
 
 	async openReviewSidebar(): Promise<void> {
+		if (this.unloaded) return;
 		if (this.reviewSidebarOpenPromise) {
 			return this.reviewSidebarOpenPromise;
 		}
@@ -1991,6 +2028,7 @@ export default class RelayCommentsPlugin
 	}
 
 	private async openReviewSidebarOnce(): Promise<void> {
+		if (this.unloaded) return;
 		const existing = this.app.workspace.getLeavesOfType(
 			VIEW_TYPE_CRITIC_REVIEW,
 		)[0];
@@ -1998,6 +2036,7 @@ export default class RelayCommentsPlugin
 		if (!leaf) return;
 
 		await leaf.setViewState({ type: VIEW_TYPE_CRITIC_REVIEW, active: true });
+		if (this.unloaded) return;
 		await this.app.workspace.revealLeaf(leaf);
 		this.refreshReviewSidebars();
 	}
@@ -2053,6 +2092,7 @@ export default class RelayCommentsPlugin
 	}
 
 	refreshReviewSidebars(): void {
+		if (this.unloaded) return;
 		if (this.sidebarRefreshTimer !== null) {
 			window.clearTimeout(this.sidebarRefreshTimer);
 			this.sidebarRefreshTimer = null;
@@ -2313,6 +2353,7 @@ export default class RelayCommentsPlugin
 	}
 
 	private scheduleExternalCommentRefresh(): void {
+		if (this.unloaded) return;
 		if (this.externalCommentRefreshTimer !== null) return;
 		this.externalCommentRefreshTimer = window.setTimeout(() => {
 			this.externalCommentRefreshTimer = null;
@@ -2321,6 +2362,7 @@ export default class RelayCommentsPlugin
 	}
 
 	private scheduleReviewSidebarRefresh(delayMs: number): void {
+		if (this.unloaded) return;
 		if (this.sidebarRefreshTimer !== null) {
 			window.clearTimeout(this.sidebarRefreshTimer);
 		}
@@ -2331,6 +2373,7 @@ export default class RelayCommentsPlugin
 	}
 
 	private scheduleIdentityRefresh(): void {
+		if (this.unloaded) return;
 		if (this.identityRefreshTimer !== null) {
 			window.clearTimeout(this.identityRefreshTimer);
 		}
@@ -2341,6 +2384,7 @@ export default class RelayCommentsPlugin
 	}
 
 	private handleIdentityProviderChange(): void {
+		if (this.unloaded) return;
 		this.identityRevision += 1;
 		this.identityCache.clear();
 		this.settingsTab?.refreshIdentityProviderState();
