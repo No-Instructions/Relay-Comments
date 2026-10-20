@@ -1077,6 +1077,9 @@ function addCriticTaskPrefixDecorations(
 }
 
 const taskWidgetPrefixes = new WeakMap<WidgetType, CriticTaskPrefix>();
+// CodeMirror may keep a widget's DOM while replacing it with an equal widget.
+// Cleanup must follow the DOM even when destroy runs on the replacement.
+const taskWidgetListeners = new WeakMap<HTMLElement, AbortController>();
 
 function createTaskCheckboxWidget(
 	taskPrefix: CriticTaskPrefix,
@@ -1085,7 +1088,6 @@ function createTaskCheckboxWidget(
 	// A plugin-defined prototype would keep the bundle alive even after all
 	// callbacks were disconnected. The host's WidgetType has no instance state.
 	const widget = Object.create(WidgetType.prototype) as WidgetType;
-	const listenersByDOM = new WeakMap<HTMLElement, AbortController>();
 	taskWidgetPrefixes.set(widget, taskPrefix);
 	widget.eq = callbacks.wrap((other: WidgetType) => {
 		const prefix = taskWidgetPrefixes.get(other);
@@ -1112,7 +1114,7 @@ function createTaskCheckboxWidget(
 		checkbox.setAttribute("data-task", taskPrefix.task);
 		checkbox.setAttribute("aria-label", "Task complete");
 		const listeners = new AbortController();
-		listenersByDOM.set(label, listeners);
+		taskWidgetListeners.set(label, listeners);
 		label.addEventListener("mousedown", (event) => {
 			event.preventDefault();
 			event.stopPropagation();
@@ -1134,8 +1136,8 @@ function createTaskCheckboxWidget(
 	});
 	widget.ignoreEvent = callbacks.wrap(() => true);
 	widget.destroy = callbacks.wrap((dom: HTMLElement) => {
-		listenersByDOM.get(dom)?.abort();
-		listenersByDOM.delete(dom);
+		taskWidgetListeners.get(dom)?.abort();
+		taskWidgetListeners.delete(dom);
 	});
 	return widget;
 }

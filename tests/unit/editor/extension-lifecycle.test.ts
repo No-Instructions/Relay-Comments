@@ -64,3 +64,47 @@ test("disposing retained task widgets disconnects their methods and leaves a new
 	expect(current.getDisplayMode).toHaveBeenCalled();
 	next.dispose();
 });
+
+test("an equal replacement task widget removes the reused DOM's listeners", () => {
+	const handle = createReviewEditorExtension(owner().controller);
+	const doc = "{++- [ ] task++}";
+	const taskWidget = () => {
+		const state = EditorState.create({ doc, extensions: [editorLivePreviewField, handle.extension] });
+		for (const set of decorations(state)) {
+			for (let cursor = set.iter(); cursor.value; cursor.next()) {
+				if (cursor.value.spec.widget) return cursor.value.spec.widget as WidgetType;
+			}
+		}
+		throw new Error("Task widget missing");
+	};
+	class Element extends EventTarget {
+		children: Element[] = [];
+		setAttribute() {}
+		appendChild(child: Element) { this.children.push(child); }
+	}
+	const create = globalThis.createEl;
+	globalThis.createEl = (() => new Element()) as unknown as typeof createEl;
+	try {
+		const original = taskWidget();
+		const replacement = taskWidget();
+		const dispatch = jest.fn();
+		const dom = original.toDOM({ dispatch } as unknown as EditorView);
+		const checkbox = (dom as unknown as Element).children[0];
+		checkbox.dispatchEvent(new Event("click", { cancelable: true }));
+		expect(dispatch).toHaveBeenCalledTimes(1);
+		expect(original.compare(replacement)).toBe(true);
+
+		// CodeMirror can replace an equal widget while retaining its DOM.
+		// Its eventual destroy call then belongs to the replacement widget.
+		replacement.destroy(dom);
+		handle.dispose();
+		checkbox.dispatchEvent(new Event("click", { cancelable: true }));
+		expect(dispatch).toHaveBeenCalledTimes(1);
+		const mouseDown = new Event("mousedown", { cancelable: true });
+		dom.dispatchEvent(mouseDown);
+		expect(mouseDown.defaultPrevented).toBe(false);
+	} finally {
+		globalThis.createEl = create;
+		handle.dispose();
+	}
+});
