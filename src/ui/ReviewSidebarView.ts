@@ -663,6 +663,9 @@ export class ReviewSidebarView extends ItemView {
 			const target = event.target as HTMLElement | null;
 			if (!target) return;
 			if (this.contentEl.contains(target)) {
+				// Keep Close mounted between mousedown and click. Detaching
+				// the leaf will dispose the selected thread and its drafts.
+				if (target.closest(".critic-sidebar-close-button")) return;
 				const clickedCard = target.closest(".critic-card");
 				if (clickedCard && this.contentEl.contains(clickedCard)) return;
 			}
