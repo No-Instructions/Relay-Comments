@@ -1248,7 +1248,6 @@ export class ReviewSidebarView extends ItemView {
 			focusEditor: false,
 			select: false,
 		});
-		this.render();
 	}
 
 	private isEditingInItem(item: ReviewItem): boolean {
@@ -1267,7 +1266,6 @@ export class ReviewSidebarView extends ItemView {
 			focusEditor: false,
 			select: false,
 		});
-		this.render();
 	}
 
 	private renderCommentEditor(
@@ -1461,7 +1459,6 @@ export class ReviewSidebarView extends ItemView {
 			this.replyDraftTarget = toDraftTarget(item);
 			return;
 		}
-		this.render();
 	}
 
 	private keepComposerVisible(

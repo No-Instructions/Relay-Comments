@@ -1641,7 +1641,10 @@ export default class RelayCommentsPlugin
 	): void {
 		const surface = this.getCurrentReviewEditorSurface();
 		const editor = surface?.editor;
-		if (!editor) return;
+		if (!editor) {
+			this.refreshReviewSidebars();
+			return;
+		}
 		this.revealReviewEditorSurface(surface);
 
 		const from = editor.offsetToPos(fromOffset);
