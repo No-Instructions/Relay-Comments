@@ -48,6 +48,7 @@ export function buildCliContext(
 			getData(): CanvasDoc;
 			importData(data: CanvasDoc, clear?: boolean): void;
 			requestSave(pushHistory?: boolean): void;
+			requestPushHistory?: { run?: () => void };
 			history?: { data: CanvasDoc[] };
 		};
 	}
@@ -153,6 +154,9 @@ export function buildCliContext(
 				if (live) {
 					const before = parseCanvas(JSON.stringify(live.getData()));
 					const after = update(parseCanvas(JSON.stringify(before)));
+					// Canvas queues user snapshots. Flush that snapshot before
+					// rebasing, or its later timer can restore an unrebased redo.
+					if (!options.asUser && live.history) live.requestPushHistory?.run?.();
 					live.importData(after, true);
 					if (options.asUser || !live.history) {
 						live.requestSave();
