@@ -10,6 +10,12 @@ suggested edits are written into the Markdown file as
 
 Collaborators' comments appear in your note as they write them.
 
+Comments on lists, tasks, headings, and quotes preserve their Markdown prefixes.
+For these blocks, select content on one source line at a time; selections across
+multiple source lines within a list item are refused. Selections starting in
+ordinary prose that span a later list, task, quote, or heading line are also
+refused.
+
 ![A comment arrives in a daily note, is read from the hover preview, and gets a reply](docs/comment-thread.gif)
 
 ## Suggestions
