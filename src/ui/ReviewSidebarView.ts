@@ -238,7 +238,7 @@ export class ReviewSidebarView extends ItemView {
 		const item = buildReviewItems(
 			validMarks,
 			state.nativeHighlights,
-			state.editor.getValue(),
+			state.text,
 		).find(
 			(candidate) => {
 				const target = getItemTargetRange(candidate);
@@ -414,7 +414,7 @@ export class ReviewSidebarView extends ItemView {
 		const items = buildReviewItems(
 			validMarks,
 			state.nativeHighlights,
-			state.editor.getValue(),
+			state.text,
 		);
 		this.reconcileReplyDraft(items);
 		if (items.length > 0) {

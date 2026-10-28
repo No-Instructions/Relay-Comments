@@ -17,6 +17,7 @@ import {
 	isCommentBodyRender,
 	marksIntact,
 	matchRenderedAnchor,
+	matchRenderedSectionAnchors,
 	repairMangledMarks,
 	runsTouching,
 } from "./blocks";
@@ -161,9 +162,34 @@ export function createReviewPostProcessor(
 		repairMangledMarks(el);
 		rewriteSourceBackedElements(el, ctx, mode);
 		renderTextNodes(el, mode);
+		annotatePreviewAnchors(el, ctx);
 		appendSectionCommentComponents(el, ctx);
 		controller.notifyRenderedCommentsChanged?.();
 	};
+}
+
+function annotatePreviewAnchors(
+	root: HTMLElement,
+	ctx: MarkdownPostProcessorContext,
+): void {
+	const section = ctx.getSectionInfo(root);
+	const range = section ? sectionSourceRange(section) : null;
+	if (!section || !range) return;
+	const highlights = Array.from(root.querySelectorAll<HTMLElement>("mark"))
+		.filter((el) => !shouldSkip(el));
+	const matches = matchRenderedSectionAnchors(
+		section.text, marksOf(section.text), range,
+		highlights.map((el) => el.textContent ?? ""),
+	);
+	for (let index = 0; index < highlights.length; index += 1) {
+		const match = matches[index];
+		if (!match) continue;
+		const el = highlights[index];
+		el.addClass("critic-preview-thread-anchor");
+		el.dataset.criticPreviewFrom = String(match.from);
+		el.dataset.criticPreviewTo = String(match.to);
+		el.dataset.criticPreviewRaw = section.text.slice(match.from, match.to);
+	}
 }
 
 function hideCommentFootnotes(
@@ -517,7 +543,7 @@ function shouldSkip(el: HTMLElement): boolean {
 function replaceTextNode(node: Text, mode: DisplayMode): void {
 	const text = node.nodeValue ?? "";
 	const segments = renderDisplaySegments(text, mode);
-	if (segments.length === 1 && segments[0].kind === "text") return;
+	if (segments.length === 1 && segments[0].kind === "text" && segments[0].text === text) return;
 
 	const fragment = createFragment();
 	for (const segment of segments) {

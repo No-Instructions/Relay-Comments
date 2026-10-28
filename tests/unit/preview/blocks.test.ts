@@ -3,6 +3,7 @@ import { parseCriticMarkup } from "src/critic/parse";
 import {
 	marksIntact,
 	matchRenderedAnchor,
+	matchRenderedSectionAnchors,
 	repairMangledMarks,
 	runsTouching,
 	type RepairableElement,
@@ -90,6 +91,36 @@ class FakeElement implements RepairableElement {
 
 const text = (value: string) => new FakeText(value);
 const el = (tag: string, cls = "") => new FakeElement(tag, cls);
+
+describe("matchRenderedSectionAnchors", () => {
+	it("binds repeated passages to their own threads in source order", () => {
+		const source = "{==same==}{>>first<<} and {==same==}{>>second<<}";
+		const marks = parseCriticMarkup(source);
+		expect(matchRenderedSectionAnchors(source, marks, { from: 0, to: source.length }, ["same", "same"]))
+			.toEqual(marks.filter((m) => m.type === "highlight").map(({ from, to }) => ({ from, to })));
+	});
+
+	it("includes bare highlights when matching repeated text without making them interactive", () => {
+		const source = "==same== and ==🔵same=={>>thread<<}";
+		const marks = parseCriticMarkup(source);
+		expect(matchRenderedSectionAnchors(source, marks, { from: 0, to: source.length }, ["same", "same"]))
+			.toEqual([null, { from: 13, to: 23 }]);
+	});
+
+	it("limits repeated matches to the rendered section", () => {
+		const source = "{==same==}{>>first<<}\n{==same==}{>>second<<}";
+		const marks = parseCriticMarkup(source);
+		const second = marks.filter((m) => m.type === "highlight")[1];
+		expect(matchRenderedSectionAnchors(source, marks, { from: source.indexOf("\n") + 1, to: source.length }, ["same"]))
+			.toEqual([{ from: second.from, to: second.to }]);
+	});
+
+	it("does not guess when only one of two repeated anchors rendered", () => {
+		const source = "{==same==}{>>first<<} and {==same==}{>>second<<}";
+		expect(matchRenderedSectionAnchors(source, parseCriticMarkup(source), { from: 0, to: source.length }, ["same"]))
+			.toEqual([null]);
+	});
+});
 
 describe("repairMangledMarks", () => {
 	it("turns a brace-wrapped native highlight back into a CriticMarkup anchor", () => {

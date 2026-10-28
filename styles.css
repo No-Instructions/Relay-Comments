@@ -69,6 +69,15 @@
 	transition: background-color 120ms ease;
 }
 
+/* Obsidian's Reading mode mark rule otherwise paints every color yellow. */
+.markdown-rendered .critic-preview-highlight {
+	background-color: color-mix(in srgb, var(--critic-highlight-color) 26%, transparent);
+}
+
+.critic-preview-thread-anchor {
+	cursor: pointer;
+}
+
 .critic-highlight-color-red {
 	--critic-highlight-color: var(--color-red);
 }

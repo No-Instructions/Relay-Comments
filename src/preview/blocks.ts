@@ -83,6 +83,38 @@ export interface RenderedAnchorMatch {
 	to: number;
 }
 
+/** Match a rendered section in document order, including repeated passages.
+ * Bare highlights participate in matching but do not open comment threads.
+ * A mismatched count is ambiguous, so those elements remain unbound.
+ */
+export function matchRenderedSectionAnchors(
+	text: string,
+	marks: readonly CriticMark[],
+	range: { from: number; to: number },
+	shown: readonly string[],
+): Array<RenderedAnchorMatch | null> {
+	const runs = buildReviewRuns(text, [...marks], parseNativeHighlights(text, marks))
+		.filter((run) => run.from < range.to && run.to > range.from)
+		.filter((run) => run.anchor.kind === "native-highlight" ||
+			run.anchor.mark.type === "highlight" || run.anchor.mark.type === "comment");
+	const result: Array<RenderedAnchorMatch | null> = shown.map(() => null);
+	for (const label of new Set(shown.map((value) => value.trim()))) {
+		if (!label) continue;
+		const candidates = runs.filter((run) => anchorDisplayText(text, run, marks) === label);
+		const indices = shown.flatMap((value, index) => value.trim() === label ? [index] : []);
+		if (candidates.length !== indices.length) continue;
+		for (let index = 0; index < candidates.length; index += 1) {
+			const run = candidates[index];
+			if (run.comments.length === 0) continue;
+			result[indices[index]] = {
+				from: reviewAnchorFrom(run.anchor),
+				to: reviewAnchorTo(run.anchor),
+			};
+		}
+	}
+	return result;
+}
+
 /**
  * The review run a rendered highlight stands for, by its text and, for a word-anchored
  * comment, its title. Returns the run anchor's range, which threads are keyed by.

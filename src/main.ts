@@ -88,6 +88,7 @@ import {
 	type CanvasViewLike,
 } from "./editor/surfaces";
 import { createReviewPostProcessor } from "./preview/postprocessor";
+import { syncEditorFromReadingMode, syncReadingModeAfterEdit } from "./preview/save";
 import {
 	resolveSettings,
 	RelayCommentsSettingTab,
@@ -133,6 +134,7 @@ import {
 export interface ActiveReviewState {
 	file: TFile;
 	editor: Editor;
+	text: string;
 	readOnly: boolean;
 	marks: CriticMark[];
 	nativeHighlights: NativeHighlight[];
@@ -389,7 +391,7 @@ export default class RelayCommentsPlugin
 	/** The Reading-view comment highlight under a pointer target, if any. */
 	private previewAnchorAt(target: HTMLElement | null): HTMLElement | null {
 		const highlight = target?.closest<HTMLElement>(
-			".markdown-preview-view .critic-preview-highlight",
+			".markdown-preview-view .critic-preview-highlight, .markdown-preview-view .critic-preview-thread-anchor",
 		);
 		return highlight && highlight.dataset.criticFrom === undefined
 			? highlight
@@ -412,8 +414,18 @@ export default class RelayCommentsPlugin
 		});
 		const markdownView = view as MarkdownView | null;
 		if (!markdownView?.file) return null;
-		const text = markdownView.editor?.getValue() ?? markdownView.data;
+		const text = markdownView.getViewData();
 		const marks = parseCriticMarkup(text);
+		const from = Number(highlight.dataset.criticPreviewFrom);
+		const to = Number(highlight.dataset.criticPreviewTo);
+		if (
+			Number.isInteger(from) && Number.isInteger(to) && from >= 0 && to > from &&
+			text.slice(from, to) === highlight.dataset.criticPreviewRaw &&
+			runsTouching(text, marks, from, to).some((run) =>
+				reviewAnchorFrom(run.anchor) === from && reviewAnchorTo(run.anchor) === to)
+		) {
+			return { path: markdownView.file.path, from, to };
+		}
 		const match = matchRenderedAnchor(
 			text,
 			runsTouching(text, marks, 0, text.length),
@@ -1098,7 +1110,7 @@ export default class RelayCommentsPlugin
 			: this.findReviewEditorSurfaceByPath(filePath);
 		const editor = surface?.editor;
 		if (!surface || surface.file.path !== filePath || !editor) return null;
-		const text = editor.getValue();
+		const text = this.reviewSurfaceText(surface);
 		const marks = parseCriticMarkup(text);
 		const nativeHighlights = parseNativeHighlights(text, marks);
 
@@ -1362,13 +1374,15 @@ export default class RelayCommentsPlugin
 		const editor = surface?.editor;
 		if (!file || !editor) return null;
 
-		const text = editor.getValue();
+		const text = this.reviewSurfaceText(surface);
 		const marks = parseCriticMarkup(text);
 		const nativeHighlights = parseNativeHighlights(text, marks);
 		// The cursor thread comes from what CodeMirror reported for this
 		// document. While a pane loads another note, the editor's own cursor
 		// still points into the old one.
-		const selection = this.trustedSelection(surface.editorView);
+		const selection = editor.getValue() === text
+			? this.trustedSelection(surface.editorView)
+			: null;
 		const activeMark = selection
 			? markForRange(marks, selection.from, selection.to)
 			: null;
@@ -1378,6 +1392,7 @@ export default class RelayCommentsPlugin
 		return {
 			file,
 			editor,
+			text,
 			readOnly: this.editorIsReadOnly(editor),
 			marks,
 			nativeHighlights,
@@ -1574,6 +1589,7 @@ export default class RelayCommentsPlugin
 			return;
 		}
 		if (this.refuseIfReadOnly(refreshedEditor)) return;
+		this.syncReadingModeBeforeEdit(refreshedEditor);
 		const documentText = refreshedEditor.getValue();
 		const commentMarkup = this.formatAttachedCommentMarkup(comment, identity);
 		const marks = parseCriticMarkup(documentText);
@@ -1614,6 +1630,7 @@ export default class RelayCommentsPlugin
 				"relay-comments",
 			);
 		}
+		this.syncReadingModeAfterEdit(refreshedEditor);
 		this.refreshReviewSidebars();
 	}
 
@@ -1924,7 +1941,9 @@ export default class RelayCommentsPlugin
 	applyMarkActionFromSidebar(mark: CriticMark, action: CriticAction): void {
 		const editor = this.getCurrentReviewEditorSurface()?.editor;
 		if (!editor || this.refuseIfReadOnly(editor)) return;
+		this.syncReadingModeBeforeEdit(editor);
 		replaceMark(editor, mark, action);
+		this.syncReadingModeAfterEdit(editor);
 		this.refreshReviewSidebars();
 	}
 
@@ -1935,12 +1954,14 @@ export default class RelayCommentsPlugin
 	): void {
 		const editor = this.getCurrentReviewEditorSurface()?.editor;
 		if (!editor || this.refuseIfReadOnly(editor)) return;
+		this.syncReadingModeBeforeEdit(editor);
 		editor.replaceRange(
 			replacement,
 			editor.offsetToPos(fromOffset),
 			editor.offsetToPos(toOffset),
 			"relay-comments",
 		);
+		this.syncReadingModeAfterEdit(editor);
 		this.refreshReviewSidebars();
 	}
 
@@ -1962,6 +1983,7 @@ export default class RelayCommentsPlugin
 		const refreshedEditor = refreshedSurface?.editor;
 		if (!refreshedEditor || refreshedSurface.file.path !== path) return false;
 		this.rememberReviewEditorSurface(refreshedSurface);
+		this.syncReadingModeBeforeEdit(refreshedEditor);
 		const cm = this.getCodeMirrorEditor(refreshedEditor);
 		const scrollTop = cm?.scrollDOM?.scrollTop;
 		refreshedEditor.replaceRange(
@@ -1970,6 +1992,7 @@ export default class RelayCommentsPlugin
 			undefined,
 			"relay-comments",
 		);
+		this.syncReadingModeAfterEdit(refreshedEditor);
 		this.refreshReviewSidebars();
 		if (typeof scrollTop === "number" && cm?.scrollDOM) {
 			window.requestAnimationFrame(() => {
@@ -1985,6 +2008,7 @@ export default class RelayCommentsPlugin
 		if (mark.type !== "comment") return false;
 		const editor = this.getCurrentReviewEditorSurface()?.editor;
 		if (!editor || this.refuseIfReadOnly(editor)) return false;
+		this.syncReadingModeBeforeEdit(editor);
 		const range = mark.ranges.commentText ?? [mark.contentFrom, mark.contentTo];
 		editor.replaceRange(
 			sanitizeCommentText(text),
@@ -1992,8 +2016,31 @@ export default class RelayCommentsPlugin
 			editor.offsetToPos(range[1]),
 			"relay-comments",
 		);
+		this.syncReadingModeAfterEdit(editor);
 		this.refreshReviewSidebars();
 		return true;
+	}
+
+	private syncReadingModeAfterEdit(editor: Editor): void {
+		this.app.workspace.iterateAllLeaves((leaf) => {
+			if (leaf.view instanceof MarkdownView) {
+				syncReadingModeAfterEdit(leaf.view, editor);
+			}
+		});
+	}
+
+	private syncReadingModeBeforeEdit(editor: Editor): void {
+		this.app.workspace.iterateAllLeaves((leaf) => {
+			if (!(leaf.view instanceof MarkdownView) || leaf.view.editor !== editor) return;
+			const cm = this.getCodeMirrorEditor(editor) as CodeMirrorEditorView | null;
+			if (cm) syncEditorFromReadingMode(leaf.view, cm);
+		});
+	}
+
+	private reviewSurfaceText(surface: ReviewEditorSurface): string {
+		return surface.kind === "markdown" && surface.leaf.view instanceof MarkdownView
+			? surface.leaf.view.getViewData()
+			: surface.editor.getValue();
 	}
 
 	private formatCommentMarkup(
