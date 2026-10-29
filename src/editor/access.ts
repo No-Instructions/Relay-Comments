@@ -7,3 +7,7 @@ export const READ_ONLY_NOTICE = "This note is read-only.";
 export function isEditorReadOnly(view: { state: EditorState }): boolean {
 	return view.state.readOnly || !view.state.facet(EditorView.editable);
 }
+
+export function editorAccessChanged(before: EditorState, after: EditorState): boolean {
+	return isEditorReadOnly({ state: before }) !== isEditorReadOnly({ state: after });
+}

@@ -472,6 +472,12 @@ export default class RelayCommentsPlugin
 		this.snapshotSelection(editorView);
 	}
 
+	notifyEditorAccessChanged(editorView: CodeMirrorEditorView): void {
+		if (this.getCurrentReviewEditorSurface()?.editorView !== editorView) return;
+		this.hideThreadPreview();
+		this.scheduleReviewSidebarRefresh(0);
+	}
+
 	notifyEditorDocumentReplaced(editorView: CodeMirrorEditorView): void {
 		this.editorSelectionSnapshots.delete(editorView);
 	}
@@ -1982,6 +1988,7 @@ export default class RelayCommentsPlugin
 			this.findReviewEditorSurfaceByPath(path);
 		const refreshedEditor = refreshedSurface?.editor;
 		if (!refreshedEditor || refreshedSurface.file.path !== path) return false;
+		if (this.refuseIfReadOnly(refreshedEditor)) return false;
 		this.rememberReviewEditorSurface(refreshedSurface);
 		this.syncReadingModeBeforeEdit(refreshedEditor);
 		const cm = this.getCodeMirrorEditor(refreshedEditor);

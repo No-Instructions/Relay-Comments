@@ -43,7 +43,7 @@ import {
 	type NativeHighlight,
 } from "../markdown/highlights";
 import { isEditorSelectionTrusted, isFragmentEditor } from "./selection-trust";
-import { isEditorReadOnly } from "./access";
+import { editorAccessChanged, isEditorReadOnly } from "./access";
 import { DisposableCallbacks } from "./disposable-callbacks";
 
 export const setCommentDraftAnchor =
@@ -75,6 +75,8 @@ export interface ReviewEditorController {
 	notifyEditorSelectionChanged(editorView?: EditorView): void;
 	/** The document changed under an unchanged selection, as a background edit does. */
 	notifyEditorDocumentChanged(editorView: EditorView): void;
+	/** Permissions can change without an edit or a selection transaction. */
+	notifyEditorAccessChanged(editorView: EditorView): void;
 	/** Obsidian loaded another document into this editor; its selection is not yet meaningful. */
 	notifyEditorDocumentReplaced(editorView: EditorView): void;
 	startCommentDraft(
@@ -346,6 +348,7 @@ export function createReviewEditorExtension(
 
 		update(update: ViewUpdate): void {
 			this.observeSourceView();
+			const accessChanged = editorAccessChanged(update.startState, update.state);
 			const refreshUi = update.transactions.some((transaction) =>
 				transaction.effects.some((effect) =>
 					effect.is(refreshReviewEditorUi),
@@ -375,6 +378,7 @@ export function createReviewEditorExtension(
 				this.awaitingLoad = true;
 			}
 			if (!this.fragment) {
+				if (accessChanged) owner.controller?.notifyEditorAccessChanged(this.view);
 				if (
 					this.awaitingLoad &&
 					!update.selectionSet &&
@@ -397,8 +401,7 @@ export function createReviewEditorExtension(
 				update.startState.field(criticField) !==
 					update.state.field(criticField) ||
 				update.startState.field(commentDraftAnchorField) !== draftAnchor ||
-				isEditorReadOnly({ state: update.startState }) !==
-					isEditorReadOnly({ state: update.state })
+				accessChanged
 			) {
 				this.scheduleCommentButtonUpdate();
 			}
