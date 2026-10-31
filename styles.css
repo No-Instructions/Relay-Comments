@@ -98,7 +98,8 @@
 	--critic-highlight-color: var(--color-purple);
 }
 
-.critic-highlight-color-default {
+.critic-highlight-color-default,
+.critic-highlight-color-yellow {
 	--critic-highlight-color: var(--color-yellow);
 }
 

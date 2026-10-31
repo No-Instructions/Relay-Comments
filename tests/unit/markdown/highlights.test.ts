@@ -13,6 +13,7 @@ describe("highlightPresentation", () => {
 		["plain", "default", null, "plain", 0],
 		["🔴red", "red", "🔴", "red", 2],
 		["🟠 orange", "orange", "🟠", "orange", 3],
+		["🟡yellow", "yellow", "🟡", "yellow", 2],
 		["🟢green", "green", "🟢", "green", 2],
 		["🔵blue", "blue", "🔵", "blue", 2],
 		["🟣purple", "purple", "🟣", "purple", 2],

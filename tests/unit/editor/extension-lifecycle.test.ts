@@ -6,6 +6,7 @@ import { createReviewEditorExtension, type ReviewEditorController } from "src/ed
 jest.mock("obsidian", () => {
 	const { StateField } = jest.requireActual<typeof import("@codemirror/state")>("@codemirror/state");
 	return {
+		requireApiVersion: () => true,
 		editorInfoField: StateField.define({ create: () => null, update: v => v }),
 		editorLivePreviewField: StateField.define({ create: () => true, update: v => v }),
 	};

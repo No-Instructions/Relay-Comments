@@ -4,6 +4,7 @@ export type HighlightColor =
 	| "default"
 	| "red"
 	| "orange"
+	| "yellow"
 	| "green"
 	| "blue"
 	| "purple";
@@ -11,6 +12,7 @@ export type HighlightColor =
 export const COLOR_EMOJIS = [
 	["🔴", "red"],
 	["🟠", "orange"],
+	["🟡", "yellow"],
 	["🟢", "green"],
 	["🔵", "blue"],
 	["🟣", "purple"],

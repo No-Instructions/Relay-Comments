@@ -47,7 +47,7 @@ The parser must recognize the five standard mark types:
 | Comment | `{>>comment<<}` | Plain text comment attached to nearby text |
 | Highlight | `{==marked text==}` | Highlighted passage, often followed by a comment |
 
-Highlights may begin with one of Obsidian's color markers: `🔴`, `🟠`, `🟢`,
+Highlights may begin with one of Obsidian's color markers: `🔴`, `🟠`, `🟡`, `🟢`,
 `🔵`, or `🟣`. The marker is source metadata, not visible passage text. Relay
 Comments preserves it in the note and removes it when a CriticMarkup highlight
 is accepted, rejected, resolved, or finalized.
@@ -89,6 +89,10 @@ Review rendering policy:
 5. Render highlights as highlighted text.
 6. Use the color selected by a leading Obsidian highlight emoji without
    displaying the emoji as part of the passage.
+7. On Obsidian 1.14.0 and later, leave the native inline color swatch available
+   on colored comment highlights in writable Live Preview. Obsidian owns the
+   picker and its color-edit transaction. Older versions and read-only editors
+   retain the highlight without exposing the swatch.
 
 The plugin should provide:
 

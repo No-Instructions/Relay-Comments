@@ -2,6 +2,7 @@
 import {
 	editorInfoField,
 	editorLivePreviewField,
+	requireApiVersion,
 	setIcon,
 	setTooltip,
 } from "obsidian";
@@ -9,7 +10,7 @@ import {
 	Prec,
 	StateEffect,
 	StateField,
-	type EditorState,
+	EditorState,
 	type Extension,
 	type Range,
 	type Transaction,
@@ -44,6 +45,7 @@ import {
 } from "../markdown/highlights";
 import { isEditorSelectionTrusted, isFragmentEditor } from "./selection-trust";
 import { editorAccessChanged, isEditorReadOnly } from "./access";
+import { allowHighlightColorChange } from "./highlight-access";
 import { DisposableCallbacks } from "./disposable-callbacks";
 
 export const setCommentDraftAnchor =
@@ -174,6 +176,7 @@ export function createReviewEditorExtension(
 				false;
 			if (
 				!tr.docChanged &&
+				!editorAccessChanged(tr.startState, tr.state) &&
 				domLivePreview === value.domLivePreview &&
 				livePreview === value.livePreview &&
 				readPath(tr.state) === value.path
@@ -182,6 +185,7 @@ export function createReviewEditorExtension(
 			}
 			if (
 				tr.docChanged &&
+				!editorAccessChanged(tr.startState, tr.state) &&
 				livePreview &&
 				domLivePreview === value.domLivePreview &&
 				livePreview === value.livePreview &&
@@ -600,9 +604,12 @@ export function createReviewEditorExtension(
 		}
 	}
 	const reviewViewPlugin = ViewPlugin.define(callbacks.wrap((view: EditorView) => new ReviewViewPlugin(view)));
+	const highlightAccess = requireApiVersion("1.14.0")
+		? EditorState.changeFilter.of(callbacks.wrap(allowHighlightColorChange))
+		: [];
 
 	return {
-		extension: [Prec.highest(criticField), commentDraftAnchorField, reviewViewPlugin, reviewEditorTheme],
+		extension: [Prec.highest(criticField), commentDraftAnchorField, reviewViewPlugin, reviewEditorTheme, highlightAccess],
 		dispose() {
 			owner.controller = null;
 			callbacks.dispose();
@@ -716,6 +723,9 @@ function buildDecorationsInner(
 	const text = state.doc.toString();
 	const path = readPath(state);
 	const mode = controller.getDisplayMode(path);
+	// Obsidian owns the inline swatch and its menu from 1.14 onward. Our
+	// replacement must leave its emoji range free, but only in writable views.
+	const nativeHighlightColors = requireApiVersion("1.14.0") && !isEditorReadOnly({ state });
 	const ranges: Array<Range<Decoration>> = [];
 	const atomRanges: Array<Range<Decoration>> = [];
 	const marks = parseCriticMarkup(text);
@@ -783,6 +793,7 @@ function buildDecorationsInner(
 				attached.length > 0
 					? "cm-critic-thread-anchor"
 					: "cm-critic-suggestion-anchor",
+				nativeHighlightColors,
 			);
 		}
 
@@ -795,6 +806,9 @@ function buildDecorationsInner(
 
 	for (const run of anchoredComments.nativeThreads) {
 		const highlight = run.anchor.highlight;
+		if (!nativeHighlightColors && highlight.emoji) {
+			addReplace(ranges, highlight.from + 2, highlight.contentFrom);
+		}
 		if (mode !== "clean") {
 			addMark(
 				ranges,
@@ -835,6 +849,7 @@ function decorateReview(
 	ranges: Array<Range<Decoration>>,
 	threadAttrs?: Record<string, string>,
 	anchorClass = "cm-critic-thread-anchor",
+	nativeHighlightColors = false,
 ): void {
 	hideDelimiters(mark, ranges);
 	const taskPrefixes = addCriticTaskPrefixDecorations(text, mark, ranges, callbacks);
@@ -890,7 +905,7 @@ function decorateReview(
 			if (presentation.prefixLength > 0) {
 				addReplace(
 					ranges,
-					mark.contentFrom,
+					mark.contentFrom + (nativeHighlightColors ? (presentation.emoji?.length ?? 0) : 0),
 					mark.contentFrom + presentation.prefixLength,
 				);
 			}
