@@ -1607,6 +1607,16 @@ export default class RelayCommentsPlugin
 					draft.to,
 				)
 			: null;
+		// A rewrite of the note while the draft was open can leave its passage
+		// spanning other markup, which CriticMarkup can't nest. Keep the draft
+		// and its text so the reviewer can select the passage again.
+		if (
+			!nativeHighlight &&
+			marks.some((mark) => mark.from < draft.to && mark.to > draft.from)
+		) {
+			new Notice("The commented text changed; select it again.");
+			return;
+		}
 		this.commentDraft = null;
 		this.clearCommentDraftAnchor();
 		if (nativeHighlight) {
