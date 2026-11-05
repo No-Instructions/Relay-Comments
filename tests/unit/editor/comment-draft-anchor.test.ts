@@ -1,4 +1,4 @@
-import { ChangeSet } from "@codemirror/state";
+import { ChangeSet, Text } from "@codemirror/state";
 import { describe, expect, it } from "@jest/globals";
 import {
 	buildCommentDraftInsertion,
@@ -14,11 +14,13 @@ const anchor: CommentDraftAnchor = {
 	to: 20,
 };
 
+const doc = Text.of(["x".repeat(30)]);
+
 describe("pending comment anchors", () => {
 	it("moves with text inserted before the selected range", () => {
 		const changes = ChangeSet.of({ from: 2, insert: "hello" }, 30);
 
-		expect(mapCommentDraftAnchor(anchor, changes)).toMatchObject({
+		expect(mapCommentDraftAnchor(anchor, changes, doc)).toMatchObject({
 			from: 15,
 			to: 25,
 		});
@@ -27,7 +29,7 @@ describe("pending comment anchors", () => {
 	it("includes text inserted inside the selected range", () => {
 		const changes = ChangeSet.of({ from: 15, insert: "new" }, 30);
 
-		expect(mapCommentDraftAnchor(anchor, changes)).toMatchObject({
+		expect(mapCommentDraftAnchor(anchor, changes, doc)).toMatchObject({
 			from: 10,
 			to: 23,
 		});
@@ -39,7 +41,7 @@ describe("pending comment anchors", () => {
 			30,
 		);
 
-		expect(mapCommentDraftAnchor(anchor, changes)).toMatchObject({
+		expect(mapCommentDraftAnchor(anchor, changes, doc)).toMatchObject({
 			from: 10,
 			to: 21,
 		});
@@ -48,7 +50,7 @@ describe("pending comment anchors", () => {
 	it("collapses to the surviving point when the selection is deleted", () => {
 		const changes = ChangeSet.of({ from: 10, to: 20 }, 30);
 
-		expect(mapCommentDraftAnchor(anchor, changes)).toMatchObject({
+		expect(mapCommentDraftAnchor(anchor, changes, doc)).toMatchObject({
 			from: 10,
 			to: 10,
 		});
@@ -58,6 +60,7 @@ describe("pending comment anchors", () => {
 		const shifted = mapCommentDraftAnchor(
 			anchor,
 			ChangeSet.of({ from: 2, insert: "hello" }, 30),
+			doc,
 		);
 
 		expect(commentDraftKey(shifted)).toBe(commentDraftKey(anchor));
@@ -73,5 +76,65 @@ describe("pending comment anchors", () => {
 		expect(buildCommentDraftInsertion("rewritten", "{>>note<<}")).toBe(
 			"{==rewritten==}{>>note<<}",
 		);
+	});
+});
+
+describe("pending comment anchors on a rewritten line", () => {
+	const line = "- Selected target and {==other==}{>>question<<}";
+	const before = Text.of([line, ""]);
+	const reply = "{>>reply\nsecond line<<}";
+	const passage = { id: 1, filePath: "note.md", from: 2, to: 17 };
+
+	function rewrite(replacement: string): ChangeSet {
+		return ChangeSet.of(
+			{ from: 0, to: line.length, insert: replacement },
+			before.length,
+		);
+	}
+
+	it("keeps an untouched passage when a reply lands after it", () => {
+		const changes = rewrite(line + reply);
+
+		expect(mapCommentDraftAnchor(passage, changes, before)).toMatchObject({
+			from: 2,
+			to: 17,
+		});
+	});
+
+	it("shifts an untouched passage past a reply that lands before it", () => {
+		const leading = "{==other==}{>>question<<} and target";
+		const doc = Text.of([leading, ""]);
+		const target = { id: 1, filePath: "note.md", from: 30, to: 36 };
+		const changes = ChangeSet.of(
+			{
+				from: 0,
+				to: leading.length,
+				insert: leading.replace("<<}", "<<}" + reply),
+			},
+			doc.length,
+		);
+
+		expect(mapCommentDraftAnchor(target, changes, doc)).toMatchObject({
+			from: 30 + reply.length,
+			to: 36 + reply.length,
+		});
+	});
+
+	it("follows an edit to the passage itself", () => {
+		const changes = rewrite(line.replace("target", "TARGET"));
+
+		expect(mapCommentDraftAnchor(passage, changes, before)).toMatchObject({
+			from: 2,
+			to: 17,
+		});
+	});
+
+	it("collapses when the rewrite removes the passage", () => {
+		const changes = rewrite(line.replace("Selected target ", ""));
+
+		expect(mapCommentDraftAnchor(passage, changes, before)).toMatchObject({
+			from: 2,
+			to: 2,
+		});
 	});
 });

@@ -219,7 +219,7 @@ export function createReviewEditorExtension(
 			) {
 				return value;
 			}
-			return mapCommentDraftAnchor(value, tr.changes);
+			return mapCommentDraftAnchor(value, tr.changes, tr.startState.doc);
 		}),
 	});
 
