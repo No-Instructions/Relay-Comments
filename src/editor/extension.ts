@@ -450,6 +450,11 @@ export function createReviewEditorExtension(
 					owner.controller?.getDisplayMode(readPath(this.view.state)) ?? "review",
 					this.view.state.field(criticField).marks,
 				);
+				// The rewrite's own DOM changes are not a reason for another
+				// pass. Drop their records before the observer delivers them;
+				// a cell whose text looks like leftover markup would otherwise
+				// be rewritten again on every delivery, without end.
+				this.renderedBlockObserver.takeRecords();
 			});
 		}
 
