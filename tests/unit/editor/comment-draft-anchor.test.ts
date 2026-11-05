@@ -26,16 +26,17 @@ describe("pending comment anchors", () => {
 		});
 	});
 
-	it("includes text inserted inside the selected range", () => {
+	it("invalidates text inserted inside the selected range", () => {
 		const changes = ChangeSet.of({ from: 15, insert: "new" }, 30);
 
 		expect(mapCommentDraftAnchor(anchor, changes, doc)).toMatchObject({
 			from: 10,
 			to: 23,
+			invalidated: true,
 		});
 	});
 
-	it("follows a replacement of the entire selected range", () => {
+	it("invalidates a replacement of the entire selected range", () => {
 		const changes = ChangeSet.of(
 			{ from: 10, to: 20, insert: "replacement" },
 			30,
@@ -44,15 +45,17 @@ describe("pending comment anchors", () => {
 		expect(mapCommentDraftAnchor(anchor, changes, doc)).toMatchObject({
 			from: 10,
 			to: 21,
+			invalidated: true,
 		});
 	});
 
-	it("collapses to the surviving point when the selection is deleted", () => {
+	it("invalidates the anchor when the selection is deleted", () => {
 		const changes = ChangeSet.of({ from: 10, to: 20 }, 30);
 
 		expect(mapCommentDraftAnchor(anchor, changes, doc)).toMatchObject({
 			from: 10,
 			to: 10,
+			invalidated: true,
 		});
 	});
 
@@ -120,21 +123,23 @@ describe("pending comment anchors on a rewritten line", () => {
 		});
 	});
 
-	it("follows an edit to the passage itself", () => {
+	it("invalidates an edit to the passage itself", () => {
 		const changes = rewrite(line.replace("target", "TARGET"));
 
 		expect(mapCommentDraftAnchor(passage, changes, before)).toMatchObject({
 			from: 2,
 			to: 17,
+			invalidated: true,
 		});
 	});
 
-	it("collapses when the rewrite removes the passage", () => {
+	it("invalidates when the rewrite removes the passage", () => {
 		const changes = rewrite(line.replace("Selected target ", ""));
 
 		expect(mapCommentDraftAnchor(passage, changes, before)).toMatchObject({
 			from: 2,
 			to: 2,
+			invalidated: true,
 		});
 	});
 });

@@ -28,7 +28,7 @@ import {
 	COMMENT_LINK_HOVER_SOURCE,
 	renderCommentBody,
 } from "./ui/comment-body";
-import type { Extension } from "@codemirror/state";
+import type { Extension, Text } from "@codemirror/state";
 import { EditorView as CodeMirrorEditorView } from "@codemirror/view";
 import { parseCriticMarkup } from "./critic/parse";
 import { sanitizeCommentText } from "./critic/comment-text";
@@ -149,6 +149,8 @@ export interface CommentDraft {
 	to: number;
 	selectedText: string;
 	nativeHighlight: boolean;
+	document: Text | null;
+	invalidated: boolean;
 }
 
 export interface ReviewerIdentity {
@@ -1512,6 +1514,8 @@ export default class RelayCommentsPlugin
 			to,
 			selectedText,
 			nativeHighlight: nativeHighlight !== null,
+			document: (surface?.editorView ?? editorView)?.state.doc ?? null,
+			invalidated: false,
 		};
 		this.commentDraft = draft;
 		this.commentDraftEditorView = surface?.editorView ?? editorView ?? null;
@@ -1528,12 +1532,16 @@ export default class RelayCommentsPlugin
 		from: number,
 		to: number,
 		selectedText: string,
+		document: Text,
+		invalidated: boolean,
 	): void {
 		const draft = this.commentDraft;
 		if (!draft || draft.id !== id || draft.filePath !== filePath) return;
 		draft.from = from;
 		draft.to = to;
-		draft.selectedText = selectedText;
+		draft.invalidated ||= invalidated;
+		draft.document = document;
+		if (!draft.invalidated) draft.selectedText = selectedText;
 		this.scheduleReviewSidebarRefresh(100);
 	}
 
@@ -1596,6 +1604,14 @@ export default class RelayCommentsPlugin
 		}
 		if (this.refuseIfReadOnly(refreshedEditor)) return;
 		this.syncReadingModeBeforeEdit(refreshedEditor);
+		if (
+			draft.invalidated ||
+			refreshedSurface.editorView !== initiatingEditorView ||
+			draft.document !== refreshedSurface.editorView.state.doc
+		) {
+			new Notice("The commented text changed; select it again. Your draft has been kept.");
+			return;
+		}
 		const documentText = refreshedEditor.getValue();
 		const commentMarkup = this.formatAttachedCommentMarkup(comment, identity);
 		const marks = parseCriticMarkup(documentText);
@@ -1607,14 +1623,14 @@ export default class RelayCommentsPlugin
 					draft.to,
 				)
 			: null;
-		// A rewrite of the note while the draft was open can leave its passage
-		// spanning other markup, which CriticMarkup can't nest. Keep the draft
-		// and its text so the reviewer can select the passage again.
+		const range = nativeHighlight ? null : narrowAnchorRange(documentText, draft.from, draft.to);
 		if (
-			!nativeHighlight &&
-			marks.some((mark) => mark.from < draft.to && mark.to > draft.from)
+			(draft.nativeHighlight && !nativeHighlight) ||
+			(!nativeHighlight && (!range || range.from !== draft.from || range.to !== draft.to)) ||
+			marks.some((mark) => mark.from < draft.to && mark.to > draft.from) ||
+			(!nativeHighlight && nativeHighlights.some((highlight) => highlight.from < draft.to && highlight.to > draft.from))
 		) {
-			new Notice("The commented text changed; select it again.");
+			new Notice("The commented text changed; select it again. Your draft has been kept.");
 			return;
 		}
 		this.commentDraft = null;

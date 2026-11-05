@@ -1,66 +1,47 @@
-import {
-	ChangeSet,
-	type ChangeDesc,
-	type ChangeSpec,
-	type Text,
-} from "@codemirror/state";
+import { ChangeSet, type ChangeSpec, type Text } from "@codemirror/state";
 
 export interface CommentDraftAnchor {
 	id: number;
 	filePath: string;
 	from: number;
 	to: number;
+	invalidated?: boolean;
 }
 
-/**
- * Follow a pending comment range through a CodeMirror document change.
- * Inclusive boundary association keeps replacement text anchored when a
- * collaborator rewrites the entire selected range. A complete deletion
- * intentionally collapses the range to the surviving insertion point.
- *
- * Obsidian loads an external edit into an open note by replacing whole
- * lines, so every replacement is first narrowed to the text that actually
- * differs; a passage the rewrite left untouched keeps its exact range.
- */
+/** Map only changed text: external file loads can replace unchanged line content. */
 export function mapCommentDraftAnchor(
 	anchor: CommentDraftAnchor,
 	changes: ChangeSet,
 	before: Text,
 ): CommentDraftAnchor {
-	const narrowed = narrowToDifferingText(changes, before);
+	const edits: ChangeSpec[] = [];
+	let invalidated = anchor.invalidated ?? false;
+	changes.iterChanges((from, to, _fromB, _toB, inserted) => {
+		const oldText = before.sliceString(from, to);
+		const newText = inserted.toString();
+		if (oldText === newText) return;
+		const limit = Math.min(oldText.length, newText.length);
+		let prefix = 0;
+		while (prefix < limit && oldText[prefix] === newText[prefix]) prefix++;
+		let suffix = 0;
+		while (suffix < limit && oldText[oldText.length - suffix - 1] === newText[newText.length - suffix - 1]) suffix++;
+
+		// Overlapping equal edges admit multiple placements of an insertion/deletion.
+		// Refuse a draft touched by any such placement instead of choosing an occurrence.
+		const earliest = from + Math.min(prefix, limit - suffix);
+		const latest = to - Math.min(suffix, limit - prefix);
+		if (earliest < anchor.to && latest > anchor.from) invalidated = true;
+		suffix = Math.min(suffix, limit - prefix);
+		edits.push({ from: from + prefix, to: to - suffix, insert: newText.slice(prefix, newText.length - suffix) });
+	});
+	const mapped = ChangeSet.of(edits, before.length);
+	const from = mapped.mapPos(anchor.from, 1);
 	return {
 		...anchor,
-		from: narrowed.mapPos(anchor.from, -1),
-		to: narrowed.mapPos(anchor.to, 1),
+		from,
+		to: Math.max(from, mapped.mapPos(anchor.to, -1)),
+		invalidated,
 	};
-}
-
-/** Drop the unchanged head and tail of each replacement before mapping through it. */
-function narrowToDifferingText(changes: ChangeSet, before: Text): ChangeDesc {
-	const specs: ChangeSpec[] = [];
-	changes.iterChanges((from, to, _fromB, _toB, inserted) => {
-		const removed = before.sliceString(from, to);
-		const added = inserted.toString();
-		const limit = Math.min(removed.length, added.length);
-		let head = 0;
-		while (head < limit && removed.charCodeAt(head) === added.charCodeAt(head)) {
-			head += 1;
-		}
-		let tail = 0;
-		while (
-			tail < limit - head &&
-			removed.charCodeAt(removed.length - 1 - tail) ===
-				added.charCodeAt(added.length - 1 - tail)
-		) {
-			tail += 1;
-		}
-		specs.push({
-			from: from + head,
-			to: to - tail,
-			insert: added.slice(head, added.length - tail),
-		});
-	});
-	return ChangeSet.of(specs, before.length).desc;
 }
 
 export function commentDraftKey(draft: { id: number }): string {
