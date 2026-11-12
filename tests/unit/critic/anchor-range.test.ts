@@ -13,6 +13,12 @@ describe("structuralPrefixLength", () => {
 		["* * *", 0],
 		["- - -", 0],
 		["1234567890. prose", 0],
+		["> [!note] Title", 10],
+		["> [!warning]- Folded", 14],
+		["> [!tip]", 8],
+		["> > [!note] Nested", 12],
+		["- [!note] not a callout", 2],
+		["[!note] not a callout", 0],
 	])("uses shared block syntax rules for %j", (line, length) => {
 		expect(structuralPrefixLength(line)).toBe(length);
 	});

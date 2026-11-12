@@ -5,10 +5,11 @@ export interface AnchorRange {
 	to: number;
 }
 
-/** Length of a line's quote/list containers, task box, and heading marker. */
+/** Length of a line's quote/list containers, callout marker, task box, and heading marker. */
 export function structuralPrefixLength(line: string): number {
 	let cursor = /^[ \t]*/.exec(line)![0].length;
 	let hasPrefix = false;
+	let lastIsQuote = false;
 	while (cursor < line.length) {
 		const quote = /^>[ \t]*/.exec(line.slice(cursor));
 		const list = /^(?:[-+*]|\d{1,9}[.)])[ \t]+/.exec(line.slice(cursor));
@@ -17,9 +18,14 @@ export function structuralPrefixLength(line: string): number {
 		if (list && /^(?:\*[ \t]*){3,}$|^(?:-[ \t]*){3,}$/.test(line.slice(cursor))) break;
 		cursor += marker[0].length;
 		hasPrefix = true;
+		lastIsQuote = !!quote;
 		if (list) {
 			cursor += /^\[[ xX]\][ \t]+/.exec(line.slice(cursor))?.[0].length ?? 0;
 		}
+	}
+	// A callout's `[!type]` marker belongs to the quote that opens it.
+	if (lastIsQuote) {
+		cursor += /^\[![^\]\s]+\][+-]?(?:[ \t]+|$)/.exec(line.slice(cursor))?.[0].length ?? 0;
 	}
 	const heading = /^#{1,6}[ \t]+/.exec(line.slice(cursor));
 	if (heading) {
