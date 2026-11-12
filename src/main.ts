@@ -81,6 +81,7 @@ import {
 } from "./editor/hotkeys";
 import { buildCommentDraftInsertion } from "./editor/comment-draft-anchor";
 import { commentDraftContentRange } from "./editor/comment-draft-range";
+import { renderedCalloutSelection } from "./editor/rendered-callout";
 import {
 	findCanvasEditorSurface,
 	findFocusedCanvasEditorSurface,
@@ -1557,8 +1558,20 @@ export default class RelayCommentsPlugin
 			| TrustableEditorView
 			| null;
 		if (cm?.contentDOM && cm.state && !isEditorSelectionTrusted(cm)) {
-			new Notice(
-				"Can't comment on text inside a rendered block. Open the block for editing and select the text there.",
+			const editorView = this.getCodeMirrorEditor(editor) as CodeMirrorEditorView | null;
+			const callout = editorView ? renderedCalloutSelection(editorView) : null;
+			if (!callout) {
+				new Notice(
+					"Can't comment on text inside a rendered block. Open the block for editing and select the text there.",
+				);
+				return;
+			}
+			this.startCommentDraft(
+				info?.file?.path ?? null,
+				callout.from,
+				callout.to,
+				editor.getValue().slice(callout.from, callout.to),
+				editorView ?? undefined,
 			);
 			return;
 		}
