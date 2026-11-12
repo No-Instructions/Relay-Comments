@@ -38,6 +38,13 @@ describe("block comment content ranges", () => {
 		}
 	});
 
+	it("keeps a callout's type marker outside the comment", () => {
+		const text = "> [!note] Callout title\n> Body";
+		expect(insertComment(text, 0, text.indexOf("\n") + 1)).toBe(
+			"> [!note] {==Callout title==}" + comment + "\n> Body",
+		);
+	});
+
 	it("keeps a heading's closing hashes and line break outside the comment", () => {
 		const text = "## Heading ##\nNext paragraph";
 		expect(insertComment(text, 0, text.indexOf("\n") + 1)).toBe(
