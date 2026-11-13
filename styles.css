@@ -585,6 +585,9 @@
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
 	margin: 0;
+	/* Obsidian turns off text selection app-wide; opt back in so readers can
+	   copy proposed text */
+	user-select: text;
 }
 
 /* Proposed text renders as diff chips: struck old ink, then new ink */
@@ -666,6 +669,9 @@
 	line-height: 1.45;
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
+	/* Obsidian turns off text selection app-wide; opt back in so readers can
+	   copy posted comments */
+	user-select: text;
 }
 
 /* Obsidian's Markdown renderer supplies the body structure and link classes.
