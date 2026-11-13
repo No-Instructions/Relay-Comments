@@ -5,21 +5,34 @@ export interface AnchorRange {
 	to: number;
 }
 
-/** Length of the block syntax a line starts with: quote markers, then a
-    heading marker or a list marker with its optional task box. */
+/** Length of a line's quote/list containers, callout marker, task box, and heading marker. */
 export function structuralPrefixLength(line: string): number {
-	let length = 0;
-	let rest = line;
-	for (;;) {
-		const quote = /^[\t ]*>[\t ]?/.exec(rest);
-		if (!quote) break;
-		length += quote[0].length;
-		rest = rest.slice(quote[0].length);
+	let cursor = /^[ \t]*/.exec(line)![0].length;
+	let hasPrefix = false;
+	let lastIsQuote = false;
+	while (cursor < line.length) {
+		const quote = /^>[ \t]*/.exec(line.slice(cursor));
+		const list = /^(?:[-+*]|\d{1,9}[.)])[ \t]+/.exec(line.slice(cursor));
+		const marker = quote ?? list;
+		if (!marker) break;
+		if (list && /^(?:\*[ \t]*){3,}$|^(?:-[ \t]*){3,}$/.test(line.slice(cursor))) break;
+		cursor += marker[0].length;
+		hasPrefix = true;
+		lastIsQuote = !!quote;
+		if (list) {
+			cursor += /^\[[ xX]\][ \t]+/.exec(line.slice(cursor))?.[0].length ?? 0;
+		}
 	}
-	const block =
-		/^[\t ]*(?:#{1,6}[\t ]+|(?:[-+*]|\d+[.)])[\t ]+(?:\[[ xX]\][\t ]+)?)/.exec(rest);
-	if (block) length += block[0].length;
-	return length;
+	// A callout's `[!type]` marker belongs to the quote that opens it.
+	if (lastIsQuote) {
+		cursor += /^\[![^\]\s]+\][+-]?(?:[ \t]+|$)/.exec(line.slice(cursor))?.[0].length ?? 0;
+	}
+	const heading = /^#{1,6}[ \t]+/.exec(line.slice(cursor));
+	if (heading) {
+		cursor += heading[0].length;
+		hasPrefix = true;
+	}
+	return hasPrefix ? cursor : 0;
 }
 
 /**

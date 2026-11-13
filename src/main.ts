@@ -80,6 +80,8 @@ import {
 	getAddCommentTarget,
 } from "./editor/hotkeys";
 import { buildCommentDraftInsertion } from "./editor/comment-draft-anchor";
+import { commentDraftContentRange } from "./editor/comment-draft-range";
+import { renderedCalloutSelection } from "./editor/rendered-callout";
 import {
 	findCanvasEditorSurface,
 	findFocusedCanvasEditorSurface,
@@ -1458,6 +1460,15 @@ export default class RelayCommentsPlugin
 			return;
 		}
 		const editorText = surface?.editor.getValue();
+		if (editorText !== undefined) {
+			const range = commentDraftContentRange(editorText, from, to);
+			if (!range) {
+				new Notice("Select text within one block line to comment on it.");
+				return;
+			}
+			({ from, to } = range);
+			selectedText = editorText.slice(from, to);
+		}
 		const marks = editorText ? parseCriticMarkup(editorText) : [];
 		const nativeHighlights = editorText
 			? parseNativeHighlights(editorText, marks)
@@ -1547,8 +1558,20 @@ export default class RelayCommentsPlugin
 			| TrustableEditorView
 			| null;
 		if (cm?.contentDOM && cm.state && !isEditorSelectionTrusted(cm)) {
-			new Notice(
-				"Can't comment on text inside a rendered block. Open the block for editing and select the text there.",
+			const editorView = this.getCodeMirrorEditor(editor) as CodeMirrorEditorView | null;
+			const callout = editorView ? renderedCalloutSelection(editorView) : null;
+			if (!callout) {
+				new Notice(
+					"Can't comment on text inside a rendered block. Open the block for editing and select the text there.",
+				);
+				return;
+			}
+			this.startCommentDraft(
+				info?.file?.path ?? null,
+				callout.from,
+				callout.to,
+				editor.getValue().slice(callout.from, callout.to),
+				editorView ?? undefined,
 			);
 			return;
 		}
@@ -1607,14 +1630,17 @@ export default class RelayCommentsPlugin
 					draft.to,
 				)
 			: null;
+		const range = nativeHighlight
+			? null
+			: commentDraftContentRange(documentText, draft.from, draft.to);
 		// A rewrite of the note while the draft was open can leave its passage
 		// spanning other markup, which CriticMarkup can't nest. Keep the draft
 		// and its text so the reviewer can select the passage again.
 		if (
 			!nativeHighlight &&
-			marks.some((mark) => mark.from < draft.to && mark.to > draft.from)
+			(!range || marks.some((mark) => mark.from < draft.to && mark.to > draft.from))
 		) {
-			new Notice("The commented text changed; select it again.");
+			new Notice("The commented text changed; select it again within one block line.");
 			return;
 		}
 		this.commentDraft = null;
@@ -1636,13 +1662,13 @@ export default class RelayCommentsPlugin
 				undefined,
 				"relay-comments",
 			);
-		} else {
-			const currentText = documentText.slice(draft.from, draft.to);
+		} else if (range) {
+			const currentText = documentText.slice(range.from, range.to);
 			const insertion = buildCommentDraftInsertion(currentText, commentMarkup);
 			refreshedEditor.replaceRange(
 				insertion,
-				refreshedEditor.offsetToPos(draft.from),
-				refreshedEditor.offsetToPos(draft.to),
+				refreshedEditor.offsetToPos(range.from),
+				refreshedEditor.offsetToPos(range.to),
 				"relay-comments",
 			);
 		}
