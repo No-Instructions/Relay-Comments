@@ -14,6 +14,7 @@ import {
 } from "obsidian";
 import { renderCommentBody } from "./comment-body";
 import {
+	findPrecedingWordRange,
 	formatMarkDate,
 	isSuggestionMark,
 	normalizeWhitespace,
@@ -69,6 +70,8 @@ type ReviewItem =
 			id: string;
 			type: CriticMarkType;
 			anchor: ReviewAnchor;
+			/** The word a comment without a highlight is shown against, as the editor marks it. */
+			anchorWord: string | null;
 			comment: CriticMark;
 			comments: CriticMark[];
 			from: number;
@@ -105,6 +108,7 @@ const MARK_TYPE_LABELS: Partial<Record<CriticMarkType, string>> = {
 	deletion: "Suggested deletion",
 	substitution: "Suggested replacement",
 	highlight: "Highlight",
+	comment: "Comment",
 };
 
 interface PendingFocus {
@@ -867,6 +871,13 @@ export class ReviewSidebarView extends ItemView {
 				this.renderCommentHeader(card, { identity, mark: item.anchor.mark });
 			}
 			this.renderMarkBody(card, item.anchor.mark);
+		} else if (item.anchorWord) {
+			this.renderHighlightQuote(card, item.anchorWord, "default");
+		} else {
+			// Nothing in the note stands for this thread, so the card says
+			// what it is; the row also keeps the first message clear of the
+			// floating toolbar.
+			this.renderTypeEyebrow(card, "comment");
 		}
 
 		this.renderThreadMessages(card, item.comments, filePath, item);
@@ -1650,11 +1661,16 @@ function buildReviewItems(
 		);
 
 		if (visible.length > 0) {
+			const word =
+				run.anchor.kind === "critic" && run.anchor.mark.type === "comment"
+					? findPrecedingWordRange(text, run.anchor.mark.from, marks)
+					: null;
 			items.push({
 				kind: "anchored-comment",
 				id: `thread:${reviewAnchorId(run.anchor)}`,
 				type: reviewAnchorType(run.anchor),
 				anchor: run.anchor,
+				anchorWord: word ? text.slice(word[0], word[1]) : null,
 				comment: visible[0],
 				comments: visible,
 				from: run.from,

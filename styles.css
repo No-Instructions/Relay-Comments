@@ -519,7 +519,8 @@
 /* Keep content clear of the floating toolbar */
 .critic-thread-toolbar + .critic-card-quote,
 .critic-thread-toolbar + .critic-card-eyebrow,
-.critic-thread-toolbar + .critic-comment-header {
+.critic-thread-toolbar + .critic-comment-header,
+.critic-thread-toolbar + .critic-thread-messages > :first-child {
 	padding-right: 56px;
 }
 
