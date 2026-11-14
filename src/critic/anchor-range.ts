@@ -39,7 +39,10 @@ export function structuralPrefixLength(line: string): number {
  * The part of a selection an anchor mark may wrap. Surrounding whitespace is
  * dropped, and a selection that begins inside a line's block syntax starts
  * after it: `{==## Heading==}` is no longer a heading, `## {==Heading==}` is.
- * Returns null when nothing anchorable remains.
+ * A closed heading keeps its closing hashes outside the mark. A selection
+ * that runs into a later list, quote or heading line would swallow that
+ * line's syntax, so it is refused. Returns null when nothing anchorable
+ * remains.
  */
 export function narrowAnchorRange(
 	text: string,
@@ -53,10 +56,23 @@ export function narrowAnchorRange(
 	if (start >= end) return null;
 
 	const lineStart = text.lastIndexOf("\n", start - 1) + 1;
-	const lineEnd = text.indexOf("\n", lineStart);
-	const line = text.slice(lineStart, lineEnd === -1 ? text.length : lineEnd);
-	const prefixEnd = lineStart + structuralPrefixLength(line);
+	const newline = text.indexOf("\n", lineStart);
+	const lineEnd = newline === -1 ? text.length : newline;
+	const line = text.slice(lineStart, lineEnd).replace(/\r$/, "");
+	for (let laterStart = lineEnd + 1; laterStart < end; ) {
+		const laterNewline = text.indexOf("\n", laterStart);
+		const laterEnd = laterNewline === -1 ? text.length : laterNewline;
+		if (structuralPrefixLength(text.slice(laterStart, laterEnd)) > 0) return null;
+		if (laterNewline === -1) break;
+		laterStart = laterNewline + 1;
+	}
+	const prefixLength = structuralPrefixLength(line);
+	const prefixEnd = lineStart + prefixLength;
 	if (start < prefixEnd) start = prefixEnd;
+	if (/#{1,6}[ \t]+$/.test(line.slice(0, prefixLength))) {
+		const closing = /[ \t]+#+[ \t]*$/.exec(line);
+		if (closing) end = Math.min(end, lineStart + closing.index);
+	}
 	while (start < end && /\s/.test(text[start])) start += 1;
 	// A colour emoji at the start of a highlight is a marker that resolving
 	// removes, so literal ones in the note stay outside the anchor.

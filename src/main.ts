@@ -80,7 +80,6 @@ import {
 	getAddCommentTarget,
 } from "./editor/hotkeys";
 import { buildCommentDraftInsertion } from "./editor/comment-draft-anchor";
-import { commentDraftContentRange } from "./editor/comment-draft-range";
 import { renderedCalloutSelection } from "./editor/rendered-callout";
 import {
 	findCanvasEditorSurface,
@@ -1460,36 +1459,31 @@ export default class RelayCommentsPlugin
 			return;
 		}
 		const editorText = surface?.editor.getValue();
+		// The anchor covers the text after its line's block syntax, so a
+		// selection that took in a heading marker still matches a complete
+		// native highlight on that heading.
 		if (editorText !== undefined) {
-			const range = commentDraftContentRange(editorText, from, to);
-			if (!range) {
-				new Notice("Select text within one block line to comment on it.");
+			const anchor = narrowAnchorRange(editorText, from, to);
+			if (!anchor) {
+				new Notice(
+					editorText.slice(from, to).trim()
+						? "Select text within one block to comment on it."
+						: "Select text to comment on.",
+				);
 				return;
 			}
-			({ from, to } = range);
+			({ from, to } = anchor);
 			selectedText = editorText.slice(from, to);
 		}
 		const marks = editorText ? parseCriticMarkup(editorText) : [];
 		const nativeHighlights = editorText
 			? parseNativeHighlights(editorText, marks)
 			: [];
-		// A complete native highlight is matched on the raw selection; any other
-		// selection anchors to the text after its line's block syntax.
 		const nativeHighlight = findNativeHighlightForSelection(
 			nativeHighlights,
 			from,
 			to,
 		);
-		if (!nativeHighlight && editorText) {
-			const anchor = narrowAnchorRange(editorText, from, to);
-			if (!anchor) {
-				new Notice("Select text to comment on.");
-				return;
-			}
-			from = anchor.from;
-			to = anchor.to;
-			selectedText = editorText.slice(from, to);
-		}
 		// CriticMarkup can't express overlapping marks.
 		if (
 			editorText &&
@@ -1630,11 +1624,16 @@ export default class RelayCommentsPlugin
 					draft.to,
 				)
 			: null;
+		// The note may have changed around the draft, so its passage is
+		// narrowed again before the mark is written. A passage that no longer
+		// exists becomes a bare comment at its insertion point.
 		const range = nativeHighlight
 			? null
-			: commentDraftContentRange(documentText, draft.from, draft.to);
+			: draft.from === draft.to
+				? { from: draft.from, to: draft.to }
+				: narrowAnchorRange(documentText, draft.from, draft.to);
 		if (!nativeHighlight && !range) {
-			new Notice("The commented text changed; select it again within one block line.");
+			new Notice("The commented text changed; select it again.");
 			return;
 		}
 		// A rewrite of the note while the draft was open can leave its passage
