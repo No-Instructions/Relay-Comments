@@ -66,6 +66,7 @@ import {
 	createReviewEditorExtension,
 	refreshReviewEditorUi,
 	setCommentDraftAnchor,
+	setPickedReviewRange,
 	type ReviewEditorController,
 } from "./editor/extension";
 import {
@@ -218,6 +219,7 @@ export default class RelayCommentsPlugin
 	private commentDraftEditorView: CodeMirrorEditorView | null = null;
 	private lastReviewEditorView: CodeMirrorEditorView | null = null;
 	private lastMarkdownPath: string | null = null;
+	private pickedReviewRange: { path: string; from: number; to: number } | null = null;
 	private lastContentLeaf: WorkspaceLeaf | null = null;
 	private externalCommentObserver: MutationObserver | null = null;
 	/** Per editor, the selection CodeMirror last reported and the document it was in. */
@@ -501,6 +503,11 @@ export default class RelayCommentsPlugin
 		const snapshot = this.editorSelectionSnapshots.get(editorView);
 		if (!snapshot || snapshot.doc !== editorView.state.doc) return null;
 		return { from: snapshot.from, to: snapshot.to };
+	}
+
+	getPickedReviewRange(path: string): { from: number; to: number } | null {
+		const picked = this.pickedReviewRange;
+		return picked && picked.path === path ? { from: picked.from, to: picked.to } : null;
 	}
 
 	notifyRenderedCommentsChanged(): void {
@@ -1715,11 +1722,95 @@ export default class RelayCommentsPlugin
 		if (options.select !== false) {
 			editor.setSelection(from, to);
 		}
-		this.centerEditorOffset(editor, fromOffset, toOffset, { from, to }, cm);
+		// Reading view shows the rendered note, not the editor the offsets
+		// address, so the rendered highlight is what scrolls. Sections render
+		// on demand; scrolling the preview to the line brings this one in.
+		const view = this.getCurrentMarkdownView();
+		if (
+			surface.kind === "markdown" &&
+			view?.file?.path === surface.file.path &&
+			view.getMode() === "preview"
+		) {
+			const path = surface.file.path;
+			const rendered = this.previewAnchorFor(path, fromOffset, toOffset);
+			if (rendered) {
+				rendered.scrollIntoView({ block: "center" });
+			} else {
+				view.previewMode.applyScroll(from.line);
+				let attempts = 0;
+				const settle = () => {
+					const el = this.previewAnchorFor(path, fromOffset, toOffset);
+					if (el) el.scrollIntoView({ block: "center" });
+					else if (++attempts < 8) window.setTimeout(settle, 60);
+				};
+				window.setTimeout(settle, 60);
+			}
+		} else {
+			this.centerEditorOffset(editor, fromOffset, toOffset, { from, to }, cm);
+		}
 		if (options.focusEditor !== false) {
 			editor.focus();
 		}
 		this.refreshReviewSidebars();
+	}
+
+	/**
+	 * Mark the sidebar's picked passage in the note, in the editor and in
+	 * Reading view, for as long as the pick lasts. Nothing is dispatched when
+	 * the pick has not changed, so sidebar re-renders stay quiet.
+	 */
+	syncPickedReviewRange(
+		path: string | null,
+		range: { from: number; to: number } | null,
+	): void {
+		const next = path && range ? { path, from: range.from, to: range.to } : null;
+		const previous = this.pickedReviewRange;
+		if (
+			previous === next ||
+			(previous && next && previous.path === next.path &&
+				previous.from === next.from && previous.to === next.to)
+		) {
+			return;
+		}
+		this.pickedReviewRange = next;
+		const surface = this.getCurrentReviewEditorSurface();
+		const cm = surface ? this.getCodeMirrorEditor(surface.editor) : null;
+		if (surface && cm?.dispatch && (!next || surface.file.path === next.path)) {
+			cm.dispatch({
+				effects: setPickedReviewRange.of(next ? { from: next.from, to: next.to } : null),
+			});
+		}
+		const view = this.getCurrentMarkdownView();
+		if (!view) return;
+		view.containerEl
+			.querySelectorAll(".critic-preview-picked-anchor")
+			.forEach((el) => el.removeClass("critic-preview-picked-anchor"));
+		if (next && view.file?.path === next.path) {
+			this.previewAnchorFor(next.path, next.from, next.to)?.addClass(
+				"critic-preview-picked-anchor",
+			);
+		}
+	}
+
+	/** The Reading-view element standing for a review range, when that view is showing. */
+	private previewAnchorFor(
+		path: string,
+		fromOffset: number,
+		toOffset: number,
+	): HTMLElement | null {
+		const view = this.getCurrentMarkdownView();
+		if (!view || view.file?.path !== path || view.getMode() !== "preview") return null;
+		return (
+			Array.from(
+				view.containerEl.querySelectorAll<HTMLElement>(
+					".markdown-preview-view [data-critic-preview-from][data-critic-preview-to]",
+				),
+			).find(
+				(el) =>
+					Number(el.dataset.criticPreviewFrom) === fromOffset &&
+					Number(el.dataset.criticPreviewTo) === toOffset,
+			) ?? null
+		);
 	}
 
 	getReviewRangeClientRect(

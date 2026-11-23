@@ -51,6 +51,8 @@ import { DisposableCallbacks } from "./disposable-callbacks";
 export const setCommentDraftAnchor =
 	StateEffect.define<CommentDraftAnchor | null>();
 export const refreshReviewEditorUi = StateEffect.define<null>();
+/** The passage of the sidebar's picked card, or null when nothing is picked. */
+export const setPickedReviewRange = StateEffect.define<{ from: number; to: number } | null>();
 
 export interface ReviewEditorController {
 	getDisplayMode(path?: string | null): DisplayMode;
@@ -242,6 +244,33 @@ export function createReviewEditorExtension(
 							anchor.from,
 							anchor.to,
 						),
+					);
+				}),
+			),
+	});
+
+	// A pick made in the sidebar has no counterpart in the editor's own
+	// selection, so the picked passage is marked from here until the pick
+	// changes or clears.
+	const pickedReviewRangeField = StateField.define<{ from: number; to: number } | null>({
+		create: callbacks.wrap(() => null),
+		update: callbacks.wrap((value: { from: number; to: number } | null, tr: Transaction) => {
+			for (const effect of tr.effects) {
+				if (effect.is(setPickedReviewRange)) value = effect.value;
+			}
+			if (!value || !tr.docChanged) return value;
+			const from = tr.changes.mapPos(value.from, 1);
+			const to = tr.changes.mapPos(value.to, -1);
+			return to > from ? { from, to } : null;
+		}),
+		provide: (field) =>
+			EditorView.decorations.compute(
+				[field],
+				callbacks.wrap((state: EditorState) => {
+					const range = state.field(field);
+					if (!range || range.to > state.doc.length) return Decoration.none;
+					return Decoration.set(
+						Decoration.mark({ class: "cm-critic-picked-anchor" }).range(range.from, range.to),
 					);
 				}),
 			),
@@ -638,7 +667,7 @@ export function createReviewEditorExtension(
 		: [];
 
 	return {
-		extension: [Prec.highest(criticField), commentDraftAnchorField, reviewViewPlugin, reviewEditorTheme, highlightAccess],
+		extension: [Prec.highest(criticField), commentDraftAnchorField, pickedReviewRangeField, reviewViewPlugin, reviewEditorTheme, highlightAccess],
 		dispose() {
 			owner.controller = null;
 			callbacks.dispose();

@@ -25,6 +25,8 @@ import {
 export interface PreviewDisplayController {
 	getDisplayMode(path?: string | null): DisplayMode;
 	notifyRenderedCommentsChanged?(): void;
+	/** The passage of the sidebar's picked card in this note, if any. */
+	getPickedReviewRange?(path: string): { from: number; to: number } | null;
 }
 
 const SKIP_TAGS = new Set([
@@ -162,7 +164,7 @@ export function createReviewPostProcessor(
 		repairMangledMarks(el);
 		rewriteSourceBackedElements(el, ctx, mode);
 		renderTextNodes(el, mode);
-		annotatePreviewAnchors(el, ctx);
+		annotatePreviewAnchors(el, ctx, controller.getPickedReviewRange?.(ctx.sourcePath) ?? null);
 		appendSectionCommentComponents(el, ctx);
 		controller.notifyRenderedCommentsChanged?.();
 	};
@@ -171,6 +173,7 @@ export function createReviewPostProcessor(
 function annotatePreviewAnchors(
 	root: HTMLElement,
 	ctx: MarkdownPostProcessorContext,
+	picked: { from: number; to: number } | null,
 ): void {
 	const section = ctx.getSectionInfo(root);
 	const range = section ? sectionSourceRange(section) : null;
@@ -189,6 +192,11 @@ function annotatePreviewAnchors(
 		el.dataset.criticPreviewFrom = String(match.from);
 		el.dataset.criticPreviewTo = String(match.to);
 		el.dataset.criticPreviewRaw = section.text.slice(match.from, match.to);
+		// Sections render on demand, so a pick made before this one rendered
+		// is applied here rather than only when the pick was made.
+		if (picked && picked.from === match.from && picked.to === match.to) {
+			el.addClass("critic-preview-picked-anchor");
+		}
 	}
 }
 

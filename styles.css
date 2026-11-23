@@ -58,6 +58,15 @@
 	text-decoration: none;
 }
 
+/* The passage of the card picked in the sidebar, so it can be told apart
+   from the highlights around it. */
+.cm-critic-picked-anchor,
+.critic-preview-picked-anchor {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: 1px;
+	border-radius: 2px;
+}
+
 /* A comment being drafted: its passage, before the highlight is written. */
 .cm-critic-draft-anchor {
 	background-color: color-mix(in srgb, var(--color-yellow) 14%, transparent);

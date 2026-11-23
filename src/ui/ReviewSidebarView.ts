@@ -121,6 +121,8 @@ export class ReviewSidebarView extends ItemView {
 	/** HoverParent for page previews spawned from links in comments. */
 	hoverPopover: HoverPopover | null = null;
 	private selectedItemId: string | null = null;
+	/** Range of the picked card as last rendered; the note marks it. */
+	private pickedRange: { from: number; to: number } | null = null;
 	/** The note the picked card belongs to; a pick made for an incoming note survives the switch. */
 	private pickSourceKey: string | null = null;
 	private readOnly = false;
@@ -387,7 +389,9 @@ export class ReviewSidebarView extends ItemView {
 		this.resetCommentRenderScope();
 		root.empty();
 		root.addClass("critic-sidebar");
+		this.pickedRange = null;
 		const selectedId = this.renderBody(root, state, externalState);
+		this.plugin.syncPickedReviewRange(state?.file.path ?? null, this.pickedRange);
 		this.lastRenderedSourceKey = sourceKey;
 		root.scrollTop = scrollTop;
 		this.scrollSelectedIntoView(root, selectedId);
@@ -464,6 +468,9 @@ export class ReviewSidebarView extends ItemView {
 			// happens to sit in; both render as selected.
 			if (selected && (!visiblySelectedId || item.id === this.selectedItemId)) {
 				visiblySelectedId = item.id;
+			}
+			if (item.id === this.selectedItemId) {
+				this.pickedRange = getItemTargetRange(item);
 			}
 		}
 		if (draft && !draftRendered) {
@@ -794,7 +801,15 @@ export class ReviewSidebarView extends ItemView {
 			if ((event.target as HTMLElement).closest("button, textarea, input, a")) {
 				return;
 			}
-			if (this.selectedItemId === item.id) return;
+			if (this.selectedItemId === item.id) {
+				// Already picked: just take the reader back to the passage.
+				const range = getItemTargetRange(item);
+				this.plugin.locateReviewRange(range.from, range.to, {
+					focusEditor: false,
+					select: false,
+				});
+				return;
+			}
 			this.locateItem(item);
 		});
 		card.addEventListener("keydown", (event) => {
