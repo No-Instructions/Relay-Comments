@@ -221,6 +221,30 @@ export function createReviewEditorExtension(
 			}
 			return mapCommentDraftAnchor(value, tr.changes, tr.startState.doc);
 		}),
+		// Focus moves to the composer when a draft opens, so the editor's own
+		// selection stops showing; the passage stays marked until the draft
+		// is posted or cancelled.
+		provide: (field) =>
+			EditorView.decorations.compute(
+				[field],
+				callbacks.wrap((state: EditorState) => {
+					const anchor = state.field(field);
+					if (
+						!anchor ||
+						readPath(state) !== anchor.filePath ||
+						anchor.to <= anchor.from ||
+						anchor.to > state.doc.length
+					) {
+						return Decoration.none;
+					}
+					return Decoration.set(
+						Decoration.mark({ class: "cm-critic-draft-anchor" }).range(
+							anchor.from,
+							anchor.to,
+						),
+					);
+				}),
+			),
 	});
 
 	class ReviewViewPlugin {

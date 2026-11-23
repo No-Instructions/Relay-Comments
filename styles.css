@@ -58,6 +58,13 @@
 	text-decoration: none;
 }
 
+/* A comment being drafted: its passage, before the highlight is written. */
+.cm-critic-draft-anchor {
+	background-color: color-mix(in srgb, var(--color-yellow) 14%, transparent);
+	border-bottom: 2px dashed color-mix(in srgb, var(--color-yellow) 60%, transparent);
+	border-radius: 1px;
+}
+
 .cm-critic-highlight,
 .cm-critic-comment-anchor,
 .critic-preview-highlight {
